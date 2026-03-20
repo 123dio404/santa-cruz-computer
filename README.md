@@ -22,25 +22,26 @@ Como equipo de arquitectura, hemos definido los siguientes estándares para aseg
 * **Commits:** Mensajes en minúsculas y descriptivos (ej: `feat: tabla de componentes`).
 
 ## Estructura del Proyecto
+```text
 santa-cruz-computer/
-├── backend/                # Lógica del sistema (Django) [cite: 123]
+├── backend/                # Lógica del sistema (Django)
 │   ├── core/               # Configuración global del proyecto.
-│   ├── inventario/         # RAM, discos, procesadores y periféricos[cite: 132, 133].
-│   ├── usuarios/           # Roles: Admin, Técnico y Vendedor[cite: 129].
-│   ├── ventas/             # Registro de notas de venta y descuentos[cite: 138, 139].
+│   ├── inventario/         # RAM, discos, procesadores y periféricos.
+│   ├── usuarios/           # Roles: Admin, Técnico y Vendedor.
+│   ├── ventas/             # Registro de notas de venta y descuentos.
 │   └── requirements.txt    # Librerías: django, djangorestframework, psycopg2.
-├── database/               # Capa de datos (PostgreSQL) [cite: 120]
+├── database/               # Capa de datos (PostgreSQL)
 │   └── design.sql          # Script SQL con el diseño de tablas (ERD).
 ├── docs/                   # Documentación técnica y formal
 │   ├── api-spec.md         # Manual de endpoints para el equipo de React.
-│   └── perfil-SI1-G13.pdf  # Perfil, objetivos y entrevistas[cite: 18, 153].
-├── frontend/               # Interfaz de usuario (React) [cite: 123]
-│   └── src/
-│       ├── components/     # Botones, modales y tablas reutilizables.
-│       ├── pages/          # Login, Inventario, Ventas y Reportes[cite: 140].
-│       └── services/       # Conexión con la API del Backend.
-├── docker-compose.yml       # Orquestador del motor de base de datos.
-└── README.md               # Este archivo.
+│   └── perfil-SI1-G13.pdf  # Perfil, objetivos y entrevistas.
+├── frontend/               # Interfaz de usuario (React)
+│   ├── src/
+│   │   ├── components/     # Botones, modales y tablas reutilizables.
+│   │   ├── pages/          # Login, Inventario, Ventas y Reportes.
+│   │   └── services/       # Conexión con la API del Backend.
+│   ├── docker-compose.yml  # Orquestador del motor de base de datos.
+│   └── README.md           # Este archivo.
 
 
 ## Inicio Rápido (Instalación)
