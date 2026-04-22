@@ -1,66 +1,64 @@
-# Sistema de Gestión "Santa Cruz-Computer"
- Sistema integral para la automatización de inventarios, ventas y servicios técnicos de la empresa "Santa Cruz-Computer"
+# Santa Cruz-Computer - Sistema de Gestión
 
-## Stack Tecnológico (Estándar de Industria)
-* **Backend:** Django 5.0+ | Django REST Framework.
-* **Frontend:** React 18+ (Vite).
-* **Base de Datos:** PostgreSQL 16.
-* **Entorno:** Docker / Docker Compose.
+Este proyecto es un sistema integral para la automatización de inventarios, ventas y servicios técnicos para la empresa "Santa Cruz-Computer".
 
-## Acuerdos de Colaboración (Reglas del Grupo 13)
-Como equipo de arquitectura, hemos definido los siguientes estándares para asegurar la calidad del proyecto:
+## 📂 Estructura del Proyecto
 
-### 1. Control de Versiones (Git Flow)
-* **Rama `main`:** Solo código estable y probado. Nadie hace push directo aquí.
-* **Rama `develop`:** Rama de integración para pruebas grupales.
-* **Ramas `feature`:** Cada tarea se trabaja en una rama aparte (ej: `feature/inventario`).
-* **Pull Requests (PR):** Para unir código a `develop`, el Arquitecto debe realizar el Code Review.
+El proyecto está organizado de la siguiente manera:
 
-### 2. Estándares de Código
-* **Python:** Seguir estrictamente la guía de estilo PEP 8.
-* **React:** Uso de componentes funcionales, Hooks y Clean Code.
-* **Commits:** Mensajes en minúsculas y descriptivos (ej: `feat: tabla de componentes`).
+*   **`backend/`**: Lógica del servidor desarrollada en Django 5.0 y Django REST Framework.
+    *   `core/`: Configuración global (settings, urls, wsgi).
+    *   `usuarios/`: Gestión de perfiles, autenticación, **bitácora** y seguridad (bloqueo de 3 intentos).
+    *   `inventario/`: Control de productos, stock y proveedores.
+    *   `ventas/`: Procesamiento de ventas, reservas y clientes.
+    *   `venv/`: Entorno virtual de Python (local).
+*   **`frontend/`**: Interfaz de usuario moderna desarrollada en React + Vite + Tailwind CSS.
+    *   `src/app/context/`: Lógica global (Autenticación real).
+    *   `src/app/pages/`: Vistas del sistema (Dashboard, Inventario, Ventas, etc.).
+    *   `src/app/components/`: Componentes UI reutilizables.
+*   **`database/`**: Recursos relacionados con la base de datos.
+    *   `design.sql`: Diseño original de la base de datos.
+    *   `docker-compose.yml`: Configuración para levantar PostgreSQL en Docker.
+*   **`docs/`**: Documentación del proyecto, manuales y guías rápidas.
 
-## Estructura del Proyecto
-```text
-santa-cruz-computer/
-├── backend/                # Lógica del sistema (Django)
-│   ├── core/               # Configuración global del proyecto.
-│   ├── inventario/         # RAM, discos, procesadores y periféricos.
-│   ├── usuarios/           # Roles: Admin, Técnico y Vendedor.
-│   ├── ventas/             # Registro de notas de venta y descuentos.
-│   └── requirements.txt    # Librerías: django, djangorestframework, psycopg2.
-├── database/               # Capa de datos (PostgreSQL)
-│   └── design.sql          # Script SQL con el diseño de tablas (ERD).
-├── docs/                   # Documentación técnica y formal
-│   ├── api-spec.md         # Manual de endpoints para el equipo de React.
-│   └── perfil-SI1-G13.pdf  # Perfil, objetivos y entrevistas.
-├── frontend/               # Interfaz de usuario (React)
-│   ├── src/
-│   │   ├── components/     # Botones, modales y tablas reutilizables.
-│   │   ├── pages/          # Login, Inventario, Ventas y Reportes.
-│   │   └── services/       # Conexión con la API del Backend.
-│   ├── docker-compose.yml  # Orquestador del motor de base de datos.
-│   └── README.md           # Este archivo.
+---
 
+## 🚀 Cómo ejecutar el sistema
 
-## Inicio Rápido (Instalación)
+### 1. Backend (Django)
+Desde una terminal en la raíz del proyecto:
+```bash
+cd backend
+source venv/bin/activate
+# Si es la primera vez, instala las dependencias:
+# pip install -r requirements.txt
+python3 manage.py runserver
+```
+El servidor de la API correrá en `http://localhost:8000`.
 
-1. Levantar la Base de Datos con Docker
-No es necesario instalar PostgreSQL localmente. En la raíz del proyecto, ejecuta:
-
-Bash
-docker compose up -d
-Esto activará el contenedor santacruz_db_container en el puerto 5432.
-
-2. Configurar el Backend (Django)
-
-Bash
-cd backend 
-pip install -r requirements.txt
-
-3. Configurar el Frontend (React)
-Bash
+### 2. Frontend (React)
+Desde **otra** terminal en la raíz del proyecto:
+```bash
 cd frontend
-npm install
+# Si es la primera vez, instala las dependencias:
+# npm install
 npm run dev
+```
+La aplicación web estará disponible en `http://localhost:5173`.
+
+---
+
+## 🛡️ Características de Seguridad Implementadas
+1.  **Autenticación Real**: Conexión directa entre React y Django.
+2.  **Bitácora de Auditoría**: Registro automático de ingresos, salidas e intentos fallidos.
+3.  **Bloqueo de Cuenta**: Tras 3 intentos fallidos, la cuenta se bloquea por 15 minutos.
+4.  **Validación de Contraseñas**: Exige mayúsculas, minúsculas y números para mayor seguridad.
+5.  **Recuperación de Contraseña**: Envío de códigos de seguridad (visibles en la terminal del backend).
+
+---
+
+## 🛠️ Stack Tecnológico
+*   **Lenguajes**: Python, TypeScript.
+*   **Frameworks**: Django, React.
+*   **Estilos**: Tailwind CSS, Shadcn UI.
+*   **Base de Datos**: SQLite (Desarrollo) / PostgreSQL (Producción).
