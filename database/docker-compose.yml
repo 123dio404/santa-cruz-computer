@@ -6,13 +6,14 @@ services:
     container_name: santacruz_db_container
     restart: always
     environment:
-      POSTGRES_DB: santacruz_db
-      POSTGRES_USER: admin_user
+      POSTGRES_DB: Santacruzcomputer
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password123
     ports:
       - "5432:5432"
     volumes:
-      - ./database:/docker-entrypoint-initdb.d
+      - ./01_security_fix.sql:/docker-entrypoint-initdb.d/01_security_fix.sql
+      - ./santacruz_computer.sql:/docker-entrypoint-initdb.d/santacruz_computer.sql
       - postgres_data:/var/lib/postgresql/data
 
 volumes:

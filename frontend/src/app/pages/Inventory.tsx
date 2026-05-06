@@ -1,48 +1,81 @@
-import { useState } from 'react';
-import { Search, Filter, TrendingUp, TrendingDown, Package, AlertTriangle } from 'lucide-react';
-import { mockProducts, mockStockMovements } from '../data/mockData';
+import { useState, useEffect } from 'react';
+import { Search, Filter, AlertTriangle, Package, Eye, X } from 'lucide-react';
+import { productosAPI, ApiProduct } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 export function Inventory() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('all');
-  const [showMovements, setShowMovements] = useState(false);
-  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
-  const categories = ['all', ...new Set(mockProducts.map(p => p.category))];
+  const [products, setProducts]           = useState<ApiProduct[]>([]);
+  const [loading, setLoading]             = useState(true);
+  const [searchTerm, setSearchTerm]       = useState('');
+  const [estadoFilter, setEstadoFilter]   = useState('all');
+  const [adjustingId, setAdjustingId]     = useState<number | null>(null);
+  const [adjustValue, setAdjustValue]     = useState('');
+  const [detailProduct, setDetailProduct] = useState<ApiProduct | null>(null);
 
-  const filteredProducts = mockProducts.filter(product => {
-    const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         product.description.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = categoryFilter === 'all' || product.category === categoryFilter;
-    return matchesSearch && matchesCategory;
+  useEffect(() => { loadProducts(); }, []);
+
+  const loadProducts = async () => {
+    try {
+      setLoading(true);
+      setProducts(await productosAPI.getAll());
+    } catch {
+      alert('Error al cargar inventario');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const estados = ['all', ...Array.from(new Set(products.map(p => p.estado).filter(Boolean) as string[]))];
+
+  const filtered = products.filter(p => {
+    const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (p.marca ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (p.modelo ?? '').toLowerCase().includes(searchTerm.toLowerCase());
+    const matchEstado = estadoFilter === 'all' || p.estado === estadoFilter;
+    return matchSearch && matchEstado;
   });
 
-  const totalValue = filteredProducts.reduce((sum, p) => sum + (p.salePrice * p.stock), 0);
-  const totalCost = filteredProducts.reduce((sum, p) => sum + (p.costPrice * p.stock), 0);
-  const totalItems = filteredProducts.reduce((sum, p) => sum + p.stock, 0);
-  const lowStockProducts = mockProducts.filter(p => p.stock <= p.minStock);
+  const totalItems  = filtered.reduce((s, p) => s + (p.stock ?? 0), 0);
+  const totalValue  = filtered.reduce((s, p) => s + (parseFloat(String(p.precio_venta ?? p.price)) * (p.stock ?? 0)), 0);
+  const lowStockProducts = products.filter(p => p.is_low_stock);
 
-  const getProductMovements = (productId: string) => {
-    return mockStockMovements.filter(m => m.productId === productId);
+  const handleAdjustStock = async (id: number) => {
+    const newStock = parseInt(adjustValue);
+    if (isNaN(newStock) || newStock < 0) { alert('Stock inválido'); return; }
+    try {
+      const updated = await productosAPI.adjustStock(id, newStock);
+      setProducts(products.map(p => p.id === id ? updated : p));
+      setAdjustingId(null);
+      setAdjustValue('');
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : 'Error desconocido'}`);
+    }
   };
 
-  const handleViewMovements = (productId: string) => {
-    setSelectedProductId(productId);
-    setShowMovements(true);
-  };
+  const imgSrc = (url: string) =>
+    url.startsWith('http') ? url : `http://localhost:8000${url}`;
+
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+    </div>
+  );
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Inventario</h1>
-        <p className="text-gray-600">Vista completa del inventario y movimientos</p>
+        <p className="text-gray-600">Vista completa del inventario</p>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      {/* Métricas */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <p className="text-sm text-gray-600 mb-1">Total Productos</p>
-          <p className="text-2xl font-bold text-gray-900">{filteredProducts.length}</p>
+          <p className="text-2xl font-bold text-gray-900">{filtered.length}</p>
         </div>
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <p className="text-sm text-gray-600 mb-1">Total Unidades</p>
@@ -51,62 +84,45 @@ export function Inventory() {
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <p className="text-sm text-gray-600 mb-1">Valor Inventario</p>
           <p className="text-2xl font-bold text-gray-900">{totalValue.toFixed(2)} Bs</p>
-          <p className="text-xs text-gray-500 mt-1">Precio venta</p>
-        </div>
-        <div className="bg-white rounded-xl p-6 border border-gray-200">
-          <p className="text-sm text-gray-600 mb-1">Costo Inventario</p>
-          <p className="text-2xl font-bold text-gray-900">{totalCost.toFixed(2)} Bs</p>
-          <p className="text-xs text-gray-500 mt-1">Precio costo</p>
         </div>
       </div>
 
-      {/* Filters */}
+      {/* Filtros */}
       <div className="bg-white rounded-xl p-6 border border-gray-200">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Buscar productos..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+            <input type="text" placeholder="Buscar por nombre, marca, modelo..."
+              value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
           </div>
-
           <div className="relative">
             <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none bg-white"
-            >
-              {categories.map(cat => (
-                <option key={cat} value={cat}>
-                  {cat === 'all' ? 'Todas las categorías' : cat}
-                </option>
+            <select value={estadoFilter} onChange={e => setEstadoFilter(e.target.value)}
+              className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 appearance-none bg-white">
+              {estados.map(e => (
+                <option key={e} value={e}>{e === 'all' ? 'Todos los estados' : e}</option>
               ))}
             </select>
           </div>
         </div>
       </div>
 
-      {/* Low Stock Alert */}
+      {/* Alerta stock bajo */}
       {lowStockProducts.length > 0 && (
         <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <h3 className="font-semibold text-red-900">⚠️ Alerta de Stock Bajo</h3>
+            <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
+            <div>
+              <h3 className="font-semibold text-red-900">Alerta de Stock Bajo</h3>
               <p className="text-sm text-red-700 mt-1">
-                {lowStockProducts.length} producto{lowStockProducts.length !== 1 ? 's' : ''} con stock mínimo o bajo
+                {lowStockProducts.length} producto{lowStockProducts.length !== 1 ? 's' : ''} con stock ≤ stock mínimo
               </p>
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                {lowStockProducts.map(product => (
-                  <div key={product.id} className="bg-white rounded px-3 py-2 text-sm border border-red-200 hover:shadow-md transition-shadow">
-                    <p className="font-medium text-red-900 line-clamp-1">{product.name}</p>
-                    <p className="text-xs text-red-600 mt-1">📦 Stock: <span className="font-semibold">{product.stock}</span> / Mín: {product.minStock}</p>
-                  </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {lowStockProducts.map(p => (
+                  <span key={p.id} className="bg-white px-3 py-1 rounded text-sm border border-red-200 text-red-900">
+                    {p.name} — {p.stock ?? 0} / mín {p.stock_minimo}
+                  </span>
                 ))}
               </div>
             </div>
@@ -114,158 +130,187 @@ export function Inventory() {
         </div>
       )}
 
-      {/* Inventory Table */}
+      {/* Tabla */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Producto</th>
-                <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Categoría</th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-600">Precio Costo</th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-600">Precio Venta</th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-600">Margen</th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-600">Stock</th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-600">Stock Mín</th>
-                <th className="text-center py-3 px-4 text-sm font-medium text-gray-600">Estado</th>
-                <th className="text-right py-3 px-4 text-sm font-medium text-gray-600">Acciones</th>
+                <th className="text-left py-3 px-4 font-medium text-gray-600">Producto</th>
+                <th className="text-left py-3 px-4 font-medium text-gray-600">Marca / Modelo</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-600">P. Compra</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-600">P. Venta</th>
+                <th className="text-center py-3 px-4 font-medium text-gray-600">Stock</th>
+                <th className="text-center py-3 px-4 font-medium text-gray-600">Stock Mín.</th>
+                <th className="text-left py-3 px-4 font-medium text-gray-600">Estado</th>
+                <th className="text-center py-3 px-4 font-medium text-gray-600">Disponibilidad</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-600">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.map(product => {
-                const margin = ((product.salePrice - product.costPrice) / product.costPrice * 100).toFixed(1);
-                return (
-                  <tr key={product.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-4 px-4">
-                      <div className="flex items-center gap-3">
-                        <img
-                          src={product.image}
-                          alt={product.name}
-                          className="w-12 h-12 rounded-lg object-cover"
-                        />
-                        <div>
-                          <p className="font-medium text-gray-900">{product.name}</p>
-                          <p className="text-sm text-gray-500 line-clamp-1">{product.description}</p>
-                        </div>
+              {filtered.map(product => (
+                <tr key={product.id} className={`border-b border-gray-100 hover:bg-gray-50 ${product.is_low_stock ? 'bg-red-50' : ''}`}>
+                  {/* Producto */}
+                  <td className="py-3 px-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 bg-blue-50 rounded-lg flex items-center justify-center overflow-hidden flex-shrink-0">
+                        {product.imagen_url
+                          ? <img src={imgSrc(product.imagen_url)} alt={product.name} className="w-full h-full object-cover" />
+                          : <Package className="w-5 h-5 text-blue-400" />
+                        }
                       </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-sm">
-                        {product.category}
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 text-right text-gray-600">
-                      {product.costPrice.toFixed(2)} Bs
-                    </td>
-                    <td className="py-4 px-4 text-right text-gray-900 font-medium">
-                      {product.salePrice.toFixed(2)} Bs
-                    </td>
-                    <td className="py-4 px-4 text-right">
-                      <span className="text-green-600 font-medium">
-                        +{margin}%
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 text-right text-gray-900 font-medium">
-                      {product.stock}
-                    </td>
-                    <td className="py-4 px-4 text-right text-gray-600">
-                      {product.minStock}
-                    </td>
-                    <td className="py-4 px-4 text-center">
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                        product.stock > product.minStock ? 'bg-green-100 text-green-700' :
-                        product.stock === product.minStock ? 'bg-yellow-100 text-yellow-700' :
-                        'bg-red-100 text-red-700'
-                      }`}>
-                        {product.stock > product.minStock ? 'Disponible' :
-                         product.stock === product.minStock ? 'Stock Mínimo' :
-                         'Stock Bajo'}
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 text-right">
-                      <button
-                        onClick={() => handleViewMovements(product.id)}
-                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                      >
-                        Ver Movimientos
+                      <p className="font-medium text-gray-900">{product.name}</p>
+                    </div>
+                  </td>
+
+                  {/* Marca / Modelo */}
+                  <td className="py-3 px-4 text-gray-600">
+                    {[product.marca, product.modelo].filter(Boolean).join(' / ') || '—'}
+                  </td>
+
+                  {/* Precio compra */}
+                  <td className="py-3 px-4 text-right text-gray-600">
+                    {product.precio_compra
+                      ? `${parseFloat(String(product.precio_compra)).toFixed(2)} Bs`
+                      : <span className="text-gray-400">—</span>}
+                  </td>
+
+                  {/* Precio venta */}
+                  <td className="py-3 px-4 text-right font-semibold text-gray-900">
+                    {parseFloat(String(product.precio_venta ?? product.price)).toFixed(2)} Bs
+                  </td>
+
+                  {/* Stock */}
+                  <td className="py-3 px-4 text-center">
+                    <span className={`font-bold ${product.is_low_stock ? 'text-red-600' : 'text-gray-900'}`}>
+                      {product.stock ?? 0}
+                    </span>
+                  </td>
+
+                  {/* Stock mínimo */}
+                  <td className="py-3 px-4 text-center text-gray-500">{product.stock_minimo}</td>
+
+                  {/* Estado */}
+                  <td className="py-3 px-4 text-gray-600 capitalize">{product.estado || '—'}</td>
+
+                  {/* Disponibilidad */}
+                  <td className="py-3 px-4 text-center">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      product.is_low_stock ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+                    }`}>
+                      {product.is_low_stock ? 'Stock Bajo' : 'Disponible'}
+                    </span>
+                  </td>
+
+                  {/* Acciones */}
+                  <td className="py-3 px-4 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      {/* Ojo — visible para admin y vendedor */}
+                      <button onClick={() => setDetailProduct(product)} title="Ver detalles"
+                        className="p-1.5 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
+                        <Eye className="w-4 h-4" />
                       </button>
-                    </td>
-                  </tr>
-                );
-              })}
+
+                      {/* Ajustar stock — solo admin */}
+                      {isAdmin && (
+                        adjustingId === product.id ? (
+                          <div className="flex items-center gap-1">
+                            <input type="number" min="0" value={adjustValue}
+                              onChange={e => setAdjustValue(e.target.value)}
+                              className="w-16 px-2 py-1 border border-gray-300 rounded text-xs"
+                              autoFocus />
+                            <button onClick={() => handleAdjustStock(product.id)}
+                              className="px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700">
+                              OK
+                            </button>
+                            <button onClick={() => { setAdjustingId(null); setAdjustValue(''); }}
+                              className="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300">
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => { setAdjustingId(product.id); setAdjustValue(String(product.stock ?? 0)); }}
+                            className="text-xs text-blue-600 hover:text-blue-700 font-medium px-2 py-1 hover:bg-blue-50 rounded-lg">
+                            Ajustar
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Stock Movements Modal */}
-      {showMovements && selectedProductId && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900">Historial de Movimientos</h2>
-                <p className="text-sm text-gray-600 mt-1">
-                  {mockProducts.find(p => p.id === selectedProductId)?.name}
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  setShowMovements(false);
-                  setSelectedProductId(null);
-                }}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                ×
+      {/* Modal de detalles — solo lectura, admin y vendedor */}
+      {detailProduct && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
+          onClick={() => setDetailProduct(null)}>
+          <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-xl"
+            onClick={e => e.stopPropagation()}>
+
+            {/* Imagen */}
+            <div className="h-48 bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center relative overflow-hidden">
+              {detailProduct.imagen_url
+                ? <img src={imgSrc(detailProduct.imagen_url)} alt={detailProduct.name} className="w-full h-full object-cover" />
+                : <Package className="w-20 h-20 text-blue-200" />
+              }
+              <button onClick={() => setDetailProduct(null)}
+                className="absolute top-3 right-3 p-1.5 bg-white bg-opacity-80 rounded-full hover:bg-opacity-100 transition">
+                <X className="w-4 h-4 text-gray-600" />
               </button>
             </div>
 
-            <div className="p-6">
-              <div className="space-y-3">
-                {getProductMovements(selectedProductId).map(movement => (
-                  <div key={movement.id} className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className={`p-2 rounded-lg ${
-                      movement.type === 'increase' ? 'bg-green-100' : 'bg-red-100'
-                    }`}>
-                      {movement.type === 'increase' ? (
-                        <TrendingUp className="w-5 h-5 text-green-600" />
-                      ) : (
-                        <TrendingDown className="w-5 h-5 text-red-600" />
-                      )}
-                    </div>
-
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <p className="font-medium text-gray-900">
-                            {movement.type === 'increase' ? 'Incremento' : 'Disminución'} de Stock
-                          </p>
-                          <p className="text-sm text-gray-600">{movement.reason}</p>
-                        </div>
-                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                          movement.type === 'increase'
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-red-100 text-red-700'
-                        }`}>
-                          {movement.type === 'increase' ? '+' : '-'}{movement.quantity} unidades
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-4 text-xs text-gray-500">
-                        <span>📅 {movement.date}</span>
-                        <span>👤 {movement.user}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                {getProductMovements(selectedProductId).length === 0 && (
-                  <div className="text-center py-8 text-gray-500">
-                    <Package className="w-12 h-12 mx-auto mb-2 text-gray-300" />
-                    <p>No hay movimientos registrados para este producto</p>
-                  </div>
-                )}
+            <div className="p-6 space-y-4">
+              {/* Nombre y precio */}
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="text-xl font-bold text-gray-900 leading-tight">{detailProduct.name}</h2>
+                <span className="text-xl font-bold text-blue-600 whitespace-nowrap">
+                  {parseFloat(String(detailProduct.precio_venta ?? detailProduct.price)).toFixed(2)} Bs
+                </span>
               </div>
+
+              {/* Ficha técnica */}
+              <div className="bg-gray-50 rounded-xl p-4 space-y-2 text-sm">
+                <p className="font-semibold text-gray-700 mb-2">Ficha técnica</p>
+                {([
+                  ['Marca',      detailProduct.marca],
+                  ['Modelo',     detailProduct.modelo],
+                  ['Año',        detailProduct.anio],
+                  ['Estado',     detailProduct.estado],
+                  ['Categoría',  detailProduct.categoria_nombre],
+                  ['Stock',      detailProduct.stock ?? 0],
+                  ['Stock mín.', detailProduct.stock_minimo],
+                  ['P. Compra',  detailProduct.precio_compra
+                    ? `${parseFloat(String(detailProduct.precio_compra)).toFixed(2)} Bs`
+                    : null],
+                ] as [string, unknown][])
+                  .filter(([, v]) => v !== null && v !== undefined && v !== '')
+                  .map(([label, value]) => (
+                    <div key={label} className="flex justify-between">
+                      <span className="text-gray-500">{label}</span>
+                      <span className="font-medium text-gray-900 capitalize">{String(value)}</span>
+                    </div>
+                  ))}
+              </div>
+
+              {/* Descripción */}
+              {detailProduct.descripcion ? (
+                <div>
+                  <p className="text-sm font-semibold text-gray-700 mb-1">Descripción</p>
+                  <p className="text-sm text-gray-600 leading-relaxed">{detailProduct.descripcion}</p>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 italic">Sin descripción registrada.</p>
+              )}
+
+              <button onClick={() => setDetailProduct(null)}
+                className="w-full py-2.5 border border-gray-300 text-gray-700 rounded-xl hover:bg-gray-50 font-medium text-sm">
+                Cerrar
+              </button>
             </div>
           </div>
         </div>

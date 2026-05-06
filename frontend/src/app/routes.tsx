@@ -31,6 +31,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Products } from './pages/Products';
 import { Inventory } from './pages/Inventory';
 import { Sales } from './pages/Sales';
+import { SalesHistory } from './pages/SalesHistory';
 import { Users } from './pages/Users';
 import { Customers } from './pages/Customers';
 import { Suppliers } from './pages/Suppliers';
@@ -38,6 +39,7 @@ import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
 import { Orders } from './pages/Orders';
 import { AdminPanel } from './pages/AdminPanel';
+import { AuditLog } from './pages/AuditLog';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 
@@ -62,14 +64,14 @@ export const router = createBrowserRouter([
 
   /**
    * / - Ruta raíz (página de inicio)
-   * - Redirige automáticamente al dashboard
+   * - Redirige a inventario por defecto
    */
   {
     path: '/',
     element: (
       <ProtectedRoute>
         <Layout>
-          <Navigate to="/dashboard" replace />
+          <Navigate to="/inventory" replace />
         </Layout>
       </ProtectedRoute>
     )
@@ -79,12 +81,12 @@ export const router = createBrowserRouter([
    * /dashboard - Panel Principal
    * - Resumen visual de toda la aplicación
    * - Gráficos de ventas, stock bajo, productos populares
-   * - Acceso: Admin, Empleado
+   * - Acceso: Solo Admin
    */
   {
     path: '/dashboard',
     element: (
-      <ProtectedRoute allowedRoles={['admin', 'employee']}>
+      <ProtectedRoute allowedRoles={['admin']}>
         <Layout>
           <Dashboard />
         </Layout>
@@ -141,6 +143,25 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['admin', 'employee']}>
         <Layout>
           <Sales />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
+
+  /**
+   * /sales-history - Historial de Ventas del Empleado
+   * - Ver todas las ventas realizadas por el empleado logueado
+   * - Detalles de cada venta, cliente, productos, total
+   * - Filtrado por estado (completadas, pendientes)
+   * - Estadísticas: total de ventas, monto total, promedio
+   * - Acceso: Admin, Empleado
+   */
+  {
+    path: '/sales-history',
+    element: (
+      <ProtectedRoute allowedRoles={['admin', 'employee']}>
+        <Layout>
+          <SalesHistory />
         </Layout>
       </ProtectedRoute>
     )
@@ -263,6 +284,24 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['admin']}>
         <Layout>
           <AdminPanel />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
+
+  /**
+   * /audit-log - Bitácora de Auditoría
+   * - Registro de todos los eventos del sistema
+   * - Logins, logouts, cambios de contraseña, ventas, solicitudes
+   * - Filtrado por tipo, usuario, fecha
+   * - Acceso: Solo Admin
+   */
+  {
+    path: '/audit-log',
+    element: (
+      <ProtectedRoute allowedRoles={['admin']}>
+        <Layout>
+          <AuditLog />
         </Layout>
       </ProtectedRoute>
     )

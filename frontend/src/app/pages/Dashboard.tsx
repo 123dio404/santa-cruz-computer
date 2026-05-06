@@ -1,108 +1,72 @@
-import { Package, ShoppingCart, DollarSign, AlertTriangle, TrendingUp, Users } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { mockProducts, mockSales, mockCustomers } from '../data/mockData';
+import { useEffect, useState } from 'react';
+import { Package, DollarSign, AlertTriangle, TrendingUp, Users, ShoppingCart } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { productosAPI, ventasAPI, detallesVentaAPI, usuariosAPI, ApiProduct, ApiVenta, ApiDetalleVenta } from '../services/api';
 
 export function Dashboard() {
-  // Calculate total profit
-  const totalProfit = mockSales.reduce((sum, sale) => {
-    const saleProfit = sale.products.reduce((productSum, item) => {
-      const product = mockProducts.find(p => p.id === item.productId);
-      if (product) {
-        const profit = (product.salePrice - product.costPrice) * item.quantity;
-        return productSum + profit;
-      }
-      return productSum;
-    }, 0);
-    return sum + saleProfit;
-  }, 0);
+  const [products, setProducts] = useState<ApiProduct[]>([]);
+  const [ventas, setVentas] = useState<ApiVenta[]>([]);
+  const [detalles, setDetalles] = useState<ApiDetalleVenta[]>([]);
+  const [totalUsers, setTotalUsers] = useState(0);
+  const [loading, setLoading] = useState(true);
 
-  // Calculate total revenue
-  const totalRevenue = mockSales.reduce((sum, sale) => sum + sale.total, 0);
+  useEffect(() => {
+    Promise.all([
+      productosAPI.getAll(),
+      ventasAPI.getAll(),
+      detallesVentaAPI.getAll(),
+      usuariosAPI.getAll(),
+    ]).then(([p, v, d, u]) => {
+      setProducts(p);
+      setVentas(v);
+      setDetalles(d);
+      setTotalUsers(u.length);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
 
-  // Get low stock products
-  const lowStock = mockProducts.filter(p => p.stock <= p.minStock);
+  const lowStock = products.filter(p => p.is_low_stock);
+  const totalRevenue = ventas.reduce((s, v) => s + parseFloat(String(v.total ?? 0)), 0);
 
-  // Calculate most sold products
-  const productSales: { [key: string]: number } = {};
-  mockSales.forEach(sale => {
-    sale.products.forEach(item => {
-      productSales[item.productId] = (productSales[item.productId] || 0) + item.quantity;
-    });
+  const monthlyMap: Record<string, number> = {};
+  ventas.forEach(v => {
+    const mes = new Date(v.fecha).toLocaleString('es-BO', { month: 'short' });
+    monthlyMap[mes] = (monthlyMap[mes] ?? 0) + parseFloat(String(v.total ?? 0));
   });
+  const monthlySales = Object.entries(monthlyMap).map(([month, ventas]) => ({ month, ventas: parseFloat(ventas.toFixed(2)) }));
 
-  const topProducts = Object.entries(productSales)
-    .map(([productId, quantity]) => {
-      const product = mockProducts.find(p => p.id === productId);
-      return { productId, quantity, product };
-    })
-    .sort((a, b) => b.quantity - a.quantity)
-    .slice(0, 5);
-
-  // Calculate most frequent customers
-  const customerFrequency: { [key: string]: number } = {};
-  mockSales.forEach(sale => {
-    customerFrequency[sale.customerId] = (customerFrequency[sale.customerId] || 0) + 1;
+  const productQtyMap: Record<number, { name: string; qty: number }> = {};
+  detalles.forEach(d => {
+    if (!productQtyMap[d.producto]) {
+      const p = products.find(x => x.id === d.producto);
+      productQtyMap[d.producto] = { name: p?.name ?? `#${d.producto}`, qty: 0 };
+    }
+    productQtyMap[d.producto].qty += d.cantidad;
   });
+  const topProducts = Object.values(productQtyMap).sort((a, b) => b.qty - a.qty).slice(0, 5);
 
-  const topCustomers = Object.entries(customerFrequency)
-    .map(([customerId, purchases]) => {
-      const customer = mockCustomers.find(c => c.id === customerId);
-      return { customerId, purchases, customer };
-    })
-    .sort((a, b) => b.purchases - a.purchases)
-    .slice(0, 5);
-
-  // Prepare chart data for sales by category
-  const categoryData: { [key: string]: number } = {};
-  mockSales.forEach(sale => {
-    sale.products.forEach(item => {
-      const product = mockProducts.find(p => p.id === item.productId);
-      if (product) {
-        categoryData[product.category] = (categoryData[product.category] || 0) + (item.price * item.quantity);
-      }
-    });
+  const marcaMap: Record<string, number> = {};
+  detalles.forEach(d => {
+    const p = products.find(x => x.id === d.producto);
+    const label = p?.marca || p?.estado || 'Otros';
+    marcaMap[label] = (marcaMap[label] ?? 0) + parseFloat(String(d.subtotal ?? 0));
   });
-
-  const categoryChartData = Object.entries(categoryData).map(([name, value]) => ({
-    name,
-    value: parseFloat(value.toFixed(2))
-  }));
-
-  // Prepare monthly sales data
-  const monthlySales = [
-    { month: 'Ene', ventas: 12500 },
-    { month: 'Feb', ventas: 15200 },
-    { month: 'Mar', ventas: 18900 },
-    { month: 'Abr', ventas: totalRevenue }
-  ];
+  const categoryChartData = Object.entries(marcaMap).map(([name, value]) => ({ name, value: parseFloat(value.toFixed(2)) }));
 
   const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+    </div>
+  );
+
   const stats = [
-    {
-      label: 'Total Productos',
-      value: mockProducts.length,
-      icon: Package,
-      color: 'bg-blue-500'
-    },
-    {
-      label: 'Ganancia Total',
-      value: `${totalProfit.toFixed(2)} Bs`,
-      icon: TrendingUp,
-      color: 'bg-green-500'
-    },
-    {
-      label: 'Ventas del Mes',
-      value: `${totalRevenue.toFixed(2)} Bs`,
-      icon: DollarSign,
-      color: 'bg-purple-500'
-    },
-    {
-      label: 'Stock Bajo',
-      value: lowStock.length,
-      icon: AlertTriangle,
-      color: 'bg-orange-500'
-    }
+    { label: 'Total Productos', value: products.length, icon: Package, color: 'bg-blue-500' },
+    { label: 'Ingresos Totales', value: `${totalRevenue.toFixed(2)} Bs`, icon: DollarSign, color: 'bg-green-500' },
+    { label: 'Total Ventas', value: ventas.length, icon: ShoppingCart, color: 'bg-purple-500' },
+    { label: 'Stock Bajo', value: lowStock.length, icon: AlertTriangle, color: 'bg-orange-500' },
+    { label: 'Usuarios', value: totalUsers, icon: Users, color: 'bg-pink-500' },
+    { label: 'Ticket Promedio', value: ventas.length > 0 ? `${(totalRevenue / ventas.length).toFixed(2)} Bs` : '0.00 Bs', icon: TrendingUp, color: 'bg-teal-500' },
   ];
 
   return (
@@ -112,12 +76,11 @@ export function Dashboard() {
         <p className="text-gray-600">Resumen general del sistema</p>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {stats.map((stat, index) => {
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {stats.map((stat, i) => {
           const Icon = stat.icon;
           return (
-            <div key={index} className="bg-white rounded-xl p-6 border border-gray-200">
+            <div key={i} className="bg-white rounded-xl p-6 border border-gray-200">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600 mb-1">{stat.label}</p>
@@ -132,158 +95,94 @@ export function Dashboard() {
         })}
       </div>
 
-      {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Monthly Sales Chart */}
         <div className="bg-white rounded-xl p-6 border border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Ventas Mensuales</h2>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={monthlySales}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="ventas" fill="#3B82F6" />
-            </BarChart>
-          </ResponsiveContainer>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Ventas por Mes</h2>
+          {monthlySales.length > 0 ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={monthlySales}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="month" />
+                <YAxis />
+                <Tooltip formatter={(v: number) => [`${v} Bs`, 'Ventas']} />
+                <Bar dataKey="ventas" fill="#3B82F6" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-40 text-gray-400">Sin datos de ventas</div>
+          )}
         </div>
 
-        {/* Sales by Category Chart */}
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Ventas por Categoría</h2>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={categoryChartData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                outerRadius={100}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {categoryChartData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+          {categoryChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <PieChart>
+                <Pie data={categoryChartData} cx="50%" cy="50%" outerRadius={100}
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  dataKey="value">
+                  {categoryChartData.map((_, index) => (
+                    <Cell key={index} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v: number) => [`${v} Bs`]} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-40 text-gray-400">Sin datos</div>
+          )}
         </div>
       </div>
 
-      {/* Top Products and Customers */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Most Sold Products */}
         <div className="bg-white rounded-xl p-6 border border-gray-200">
           <div className="flex items-center gap-2 mb-4">
             <Package className="w-5 h-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-gray-900">Productos Más Vendidos</h2>
           </div>
-          <div className="space-y-3">
-            {topProducts.map((item, index) => (
-              <div key={item.productId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-                <div className="flex items-center justify-center w-8 h-8 bg-blue-100 text-blue-600 rounded-full font-semibold">
-                  {index + 1}
-                </div>
-                {item.product && (
-                  <>
-                    <img
-                      src={item.product.image}
-                      alt={item.product.name}
-                      className="w-12 h-12 rounded-lg object-cover"
-                    />
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">{item.product.name}</p>
-                      <p className="text-sm text-gray-600">{item.product.category}</p>
-                    </div>
-                    <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
-                      {item.quantity} vendidos
-                    </span>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Most Frequent Customers */}
-        <div className="bg-white rounded-xl p-6 border border-gray-200">
-          <div className="flex items-center gap-2 mb-4">
-            <Users className="w-5 h-5 text-green-600" />
-            <h2 className="text-lg font-semibold text-gray-900">Clientes Frecuentes</h2>
-          </div>
-          <div className="space-y-3">
-            {topCustomers.map((item, index) => (
-              <div key={item.customerId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-                <div className="flex items-center justify-center w-8 h-8 bg-green-100 text-green-600 rounded-full font-semibold">
-                  {index + 1}
-                </div>
-                {item.customer && (
-                  <>
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">{item.customer.name}</p>
-                      <p className="text-sm text-gray-600">{item.customer.email}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
-                        {item.purchases} compras
-                      </p>
-                      <p className="text-xs text-gray-600 mt-1">
-                        {item.customer.totalPurchases.toFixed(2)} Bs
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Low Stock Alert - PROMINENT */}
-      {lowStock.length > 0 && (
-        <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-xl p-6 border-2 border-orange-300">
-          <div className="flex items-start gap-4">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-3">
-                <AlertTriangle className="w-6 h-6 text-orange-600 animate-pulse" />
-                <h2 className="text-lg font-bold text-orange-900">⚠️ ALERTA: Stock Bajo en {lowStock.length} Producto(s)</h2>
-              </div>
-              <p className="text-sm text-orange-800 mb-4">
-                Los siguientes productos tienen stock igual o menor al mínimo requerido. ¡Realiza un pedido urgente!
-              </p>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {lowStock.map(product => (
-                  <div key={product.id} className="bg-white rounded-lg p-3 border-l-4 border-orange-500 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex gap-3">
-                      <img
-                        src={product.image}
-                        alt={product.name}
-                        className="w-14 h-14 rounded object-cover"
-                      />
-                      <div className="flex-1">
-                        <p className="font-bold text-gray-900 text-sm">{product.name}</p>
-                        <p className="text-xs text-gray-600 mb-2">{product.category}</p>
-                        <div className="flex gap-2 text-xs">
-                          <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-bold">
-                            Stock: {product.stock}
-                          </span>
-                          <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded">
-                            Min: {product.minStock}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
+          {topProducts.length > 0 ? (
+            <div className="space-y-3">
+              {topProducts.map((item, index) => (
+                <div key={index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                  <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-semibold text-sm">
+                    {index + 1}
                   </div>
-                ))}
-              </div>
+                  <div className="flex-1">
+                    <p className="font-medium text-gray-900">{item.name}</p>
+                  </div>
+                  <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+                    {item.qty} vendidos
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-6 text-gray-400">Sin ventas registradas</div>
+          )}
+        </div>
+
+        {lowStock.length > 0 && (
+          <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-xl p-6 border-2 border-orange-300">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle className="w-6 h-6 text-orange-600 animate-pulse" />
+              <h2 className="text-lg font-bold text-orange-900">Stock Bajo — {lowStock.length} producto(s)</h2>
+            </div>
+            <div className="space-y-2">
+              {lowStock.map(p => (
+                <div key={p.id} className="bg-white rounded-lg px-4 py-3 border-l-4 border-orange-500 flex justify-between items-center">
+                  <div>
+                    <p className="font-semibold text-gray-900 text-sm">{p.name}</p>
+                    {p.marca && <p className="text-xs text-gray-500">{p.marca}</p>}
+                  </div>
+                  <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-bold text-xs">
+                    Stock: {p.stock ?? 0}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
