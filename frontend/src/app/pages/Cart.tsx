@@ -1,53 +1,85 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Trash2, CreditCard, Banknote, QrCode, ShoppingBag, X } from 'lucide-react';
-import { mockProducts, Product } from '../data/mockData';
+import { ventasAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
-interface CartItem {
-  product: Product;
+interface StoreCartItem {
+  productId: number;
+  productName: string;
+  price: number;
   quantity: number;
+  stock: number;
+  imagen_url?: string | null;
 }
 
-type PaymentMethod = 'cash' | 'card' | 'qr';
+type PaymentMethod = 'card' | 'qr' | 'cash';
+
+const metodoPagoMap: Record<PaymentMethod, string> = { card: 'tarjeta', qr: 'transferencia', cash: 'efectivo' };
 
 export function Cart() {
-  const [cartItems, setCartItems] = useState<CartItem[]>([
-    { product: mockProducts[0], quantity: 1 },
-    { product: mockProducts[2], quantity: 2 }
-  ]);
+  const { user } = useAuth();
+  const [cartItems, setCartItems] = useState<StoreCartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [processingOrder, setProcessingOrder] = useState(false);
 
-  const updateQuantity = (productId: string, newQuantity: number) => {
-    if (newQuantity < 1) return;
-    setCartItems(cartItems.map(item =>
-      item.product.id === productId
-        ? { ...item, quantity: newQuantity }
-        : item
-    ));
+  useEffect(() => {
+    const saved = localStorage.getItem('storeCart');
+    if (saved) {
+      try { setCartItems(JSON.parse(saved)); } catch { /* ignore */ }
+    }
+  }, []);
+
+  const saveCart = (items: StoreCartItem[]) => {
+    setCartItems(items);
+    localStorage.setItem('storeCart', JSON.stringify(items));
   };
 
-  const removeItem = (productId: string) => {
-    setCartItems(cartItems.filter(item => item.product.id !== productId));
+  const updateQuantity = (productId: number, qty: number) => {
+    if (qty < 1) return;
+    saveCart(cartItems.map(i => i.productId === productId ? { ...i, quantity: qty } : i));
   };
 
-  const subtotal = cartItems.reduce((sum, item) => sum + (item.product.salePrice * item.quantity), 0);
+  const removeItem = (productId: number) => saveCart(cartItems.filter(i => i.productId !== productId));
+
+  const subtotal = cartItems.reduce((s, i) => s + i.price * i.quantity, 0);
   const shipping = 10;
   const total = subtotal + shipping;
 
-  const handleCheckout = () => {
-    setShowCheckoutModal(false);
-    setShowSuccessModal(true);
-    setTimeout(() => {
-      setShowSuccessModal(false);
-      setCartItems([]);
-    }, 2000);
+  const handleCheckout = async () => {
+    if (!user) { alert('Debes iniciar sesión para realizar un pedido'); return; }
+    setProcessingOrder(true);
+    try {
+      await ventasAPI.create({
+        cliente: parseInt(user.id),
+        vendedor: null,
+        total: total,
+        status: 'pending',
+        detalles: cartItems.map(i => ({
+          producto: i.productId,
+          cantidad: i.quantity,
+          precio_unitario: i.price,
+        })),
+        pagos: [{ monto: total, metodo: metodoPagoMap[paymentMethod] }],
+      });
+      setShowCheckoutModal(false);
+      setShowSuccessModal(true);
+      setTimeout(() => {
+        saveCart([]);
+        setShowSuccessModal(false);
+      }, 2500);
+    } catch (err) {
+      alert(`Error al procesar pedido: ${err instanceof Error ? err.message : 'Error desconocido'}`);
+    } finally {
+      setProcessingOrder(false);
+    }
   };
 
   const paymentMethods = [
-    { value: 'card', label: 'Tarjeta de Crédito/Débito', icon: CreditCard },
-    { value: 'qr', label: 'Código QR', icon: QrCode },
-    { value: 'cash', label: 'Efectivo (Contra entrega)', icon: Banknote }
+    { value: 'card' as PaymentMethod, label: 'Tarjeta de Crédito/Débito', icon: CreditCard },
+    { value: 'qr' as PaymentMethod, label: 'Código QR', icon: QrCode },
+    { value: 'cash' as PaymentMethod, label: 'Efectivo (Contra entrega)', icon: Banknote },
   ];
 
   return (
@@ -65,56 +97,41 @@ export function Cart() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Cart Items */}
           <div className="lg:col-span-2 space-y-4">
             {cartItems.map(item => (
-              <div key={item.product.id} className="bg-white rounded-xl p-6 border border-gray-200">
+              <div key={item.productId} className="bg-white rounded-xl p-6 border border-gray-200">
                 <div className="flex gap-4">
-                  <img
-                    src={item.product.image}
-                    alt={item.product.name}
-                    className="w-24 h-24 rounded-lg object-cover"
-                  />
-
+                  <div className="w-20 h-20 bg-blue-50 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden">
+                    {item.imagen_url
+                      ? <img
+                          src={item.imagen_url.startsWith('http') ? item.imagen_url : `http://localhost:8000${item.imagen_url}`}
+                          alt={item.productName}
+                          className="w-full h-full object-cover"
+                        />
+                      : <ShoppingBag className="w-8 h-8 text-blue-300" />
+                    }
+                  </div>
                   <div className="flex-1">
                     <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <h3 className="font-semibold text-gray-900">{item.product.name}</h3>
-                        <p className="text-sm text-gray-600 mt-1">{item.product.description}</p>
-                      </div>
-                      <button
-                        onClick={() => removeItem(item.product.id)}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      >
+                      <h3 className="font-semibold text-gray-900">{item.productName}</h3>
+                      <button onClick={() => removeItem(item.productId)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg">
                         <Trash2 className="w-5 h-5" />
                       </button>
                     </div>
-
-                    <div className="flex items-center justify-between mt-4">
+                    <div className="flex items-center justify-between mt-3">
                       <div className="flex items-center gap-3">
                         <span className="text-sm text-gray-600">Cantidad:</span>
                         <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
-                            className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-100"
-                          >
-                            -
-                          </button>
-                          <span className="w-12 text-center font-medium">{item.quantity}</span>
-                          <button
-                            onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
-                            className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-100"
-                          >
-                            +
-                          </button>
+                          <button onClick={() => updateQuantity(item.productId, item.quantity - 1)}
+                            className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-100">-</button>
+                          <span className="w-10 text-center font-medium">{item.quantity}</span>
+                          <button onClick={() => updateQuantity(item.productId, item.quantity + 1)}
+                            className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-100">+</button>
                         </div>
                       </div>
-
                       <div className="text-right">
-                        <p className="text-sm text-gray-600">{item.product.salePrice} Bs c/u</p>
-                        <p className="text-xl font-bold text-gray-900">
-                          {(item.product.salePrice * item.quantity).toFixed(2)} Bs
-                        </p>
+                        <p className="text-sm text-gray-600">{item.price.toFixed(2)} Bs c/u</p>
+                        <p className="text-xl font-bold text-gray-900">{(item.price * item.quantity).toFixed(2)} Bs</p>
                       </div>
                     </div>
                   </div>
@@ -123,20 +140,12 @@ export function Cart() {
             ))}
           </div>
 
-          {/* Summary */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl p-6 border border-gray-200 sticky top-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Resumen del Pedido</h2>
-
               <div className="space-y-3 mb-6">
-                <div className="flex justify-between text-gray-600">
-                  <span>Subtotal</span>
-                  <span>{subtotal.toFixed(2)} Bs</span>
-                </div>
-                <div className="flex justify-between text-gray-600">
-                  <span>Envío</span>
-                  <span>{shipping.toFixed(2)} Bs</span>
-                </div>
+                <div className="flex justify-between text-gray-600"><span>Subtotal</span><span>{subtotal.toFixed(2)} Bs</span></div>
+                <div className="flex justify-between text-gray-600"><span>Envío</span><span>{shipping.toFixed(2)} Bs</span></div>
                 <div className="pt-3 border-t border-gray-200">
                   <div className="flex justify-between">
                     <span className="font-semibold text-gray-900">Total</span>
@@ -144,87 +153,52 @@ export function Cart() {
                   </div>
                 </div>
               </div>
-
-              <button
-                onClick={() => setShowCheckoutModal(true)}
-                className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-              >
+              <button onClick={() => setShowCheckoutModal(true)}
+                className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
                 Proceder al Pago
               </button>
-
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <p className="text-sm text-gray-600 mb-2">Aceptamos:</p>
-                <div className="flex gap-2">
-                  <div className="px-3 py-2 bg-gray-100 rounded text-xs">Visa</div>
-                  <div className="px-3 py-2 bg-gray-100 rounded text-xs">Mastercard</div>
-                  <div className="px-3 py-2 bg-gray-100 rounded text-xs">QR</div>
-                </div>
-              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Checkout Modal */}
       {showCheckoutModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl max-w-md w-full">
             <div className="flex items-center justify-between p-6 border-b border-gray-200">
               <h2 className="text-xl font-semibold text-gray-900">Método de Pago</h2>
-              <button
-                onClick={() => setShowCheckoutModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
+              <button onClick={() => setShowCheckoutModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
-
             <div className="p-6">
               <div className="space-y-3 mb-6">
                 {paymentMethods.map(method => {
                   const Icon = method.icon;
                   return (
-                    <button
-                      key={method.value}
-                      onClick={() => setPaymentMethod(method.value as PaymentMethod)}
-                      className={`w-full flex items-center gap-3 p-4 border-2 rounded-lg transition-all ${
-                        paymentMethod === method.value
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                    >
-                      <Icon className={`w-5 h-5 ${
-                        paymentMethod === method.value ? 'text-blue-600' : 'text-gray-600'
-                      }`} />
-                      <span className={`font-medium ${
-                        paymentMethod === method.value ? 'text-blue-600' : 'text-gray-700'
-                      }`}>
-                        {method.label}
-                      </span>
+                    <button key={method.value} onClick={() => setPaymentMethod(method.value)}
+                      className={`w-full flex items-center gap-3 p-4 border-2 rounded-lg transition-all ${paymentMethod === method.value ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                      <Icon className={`w-5 h-5 ${paymentMethod === method.value ? 'text-blue-600' : 'text-gray-600'}`} />
+                      <span className={`font-medium ${paymentMethod === method.value ? 'text-blue-600' : 'text-gray-700'}`}>{method.label}</span>
                     </button>
                   );
                 })}
               </div>
-
               <div className="pt-4 border-t border-gray-200 mb-6">
-                <div className="flex justify-between mb-2">
+                <div className="flex justify-between">
                   <span className="text-gray-600">Total a pagar:</span>
                   <span className="text-2xl font-bold text-gray-900">{total.toFixed(2)} Bs</span>
                 </div>
               </div>
-
-              <button
-                onClick={handleCheckout}
-                className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
-              >
-                Confirmar Pedido
+              <button onClick={handleCheckout} disabled={processingOrder}
+                className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50">
+                {processingOrder ? 'Procesando...' : 'Confirmar Pedido'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Success Modal */}
       {showSuccessModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl p-8 max-w-sm mx-4 text-center">

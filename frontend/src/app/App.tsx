@@ -17,18 +17,18 @@
 
 import { RouterProvider } from 'react-router';
 import { AuthProvider } from './context/AuthContext';
+import { AuditProvider } from './context/AuditContext';
+import { UsersProvider } from './context/UsersContext';
 import { router } from './routes';
 
-/**
- * Función principal de la aplicación
- * Retorna la estructura base con los proveedores necesarios
- */
 export default function App() {
   return (
-    // AuthProvider: Envuelve toda la app para que cualquier componente pueda acceder a autenticación
     <AuthProvider>
-      {/* RouterProvider: Habilita el sistema de rutas (URLs) */}
-      <RouterProvider router={router} />
+      <AuditProvider>
+        <UsersProvider>
+          <RouterProvider router={router} />
+        </UsersProvider>
+      </AuditProvider>
     </AuthProvider>
   );
 }

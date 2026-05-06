@@ -1,9 +1,17 @@
 import { useState } from 'react';
 import { Plus, Edit, Trash2, X, Building2 } from 'lucide-react';
-import { mockSuppliers, Supplier } from '../data/mockData';
+
+interface Supplier {
+  id: string;
+  name: string;
+  contact: string;
+  phone: string;
+  email: string;
+  address: string;
+}
 
 export function Suppliers() {
-  const [suppliers, setSuppliers] = useState<Supplier[]>(mockSuppliers);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [formData, setFormData] = useState({

@@ -13,10 +13,11 @@
  * - Actualiza en tiempo real basado en mockProducts
  */
 
-import { ReactNode, useState } from 'react';
+import { ReactNode, useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../context/AuthContext';
-import { mockProducts } from '../data/mockData';
+import { useAudit } from '../context/AuditContext';
+import { productosAPI, clearAuthToken, ApiProduct } from '../services/api';
 import {
   LayoutDashboard,
   Package,
@@ -30,7 +31,12 @@ import {
   UserCircle,
   Building2,
   Bell,
-  AlertTriangle
+  AlertTriangle,
+  Settings,
+  Lock,
+  Shield,
+  ClipboardList,
+  History
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -39,15 +45,39 @@ interface LayoutProps {
 
 export function Layout({ children }: LayoutProps) {
   const { user, logout } = useAuth();
+  const { addEvent } = useAudit();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [lowStockProducts, setLowStockProducts] = useState<ApiProduct[]>([]);
 
-  // Calcular productos con stock bajo
-  const lowStockProducts = mockProducts.filter(p => p.stock <= p.minStock);
+  useEffect(() => {
+    if (user?.role === 'admin' || user?.role === 'employee') {
+      productosAPI.getAll()
+        .then(products => setLowStockProducts(products.filter(p => p.is_low_stock)))
+        .catch(() => {});
+    }
+  }, [user]);
 
   const handleLogout = () => {
+    // Registrar logout en auditoría
+    if (user) {
+      addEvent({
+        timestamp: new Date(),
+        eventType: 'logout',
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        description: `${user.name} (${user.role}) cerró sesión en el sistema`,
+        details: {
+          ipAddress: 'APP-CLIENT'
+        }
+      });
+    }
+    
+    clearAuthToken();
     logout();
     navigate('/login');
   };
@@ -59,16 +89,18 @@ export function Layout({ children }: LayoutProps) {
       { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
       { path: '/products', icon: Package, label: 'Productos' },
       { path: '/inventory', icon: Warehouse, label: 'Inventario' },
-      { path: '/sales', icon: ShoppingCart, label: 'Ventas' },
+      { path: '/sales', icon: ShoppingCart, label: 'Nueva Venta' },
+      { path: '/sales-history', icon: History, label: 'Historial de Ventas' },
       { path: '/customers', icon: UserCircle, label: 'Clientes' },
       { path: '/suppliers', icon: Building2, label: 'Proveedores' },
-      { path: '/users', icon: Users, label: 'Usuarios' }
+      { path: '/users', icon: Users, label: 'Usuarios' },
+      { path: '/audit-log', icon: ClipboardList, label: 'Bitácora' }
     ];
 
     const employeeItems = [
-      { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
       { path: '/inventory', icon: Warehouse, label: 'Inventario' },
-      { path: '/sales', icon: ShoppingCart, label: 'Ventas' },
+      { path: '/sales', icon: ShoppingCart, label: 'Nueva Venta' },
+      { path: '/sales-history', icon: History, label: 'Historial de Ventas' },
       { path: '/customers', icon: UserCircle, label: 'Clientes' }
     ];
 
@@ -95,7 +127,7 @@ export function Layout({ children }: LayoutProps) {
       >
         <div className="flex flex-col h-full">
           <div className="flex items-center justify-between p-6 border-b border-gray-200">
-            <h1 className="font-bold text-xl">TechStore</h1>
+            <h1 className="font-bold text-xl">SantaCruz-Computer</h1>
             <button
               onClick={() => setSidebarOpen(false)}
               className="lg:hidden p-2 rounded-lg hover:bg-gray-100"
@@ -127,17 +159,76 @@ export function Layout({ children }: LayoutProps) {
           </nav>
 
           <div className="p-4 border-t border-gray-200">
-            <div className="px-4 py-3 mb-2 bg-gray-50 rounded-lg">
-              <p className="text-sm font-medium text-gray-900">{user?.name}</p>
-              <p className="text-xs text-gray-500 capitalize">{user?.role}</p>
-            </div>
             <button
-              onClick={handleLogout}
-              className="flex items-center gap-3 w-full px-4 py-3 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
+              onClick={() => setUserMenuOpen(!userMenuOpen)}
+              className="w-full px-4 py-3 mb-2 bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 rounded-lg hover:border-blue-300 transition-all cursor-pointer text-left"
             >
-              <LogOut className="w-5 h-5" />
-              <span>Cerrar sesión</span>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-bold text-gray-900">{user?.name}</p>
+                  <p className="text-xs text-gray-600 capitalize flex items-center gap-1">
+                    {user?.role === 'admin' && <Shield className="w-3 h-3" />}
+                    {user?.role}
+                  </p>
+                </div>
+                <UserCircle className="w-5 h-5 text-blue-600" />
+              </div>
             </button>
+
+            {/* User Menu Dropdown */}
+            {userMenuOpen && (
+              <div className="absolute left-4 right-4 bottom-20 bg-white rounded-lg shadow-xl border border-gray-200 z-40 overflow-hidden">
+                {/* Admin Options */}
+                {user?.role === 'admin' && (
+                  <>
+                    <Link
+                      to="/admin-panel"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        setSidebarOpen(false);
+                      }}
+                      className="flex items-center gap-3 w-full px-4 py-3 text-gray-700 hover:bg-blue-50 border-b border-gray-200 transition-colors"
+                    >
+                      <Shield className="w-4 h-4 text-blue-600" />
+                      <span className="font-medium">Panel de Administración</span>
+                    </Link>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        // Aquí puedes agregar navegación a perfil si existe
+                      }}
+                      className="flex items-center gap-3 w-full px-4 py-3 text-gray-700 hover:bg-purple-50 border-b border-gray-200 transition-colors text-left"
+                    >
+                      <Lock className="w-4 h-4 text-purple-600" />
+                      <span className="font-medium">Cambiar Contraseña</span>
+                    </button>
+                  </>
+                )}
+
+                {/* Common Options */}
+                <button
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    handleLogout();
+                  }}
+                  className="flex items-center gap-3 w-full px-4 py-3 text-red-600 hover:bg-red-50 transition-colors text-left font-medium"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Cerrar sesión</span>
+                </button>
+              </div>
+            )}
+
+            {/* Original Logout Button (fallback) */}
+            {!userMenuOpen && (
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-3 w-full px-4 py-3 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
+              >
+                <LogOut className="w-5 h-5" />
+                <span>Cerrar sesión</span>
+              </button>
+            )}
           </div>
         </div>
       </aside>
@@ -200,20 +291,15 @@ export function Layout({ children }: LayoutProps) {
                             className="p-3 hover:bg-gray-50 transition-colors cursor-pointer"
                           >
                             <div className="flex gap-3">
-                              <img
-                                src={product.image}
-                                alt={product.name}
-                                className="w-12 h-12 rounded object-cover"
-                              />
+                              <div className="w-12 h-12 bg-blue-50 rounded flex items-center justify-center flex-shrink-0">
+                                <Package className="w-6 h-6 text-blue-200" />
+                              </div>
                               <div className="flex-1">
                                 <p className="font-medium text-sm text-gray-900">{product.name}</p>
-                                <p className="text-xs text-gray-600">{product.category}</p>
+                                <p className="text-xs text-gray-600">{product.marca || product.estado || 'General'}</p>
                                 <div className="flex gap-2 mt-1">
                                   <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-bold">
-                                    Stock: {product.stock}
-                                  </span>
-                                  <span className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs">
-                                    Mín: {product.minStock}
+                                    Stock: {product.stock ?? 0}
                                   </span>
                                 </div>
                               </div>

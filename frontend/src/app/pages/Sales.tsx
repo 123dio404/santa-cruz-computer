@@ -1,16 +1,44 @@
-import { useState } from 'react';
-import { Plus, Trash2, CreditCard, Banknote, QrCode, ShoppingCart, FileText, Gift } from 'lucide-react';
-import { mockProducts, mockCustomers, Product, Customer } from '../data/mockData';
+import { useState, useEffect } from 'react';
+import { Plus, Trash2, CreditCard, Banknote, QrCode, ShoppingCart, FileText, Package } from 'lucide-react';
+import { ventasAPI, productosAPI, usuariosAPI, categoriasAPI, ApiProduct, ApiUser, ApiCategoria } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+
+interface SaleProduct {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  stock: number;
+  categoria_id: number | null;
+  imagen_url: string | null;
+}
 
 interface CartItem {
-  product: Product;
+  product: SaleProduct;
   quantity: number;
 }
 
 type PaymentMethod = 'cash' | 'card' | 'qr';
 
+const metodoPagoMap: Record<PaymentMethod, string> = {
+  cash: 'efectivo',
+  card: 'tarjeta',
+  qr: 'transferencia',
+};
+
+const mapApiProduct = (p: ApiProduct): SaleProduct => ({
+  id: String(p.id),
+  name: p.name,
+  description: `${p.marca ?? ''} ${p.modelo ?? ''}`.trim(),
+  price: parseFloat(String(p.price)),
+  stock: p.stock ?? 0,
+  categoria_id: p.categoria ?? null,
+  imagen_url: p.imagen_url ?? null,
+});
+
 export function Sales() {
-  const [selectedCategory, setSelectedCategory] = useState('');
+  const { user } = useAuth();
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | ''>('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedProduct, setSelectedProduct] = useState('');
   const [quantity, setQuantity] = useState(1);
@@ -20,25 +48,38 @@ export function Sales() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [showInvoice, setShowInvoice] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [loyaltyDiscount, setLoyaltyDiscount] = useState(0);
-  const [redeemingReward, setRedeemingReward] = useState(false);
+  const [backendProducts, setBackendProducts] = useState<SaleProduct[]>([]);
+  const [clients, setClients] = useState<ApiUser[]>([]);
+  const [categorias, setCategorias] = useState<ApiCategoria[]>([]);
 
-  const categories = [...new Set(mockProducts.map(p => p.category))];
-  const filteredProducts = selectedCategory
-    ? mockProducts.filter(p => p.category === selectedCategory)
-    : [];
+  useEffect(() => {
+    productosAPI.getAll()
+      .then(data => setBackendProducts(data.map(mapApiProduct)))
+      .catch(() => setBackendProducts([]));
+    usuariosAPI.getByRole('cliente')
+      .then(setClients)
+      .catch(() => setClients([]));
+    categoriasAPI.getAll()
+      .then(setCategorias)
+      .catch(() => setCategorias([]));
+  }, []);
 
-  const selectedCustomer = mockCustomers.find(c => c.id === selectedCustomerId);
+  const filteredProducts = selectedCategoryId !== ''
+    ? backendProducts.filter(p => p.categoria_id === selectedCategoryId)
+    : backendProducts;
+
+  const handleCustomerSelect = (clientId: string) => {
+    setSelectedCustomerId(clientId);
+    const client = clients.find(c => String(c.id) === clientId);
+    if (client) setCustomerName(client.name);
+  };
 
   const addToCart = () => {
     if (!selectedProduct) return;
-
-    const product = mockProducts.find(p => p.id === selectedProduct);
+    const product = backendProducts.find(p => p.id === selectedProduct);
     if (!product) return;
-
-    const existingItem = cart.find(item => item.product.id === selectedProduct);
-
-    if (existingItem) {
+    const existing = cart.find(item => item.product.id === selectedProduct);
+    if (existing) {
       setCart(cart.map(item =>
         item.product.id === selectedProduct
           ? { ...item, quantity: item.quantity + quantity }
@@ -47,53 +88,20 @@ export function Sales() {
     } else {
       setCart([...cart, { product, quantity }]);
     }
-
     setSelectedProduct('');
     setQuantity(1);
   };
 
-  const removeFromCart = (productId: string) => {
-    setCart(cart.filter(item => item.product.id !== productId));
-  };
+  const removeFromCart = (productId: string) => setCart(cart.filter(item => item.product.id !== productId));
 
   const updateQuantity = (productId: string, newQuantity: number) => {
     if (newQuantity < 1) return;
     setCart(cart.map(item =>
-      item.product.id === productId
-        ? { ...item, quantity: newQuantity }
-        : item
+      item.product.id === productId ? { ...item, quantity: newQuantity } : item
     ));
   };
 
-  const subtotal = cart.reduce((sum, item) => sum + (item.product.salePrice * item.quantity), 0);
-
-  // Calculate loyalty discount (10% on peripherals, max 1000 Bs)
-  const calculateLoyaltyDiscount = () => {
-    if (!selectedCustomer || selectedCustomer.totalPurchases < 2500) return 0;
-
-    const peripheralsTotal = cart
-      .filter(item => item.product.category === 'Periféricos')
-      .reduce((sum, item) => sum + (item.product.salePrice * item.quantity), 0);
-
-    const discount = peripheralsTotal * 0.1;
-    return Math.min(discount, 1000);
-  };
-
-  const applyLoyaltyDiscount = () => {
-    const discount = calculateLoyaltyDiscount();
-    setLoyaltyDiscount(discount);
-  };
-
-  const total = subtotal - loyaltyDiscount;
-
-  const handleCustomerSelect = (customerId: string) => {
-    setSelectedCustomerId(customerId);
-    const customer = mockCustomers.find(c => c.id === customerId);
-    if (customer) {
-      setCustomerName(customer.name);
-      setCustomerNit(customer.nit);
-    }
-  };
+  const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
 
   const handleShowInvoice = () => {
     if (cart.length === 0 || !customerName || !customerNit) {
@@ -103,32 +111,49 @@ export function Sales() {
     setShowInvoice(true);
   };
 
-  const handleCompleteSale = () => {
-    setShowInvoice(false);
-    setShowSuccessModal(true);
-    setTimeout(() => {
-      setCart([]);
-      setCustomerName('');
-      setCustomerNit('');
-      setSelectedCustomerId('');
-      setLoyaltyDiscount(0);
-      setRedeemingReward(false);
-      setPaymentMethod('cash');
-      setSelectedCategory('');
-      setShowSuccessModal(false);
-    }, 2000);
+  const handleCompleteSale = async () => {
+    if (!user) {
+      alert('Error: No se encontró información del vendedor. Por favor inicia sesión nuevamente.');
+      return;
+    }
+    try {
+      await ventasAPI.create({
+        cliente: selectedCustomerId ? parseInt(selectedCustomerId) : null,
+        vendedor: parseInt(user.id),
+        total: subtotal,
+        status: 'completed',
+        detalles: cart.map(item => ({
+          producto: parseInt(item.product.id),
+          cantidad: item.quantity,
+          precio_unitario: item.product.price,
+        })),
+        pagos: [{ monto: subtotal, metodo: metodoPagoMap[paymentMethod] }],
+      });
+
+      setShowInvoice(false);
+      setShowSuccessModal(true);
+      productosAPI.getAll()
+        .then(data => setBackendProducts(data.map(mapApiProduct)))
+        .catch(() => {});
+      setTimeout(() => {
+        setCart([]);
+        setCustomerName('');
+        setCustomerNit('');
+        setSelectedCustomerId('');
+        setPaymentMethod('cash');
+        setSelectedCategory('');
+        setShowSuccessModal(false);
+      }, 2000);
+    } catch (error) {
+      console.error('Error al completar venta:', error);
+      alert(`Error al registrar venta: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+    }
   };
 
   const paymentMethods = [
     { value: 'cash', label: 'Efectivo', icon: Banknote },
     { value: 'card', label: 'Tarjeta', icon: CreditCard },
-    { value: 'qr', label: 'Código QR', icon: QrCode }
-  ];
-
-  const rewardOptions = [
-    { id: '3', name: 'Teclado Mecánico' },
-    { id: '4', name: 'Mouse Razer' },
-    { id: '9', name: 'Audífonos HyperX' }
+    { value: 'qr', label: 'Código QR', icon: QrCode },
   ];
 
   return (
@@ -139,12 +164,10 @@ export function Sales() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Product Selection */}
         <div className="lg:col-span-2 space-y-6">
           {/* Customer Selection */}
           <div className="bg-white rounded-xl p-6 border border-gray-200">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Datos del Cliente</h2>
-
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <select
                 value={selectedCustomerId}
@@ -152,9 +175,9 @@ export function Sales() {
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="">Seleccionar cliente...</option>
-                {mockCustomers.map(customer => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.name} - {customer.nit}
+                {clients.map(client => (
+                  <option key={client.id} value={String(client.id)}>
+                    {client.name}
                   </option>
                 ))}
               </select>
@@ -175,44 +198,32 @@ export function Sales() {
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
-
-            {selectedCustomer && selectedCustomer.totalPurchases >= 2500 && (
-              <div className="mt-4 p-3 bg-gradient-to-r from-orange-50 to-yellow-50 border border-orange-200 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Gift className="w-5 h-5 text-orange-600" />
-                  <p className="text-sm font-medium text-orange-900">
-                    Cliente elegible para beneficios de lealtad
-                  </p>
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* Category and Product Selection */}
+          {/* Product Selection */}
           <div className="bg-white rounded-xl p-6 border border-gray-200">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Agregar Productos</h2>
-
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   1. Seleccione la Categoría
                 </label>
                 <select
-                  value={selectedCategory}
+                  value={selectedCategoryId}
                   onChange={(e) => {
-                    setSelectedCategory(e.target.value);
+                    setSelectedCategoryId(e.target.value ? parseInt(e.target.value) : '');
                     setSelectedProduct('');
                   }}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
                   <option value="">Seleccionar categoría</option>
-                  {categories.map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
+                  {categorias.map(cat => (
+                    <option key={cat.id} value={cat.id}>{cat.nombre}</option>
                   ))}
                 </select>
               </div>
 
-              {selectedCategory && (
+              {selectedCategoryId !== '' && (
                 <div className="flex gap-4">
                   <div className="flex-1">
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -226,16 +237,14 @@ export function Sales() {
                       <option value="">Seleccionar producto</option>
                       {filteredProducts.map(product => (
                         <option key={product.id} value={product.id}>
-                          {product.name} - {product.salePrice} Bs (Stock: {product.stock})
+                          {product.name} - {product.price.toFixed(2)} Bs (Stock: {product.stock})
                         </option>
                       ))}
                     </select>
                   </div>
 
                   <div className="w-24">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Cantidad
-                    </label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Cantidad</label>
                     <input
                       type="number"
                       min="1"
@@ -268,44 +277,49 @@ export function Sales() {
             </div>
 
             {cart.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                No hay productos en el carrito
-              </div>
+              <div className="text-center py-8 text-gray-500">No hay productos en el carrito</div>
             ) : (
               <div className="space-y-4">
                 {cart.map(item => (
                   <div key={item.product.id} className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg">
-                    <img
-                      src={item.product.image}
-                      alt={item.product.name}
-                      className="w-16 h-16 rounded-lg object-cover"
-                    />
+                    <div className="w-16 h-16 bg-blue-50 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden">
+                      {item.product.imagen_url ? (
+                        <img
+                          src={item.product.imagen_url}
+                          alt={item.product.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; (e.currentTarget.nextElementSibling as HTMLElement).style.display = 'flex'; }}
+                        />
+                      ) : null}
+                      <div
+                        className="w-full h-full items-center justify-center"
+                        style={{ display: item.product.imagen_url ? 'none' : 'flex' }}
+                      >
+                        <Package className="w-8 h-8 text-blue-200" />
+                      </div>
+                    </div>
 
                     <div className="flex-1">
                       <p className="font-medium text-gray-900">{item.product.name}</p>
-                      <p className="text-sm text-gray-600">{item.product.salePrice} Bs c/u</p>
-                      <p className="text-xs text-gray-500">{item.product.category}</p>
+                      <p className="text-sm text-gray-600">{item.product.price.toFixed(2)} Bs c/u</p>
+                      <p className="text-xs text-gray-500">{item.product.description || 'General'}</p>
                     </div>
 
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
                         className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-100"
-                      >
-                        -
-                      </button>
+                      >-</button>
                       <span className="w-12 text-center font-medium">{item.quantity}</span>
                       <button
                         onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
                         className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded hover:bg-gray-100"
-                      >
-                        +
-                      </button>
+                      >+</button>
                     </div>
 
                     <div className="text-right min-w-[100px]">
                       <p className="font-semibold text-gray-900">
-                        {(item.product.salePrice * item.quantity).toFixed(2)} Bs
+                        {(item.product.price * item.quantity).toFixed(2)} Bs
                       </p>
                     </div>
 
@@ -328,46 +342,8 @@ export function Sales() {
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Resumen de Venta</h2>
 
             <div className="space-y-4">
-              {/* Loyalty Benefits */}
-              {selectedCustomer && selectedCustomer.totalPurchases >= 2500 && cart.length > 0 && (
-                <div className="pb-4 border-b border-gray-200">
-                  <h3 className="text-sm font-medium text-gray-700 mb-3">Beneficios de Lealtad</h3>
-
-                  {calculateLoyaltyDiscount() > 0 && (
-                    <button
-                      onClick={applyLoyaltyDiscount}
-                      disabled={loyaltyDiscount > 0}
-                      className="w-full mb-2 p-3 border-2 border-orange-300 bg-orange-50 rounded-lg hover:bg-orange-100 transition-colors disabled:opacity-50 text-left"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Gift className="w-4 h-4 text-orange-600" />
-                        <div>
-                          <p className="text-sm font-medium text-orange-900">
-                            10% Desc. Periféricos
-                          </p>
-                          <p className="text-xs text-orange-700">
-                            Ahorra {calculateLoyaltyDiscount().toFixed(2)} Bs
-                          </p>
-                        </div>
-                      </div>
-                    </button>
-                  )}
-
-                  <div className="text-xs text-gray-600 bg-gray-50 p-2 rounded">
-                    <p>O puede canjear por:</p>
-                    <ul className="mt-1 space-y-1">
-                      {rewardOptions.map(reward => (
-                        <li key={reward.id}>• {reward.name}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
-
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">
-                  Método de Pago
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-3">Método de Pago</label>
                 <div className="space-y-2">
                   {paymentMethods.map(method => {
                     const Icon = method.icon;
@@ -381,12 +357,8 @@ export function Sales() {
                             : 'border-gray-200 hover:border-gray-300'
                         }`}
                       >
-                        <Icon className={`w-5 h-5 ${
-                          paymentMethod === method.value ? 'text-blue-600' : 'text-gray-600'
-                        }`} />
-                        <span className={`font-medium ${
-                          paymentMethod === method.value ? 'text-blue-600' : 'text-gray-700'
-                        }`}>
+                        <Icon className={`w-5 h-5 ${paymentMethod === method.value ? 'text-blue-600' : 'text-gray-600'}`} />
+                        <span className={`font-medium ${paymentMethod === method.value ? 'text-blue-600' : 'text-gray-700'}`}>
                           {method.label}
                         </span>
                       </button>
@@ -396,22 +368,9 @@ export function Sales() {
               </div>
 
               <div className="pt-4 border-t border-gray-200">
-                <div className="space-y-2 mb-4">
-                  <div className="flex justify-between text-gray-600">
-                    <span>Subtotal</span>
-                    <span>{subtotal.toFixed(2)} Bs</span>
-                  </div>
-                  {loyaltyDiscount > 0 && (
-                    <div className="flex justify-between text-orange-600">
-                      <span>Descuento lealtad</span>
-                      <span>-{loyaltyDiscount.toFixed(2)} Bs</span>
-                    </div>
-                  )}
-                </div>
-
                 <div className="flex justify-between mb-4">
                   <span className="font-semibold text-gray-900">Total</span>
-                  <span className="text-2xl font-bold text-gray-900">{total.toFixed(2)} Bs</span>
+                  <span className="text-2xl font-bold text-gray-900">{subtotal.toFixed(2)} Bs</span>
                 </div>
 
                 <button
@@ -433,7 +392,6 @@ export function Sales() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-8">
-              {/* Invoice Header */}
               <div className="text-center mb-6 pb-6 border-b border-gray-200">
                 <h2 className="text-2xl font-bold text-gray-900 mb-2">FACTURA</h2>
                 <p className="text-gray-600">SantaCruz-Computer</p>
@@ -441,7 +399,6 @@ export function Sales() {
                 <p className="text-sm text-gray-500">NIT: 1234567890</p>
               </div>
 
-              {/* Customer Info */}
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div>
                   <p className="text-sm text-gray-600">Cliente:</p>
@@ -461,7 +418,6 @@ export function Sales() {
                 </div>
               </div>
 
-              {/* Products Table */}
               <table className="w-full mb-6">
                 <thead className="bg-gray-50">
                   <tr>
@@ -476,34 +432,22 @@ export function Sales() {
                     <tr key={item.product.id} className="border-b border-gray-100">
                       <td className="py-3 px-3 text-sm">{item.product.name}</td>
                       <td className="py-3 px-3 text-sm text-right">{item.quantity}</td>
-                      <td className="py-3 px-3 text-sm text-right">{item.product.salePrice.toFixed(2)} Bs</td>
+                      <td className="py-3 px-3 text-sm text-right">{item.product.price.toFixed(2)} Bs</td>
                       <td className="py-3 px-3 text-sm text-right font-medium">
-                        {(item.product.salePrice * item.quantity).toFixed(2)} Bs
+                        {(item.product.price * item.quantity).toFixed(2)} Bs
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
 
-              {/* Totals */}
               <div className="space-y-2 mb-6">
-                <div className="flex justify-between text-gray-600">
-                  <span>Subtotal:</span>
-                  <span>{subtotal.toFixed(2)} Bs</span>
-                </div>
-                {loyaltyDiscount > 0 && (
-                  <div className="flex justify-between text-orange-600">
-                    <span>Descuento lealtad:</span>
-                    <span>-{loyaltyDiscount.toFixed(2)} Bs</span>
-                  </div>
-                )}
                 <div className="flex justify-between text-lg font-bold text-gray-900 pt-2 border-t border-gray-200">
                   <span>TOTAL:</span>
-                  <span>{total.toFixed(2)} Bs</span>
+                  <span>{subtotal.toFixed(2)} Bs</span>
                 </div>
               </div>
 
-              {/* Actions */}
               <div className="flex gap-3">
                 <button
                   onClick={() => setShowInvoice(false)}
