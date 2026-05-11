@@ -210,6 +210,12 @@ CORS_ALLOWED_ORIGINS = config(
     default='http://localhost:5173,http://localhost:5174,http://localhost:3000'
 ).split(',')
 
+# CSRF Trusted Origins - Necesario para Django 4.0+ en producción
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='http://localhost:3000,http://localhost:5173'
+).split(',')
+
 # Si se prefiere permitir todos los orígenes (útil para pruebas iniciales en Railway)
 CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=False, cast=bool)
 
