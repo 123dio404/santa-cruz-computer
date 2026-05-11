@@ -6,7 +6,7 @@ python-decouple==3.8
 python-dotenv==1.0.0
 Pillow==10.1.0
 django-filter==23.5
-djangorestframework-simplejwt==5.3.2
+djangorestframework-simplejwt==5.3.1
 gunicorn==21.2.0
 whitenoise==6.6.0
 dj-database-url==2.1.0
