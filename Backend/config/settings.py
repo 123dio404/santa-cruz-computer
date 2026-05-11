@@ -210,6 +210,9 @@ CORS_ALLOWED_ORIGINS = config(
     default='http://localhost:5173,http://localhost:5174,http://localhost:3000'
 ).split(',')
 
+# Si se prefiere permitir todos los orígenes (útil para pruebas iniciales en Railway)
+CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=False, cast=bool)
+
 # En desarrollo, permitir cualquier origen de localhost / 127.0.0.1 sin importar el puerto.
 # Evita problemas cuando Vite decide usar 5174, 5175, etc. si el 5173 está ocupado.
 if DEBUG:
