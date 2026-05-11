@@ -1,0 +1,113 @@
+"""
+serializers.py — Serializers de Usuarios
+
+Los serializers convierten los modelos Django a JSON (para respuestas)
+y validan/convierten el JSON entrante a datos del modelo (para guardar).
+
+NOTA SOBRE ALIASES:
+El frontend React usa nombres en inglés (name, role, etc.) pero la base de datos
+usa nombres en español (nombre_completo, rol, etc.). Los serializers hacen la
+traducción automáticamente en ambas direcciones.
+"""
+from rest_framework import serializers
+from .models import Usuario, Cliente
+
+
+class UsuarioSerializer(serializers.ModelSerializer):
+    # write_only: la contraseña se acepta al crear/editar pero NUNCA se devuelve en respuestas
+    password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+
+    # Aliases de salida: el frontend espera 'name' y 'role', la BD tiene 'nombre_completo' y 'rol'
+    name = serializers.CharField(source='nombre_completo', read_only=True)
+    role = serializers.CharField(source='rol', read_only=True)
+
+    class Meta:
+        model  = Usuario
+        fields = [
+            'id', 'nombre_completo', 'username', 'rol', 'activo',
+            'email', 'telefono', 'ciudad', 'fecha_nacimiento',
+            'password',
+            # compat aliases
+            'name', 'role',
+        ]
+        read_only_fields = ['id']
+
+    def to_internal_value(self, data):
+        """Traduce los nombres de campos del frontend al formato de la base de datos."""
+        if hasattr(data, 'dict'):
+            data = data.dict()
+        else:
+            data = dict(data)
+
+        # name (frontend) → nombre_completo (BD)
+        if 'name' in data:
+            data.setdefault('nombre_completo', data.pop('name'))
+
+        # role (frontend) → rol (BD), con mapeo de valores en inglés a español
+        if 'role' in data:
+            val = data.pop('role')
+            role_map = {
+                'admin':    'admin',
+                'employee': 'vendedor',
+                'vendedor': 'vendedor',
+                'client':   'cliente',
+                'cliente':  'cliente',
+            }
+            data.setdefault('rol', role_map.get(str(val), val))
+
+        # Eliminar campos que el frontend envía pero no existen en la tabla usuario
+        for campo in ('created_at', 'lastName', 'gender', 'phone', 'birthDate', 'city'):
+            data.pop(campo, None)
+
+        return super().to_internal_value(data)
+
+    def create(self, validated_data):
+        """Crea un usuario y hashea la contraseña si se proporcionó."""
+        from django.contrib.auth.hashers import make_password
+        password = validated_data.pop('password', None)
+        usuario  = super().create(validated_data)
+        if password:
+            usuario.password_hash = make_password(password)
+            usuario.save(update_fields=['password_hash'])
+        return usuario
+
+    def update(self, instance, validated_data):
+        """Actualiza un usuario y rehashea la contraseña solo si se envió una nueva."""
+        from django.contrib.auth.hashers import make_password
+        password = validated_data.pop('password', None)
+        usuario  = super().update(instance, validated_data)
+        if password:
+            usuario.password_hash = make_password(password)
+            usuario.save(update_fields=['password_hash'])
+        return usuario
+
+
+class ClienteSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+
+    class Meta:
+        model  = Cliente
+        fields = [
+            'id', 'nombre', 'apellido', 'usuario_login', 'correo',
+            'sexo', 'ciudad', 'telefono', 'fecha_nacimiento',
+            'nit_ci', 'razon_social', 'password',
+        ]
+        read_only_fields = ['id']
+
+    def create(self, validated_data):
+        from django.contrib.auth.hashers import make_password
+        raw = validated_data.pop('password', None)
+        cliente = super().create(validated_data)
+        if raw:
+            cliente.password = make_password(raw)
+            cliente.save(update_fields=['password'])
+        return cliente
+
+    def update(self, instance, validated_data):
+        from django.contrib.auth.hashers import make_password
+        raw = validated_data.pop('password', None)
+        cliente = super().update(instance, validated_data)
+        if raw:
+            cliente.password = make_password(raw)
+            cliente.save(update_fields=['password'])
+        return cliente
