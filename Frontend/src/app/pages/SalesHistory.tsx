@@ -586,7 +586,7 @@ export function SalesHistory() {
                       )}
                       {venta.status === 'completed' && (
                         <button
-                          onClick={() => window.open(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'}/orders/ventas/${venta.id}/pdf/`, '_blank')}
+                          onClick={() => window.open(`http://localhost:8000/api/v1/orders/ventas/${venta.id}/pdf/`, '_blank')}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
                         >
                           <FileText className="w-4 h-4" />
