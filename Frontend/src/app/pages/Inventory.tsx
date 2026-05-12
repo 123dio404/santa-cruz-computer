@@ -203,7 +203,6 @@ export function Inventory() {
                   <tr>
                     <th className="text-left py-3 px-4 font-medium text-gray-600">Producto</th>
                     <th className="hidden sm:table-cell text-left py-3 px-4 font-medium text-gray-600">Marca / Modelo</th>
-                    <th className="hidden lg:table-cell text-right py-3 px-4 font-medium text-gray-600">P. Compra</th>
                     <th className="text-right py-3 px-4 font-medium text-gray-600">P. Venta</th>
                     <th className="text-center py-3 px-4 font-medium text-gray-600">Stock</th>
                     <th className="hidden md:table-cell text-center py-3 px-4 font-medium text-gray-600">Stock Mín.</th>
@@ -227,11 +226,6 @@ export function Inventory() {
                       </td>
                       <td className="hidden sm:table-cell py-3 px-4 text-gray-600">
                         {[product.marca, product.modelo].filter(Boolean).join(' / ') || '—'}
-                      </td>
-                      <td className="hidden lg:table-cell py-3 px-4 text-right text-gray-600">
-                        {product.precio_compra
-                          ? `${parseFloat(String(product.precio_compra)).toFixed(2)} Bs`
-                          : <span className="text-gray-400">—</span>}
                       </td>
                       <td className="py-3 px-4 text-right font-semibold text-gray-900">
                         {parseFloat(String(product.precio_venta ?? product.price)).toFixed(2)} Bs

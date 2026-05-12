@@ -267,8 +267,9 @@ export function Products() {
                 <tr>
                   <th className="text-left py-3 px-4 text-gray-600 font-medium">Producto</th>
                   <th className="hidden sm:table-cell text-left py-3 px-4 text-gray-600 font-medium">Categoría</th>
-                  <th className="text-right py-3 px-4 text-gray-600 font-medium">Precio</th>
-                  <th className="text-center py-3 px-4 text-gray-600 font-medium">Stock</th>
+                  <th className="hidden lg:table-cell text-right py-3 px-4 text-gray-600 font-medium">Precio Compra</th>
+                  <th className="text-right py-3 px-4 text-gray-600 font-medium">Precio Venta</th>
+                  <th className="text-center py-3 px-4 text-gray-600 font-medium">Stock Actual</th>
                   <th className="hidden md:table-cell text-center py-3 px-4 text-gray-600 font-medium">Stock Mínimo</th>
                   <th className="hidden md:table-cell text-center py-3 px-4 text-gray-600 font-medium">Estado Stock</th>
                   {isAdmin && <th className="text-right py-3 px-4 text-gray-600 font-medium">Acciones</th>}
@@ -315,9 +316,16 @@ export function Products() {
                         {product.categoria_nombre ?? <span className="text-gray-400">—</span>}
                       </td>
 
-                      {/* Precio */}
+                      {/* Precio Compra */}
+                      <td className="hidden lg:table-cell py-3 px-4 text-right text-gray-600">
+                        {product.precio_compra
+                          ? `${parseFloat(String(product.precio_compra)).toFixed(2)} Bs`
+                          : <span className="text-gray-400">—</span>}
+                      </td>
+
+                      {/* Precio Venta */}
                       <td className="py-3 px-4 text-right font-semibold text-gray-900">
-                        {parseFloat(String(product.price)).toFixed(2)} Bs
+                        {parseFloat(String(product.precio_venta ?? product.price)).toFixed(2)} Bs
                       </td>
 
                       {/* Stock actual */}

@@ -407,7 +407,7 @@ export function Users() {
               onClick={activeTab === 'personal' ? () => handleOpenModal() : handleOpenCrearCliente}
               className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
               <Plus className="w-4 h-4" />
-              Crear cuenta
+              {activeTab === 'personal' ? 'Nuevo usuario' : 'Nuevo cliente'}
             </button>
           </div>
         </div>
