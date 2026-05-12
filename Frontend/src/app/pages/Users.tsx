@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, X, Shield, RefreshCw, Users as UsersIcon, UserCheck } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Shield, RefreshCw, Users as UsersIcon, UserCheck, Eye, EyeOff } from 'lucide-react';
 import { usuariosAPI, clientesAPI, ApiUser, ApiCliente } from '../services/api';
 import { useUsers } from '../context/UsersContext';
 
@@ -12,40 +12,7 @@ import { useUsers } from '../context/UsersContext';
  * TABS:
  * - Personal: Lista de usuarios del sistema (admin, vendedores) — tabla usuario en BD
  * - Clientes: Lista de clientes registrados — tabla cliente en BD
- *
- * OPERACIONES SOBRE PERSONAL:
- * - Crear nuevo usuario con nombre, username, email, teléfono, ciudad, rol y contraseña
- * - Editar datos de usuario existente (la contraseña es opcional al editar)
- * - Eliminar usuario del sistema
- * - Ver estado activo/inactivo del usuario
- *
- * OPERACIONES SOBRE CLIENTES:
- * - Editar datos del cliente (nombre, apellido, contacto, NIT/CI, razón social)
- * - Eliminar cliente
- *
- * NOTA: Los clientes se registran solos desde la página de login.
- * Los usuarios del sistema solo los puede crear el admin desde aquí.
  */
-
-// ── Tipo formulario clientes ──────────────────────────────────────────────────
-type ClienteForm = {
-  nombre:           string;
-  apellido:         string;
-  usuario_login:    string;
-  correo:           string;
-  sexo:             string;
-  ciudad:           string;
-  telefono:         string;
-  fecha_nacimiento: string;
-  nit_ci:           string;
-  razon_social:     string;
-};
-
-const emptyClienteForm: ClienteForm = {
-  nombre: '', apellido: '', usuario_login: '', correo: '',
-  sexo: '', ciudad: '', telefono: '', fecha_nacimiento: '',
-  nit_ci: '', razon_social: '',
-};
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 type Tab        = 'personal' | 'clientes';
@@ -75,30 +42,58 @@ const emptyForm: FormData = {
   rol: 'vendedor', activo: true, password: '',
 };
 
+type ClienteForm = {
+  nombre:           string;
+  apellido:         string;
+  usuario_login:    string;
+  correo:           string;
+  sexo:             string;
+  ciudad:           string;
+  telefono:         string;
+  fecha_nacimiento: string;
+  nit_ci:           string;
+  razon_social:     string;
+  password:         string;
+};
+
+const emptyClienteForm: ClienteForm = {
+  nombre: '', apellido: '', usuario_login: '', correo: '',
+  sexo: '', ciudad: '', telefono: '', fecha_nacimiento: '',
+  nit_ci: '', razon_social: '', password: '',
+};
+
 // ── Componente ────────────────────────────────────────────────────────────────
 export function Users() {
   const { allUsers: users, loading, fetchUsers } = useUsers();
 
-  const [activeTab, setActiveTab]           = useState<Tab>('personal');
-  const [clientes, setClientes]             = useState<ApiCliente[]>([]);
+  const [activeTab, setActiveTab]             = useState<Tab>('personal');
+  const [clientes, setClientes]               = useState<ApiCliente[]>([]);
   const [loadingClientes, setLoadingClientes] = useState(false);
 
-  const [isModalOpen, setIsModalOpen]       = useState(false);
-  const [editingUser, setEditingUser]       = useState<ApiUser | null>(null);
-  const [saving, setSaving]                 = useState(false);
-  const [formData, setFormData]             = useState<FormData>(emptyForm);
+  // ── Estado modal usuario (crear / editar) ─────────────────────────────────
+  const [isModalOpen, setIsModalOpen]   = useState(false);
+  const [editingUser, setEditingUser]   = useState<ApiUser | null>(null);
+  const [saving, setSaving]             = useState(false);
+  const [formData, setFormData]         = useState<FormData>(emptyForm);
+  const [showPassword, setShowPassword] = useState(false);
+  const [userErrors, setUserErrors]     = useState<{ username?: string; email?: string }>({});
 
-  // ── Estado modal clientes ──────────────────────────────────────────────────
-  const [isClienteModalOpen, setIsClienteModalOpen] = useState(false);
-  const [editingCliente, setEditingCliente]         = useState<ApiCliente | null>(null);
-  const [clienteForm, setClienteForm]               = useState<ClienteForm>(emptyClienteForm);
-  const [savingCliente, setSavingCliente]           = useState(false);
+  // ── Estado modal cliente editar ───────────────────────────────────────────
+  const [isClienteModalOpen, setIsClienteModalOpen]   = useState(false);
+  const [editingCliente, setEditingCliente]           = useState<ApiCliente | null>(null);
+  const [clienteForm, setClienteForm]                 = useState<ClienteForm>(emptyClienteForm);
+  const [savingCliente, setSavingCliente]             = useState(false);
+  const [showClienteEditPassword, setShowClienteEditPassword] = useState(false);
+
+  // ── Estado modal cliente crear ────────────────────────────────────────────
+  const [isCrearClienteModalOpen, setIsCrearClienteModalOpen] = useState(false);
+  const [crearClienteForm, setCrearClienteForm]               = useState<ClienteForm>(emptyClienteForm);
+  const [savingCrearCliente, setSavingCrearCliente]           = useState(false);
+  const [showCrearClientePassword, setShowCrearClientePassword] = useState(false);
+  const [clienteCrearErrors, setClienteCrearErrors]           = useState<{ usuario_login?: string; correo?: string }>({});
 
   useEffect(() => { fetchUsers(); fetchClientes(); }, []);
-
-  useEffect(() => {
-    if (activeTab === 'clientes') fetchClientes();
-  }, [activeTab]);
+  useEffect(() => { if (activeTab === 'clientes') fetchClientes(); }, [activeTab]);
 
   const fetchClientes = async () => {
     setLoadingClientes(true);
@@ -107,9 +102,52 @@ export function Users() {
     finally { setLoadingClientes(false); }
   };
 
-  // ── Modal de creación/edición de usuario ───────────────────────────────────
-  // Si se pasa un usuario, precarga sus datos para editar; si no, abre el modal vacío para crear
+  // ── Validaciones unicidad cruzada (usuario) ────────────────────────────────
+  const validateUserUsername = (value: string, currentUserId?: number) => {
+    if (!value) { setUserErrors(e => ({ ...e, username: undefined })); return; }
+    const inUsers    = users.some(u => u.username === value && u.id !== currentUserId);
+    const inClientes = clientes.some(c => c.usuario_login === value);
+    setUserErrors(e => ({
+      ...e,
+      username: (inUsers || inClientes) ? 'Este nombre de usuario ya está en uso.' : undefined,
+    }));
+  };
+
+  const validateUserEmail = (value: string, currentUserId?: number) => {
+    if (!value) { setUserErrors(e => ({ ...e, email: undefined })); return; }
+    const inUsers    = users.some(u => u.email === value && u.id !== currentUserId);
+    const inClientes = clientes.some(c => c.correo === value);
+    setUserErrors(e => ({
+      ...e,
+      email: (inUsers || inClientes) ? 'Este email ya está en uso.' : undefined,
+    }));
+  };
+
+  // ── Validaciones unicidad cruzada (cliente crear) ──────────────────────────
+  const validateClienteLogin = (value: string) => {
+    if (!value) { setClienteCrearErrors(e => ({ ...e, usuario_login: undefined })); return; }
+    const inClientes = clientes.some(c => c.usuario_login === value);
+    const inUsers    = users.some(u => u.username === value);
+    setClienteCrearErrors(e => ({
+      ...e,
+      usuario_login: (inClientes || inUsers) ? 'Este usuario login ya está en uso.' : undefined,
+    }));
+  };
+
+  const validateClienteCorreo = (value: string) => {
+    if (!value) { setClienteCrearErrors(e => ({ ...e, correo: undefined })); return; }
+    const inClientes = clientes.some(c => c.correo === value);
+    const inUsers    = users.some(u => u.email === value);
+    setClienteCrearErrors(e => ({
+      ...e,
+      correo: (inClientes || inUsers) ? 'Este correo ya está en uso.' : undefined,
+    }));
+  };
+
+  // ── Modal usuario ──────────────────────────────────────────────────────────
   const handleOpenModal = (user?: ApiUser) => {
+    setUserErrors({});
+    setShowPassword(false);
     if (user) {
       setEditingUser(user);
       setFormData({
@@ -130,11 +168,16 @@ export function Users() {
     setIsModalOpen(true);
   };
 
-  const handleClose = () => { setIsModalOpen(false); setEditingUser(null); };
+  const handleClose = () => {
+    setIsModalOpen(false);
+    setEditingUser(null);
+    setUserErrors({});
+    setShowPassword(false);
+  };
 
-  // Guarda el usuario (crea o edita según si editingUser tiene valor)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (Object.values(userErrors).some(Boolean)) return;
     setSaving(true);
     try {
       const payload: Record<string, any> = {
@@ -168,15 +211,10 @@ export function Users() {
     catch { alert('Error al eliminar usuario'); }
   };
 
-  const handleDeleteCliente = async (id: number) => {
-    if (!confirm('¿Eliminar este cliente?')) return;
-    try { await clientesAPI.delete(id); await fetchClientes(); }
-    catch { alert('Error al eliminar cliente'); }
-  };
-
-  // ── Modal edición de cliente ───────────────────────────────────────────────
+  // ── Modal editar cliente ───────────────────────────────────────────────────
   const handleOpenClienteModal = (c: ApiCliente) => {
     setEditingCliente(c);
+    setShowClienteEditPassword(false);
     setClienteForm({
       nombre:           c.nombre           ?? '',
       apellido:         c.apellido         ?? '',
@@ -188,11 +226,16 @@ export function Users() {
       fecha_nacimiento: c.fecha_nacimiento ?? '',
       nit_ci:           c.nit_ci           ?? '',
       razon_social:     c.razon_social     ?? '',
+      password:         '',
     });
     setIsClienteModalOpen(true);
   };
 
-  const handleCloseClienteModal = () => { setIsClienteModalOpen(false); setEditingCliente(null); };
+  const handleCloseClienteModal = () => {
+    setIsClienteModalOpen(false);
+    setEditingCliente(null);
+    setShowClienteEditPassword(false);
+  };
 
   const handleSubmitCliente = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -210,6 +253,7 @@ export function Users() {
         fecha_nacimiento: clienteForm.fecha_nacimiento || null,
         nit_ci:           clienteForm.nit_ci           || null,
         razon_social:     clienteForm.razon_social     || null,
+        ...(clienteForm.password ? { password: clienteForm.password } : {}),
       });
       await fetchClientes();
       handleCloseClienteModal();
@@ -218,30 +262,59 @@ export function Users() {
     } finally { setSavingCliente(false); }
   };
 
-  const clienteField = (key: keyof ClienteForm, label: string, type = 'text') => (
-    <div key={key}>
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-      <input type={type} value={clienteForm[key]}
-        onChange={e => setClienteForm({ ...clienteForm, [key]: e.target.value })}
-        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-    </div>
-  );
+  const handleDeleteCliente = async (id: number) => {
+    if (!confirm('¿Eliminar este cliente?')) return;
+    try { await clientesAPI.delete(id); await fetchClientes(); }
+    catch { alert('Error al eliminar cliente'); }
+  };
 
+  // ── Modal crear cliente ────────────────────────────────────────────────────
+  const handleOpenCrearCliente = () => {
+    setCrearClienteForm(emptyClienteForm);
+    setClienteCrearErrors({});
+    setShowCrearClientePassword(false);
+    setIsCrearClienteModalOpen(true);
+  };
+
+  const handleCloseCrearCliente = () => {
+    setIsCrearClienteModalOpen(false);
+    setClienteCrearErrors({});
+    setShowCrearClientePassword(false);
+  };
+
+  const handleSubmitCrearCliente = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (Object.values(clienteCrearErrors).some(Boolean)) return;
+    setSavingCrearCliente(true);
+    try {
+      await clientesAPI.create({
+        nombre:           crearClienteForm.nombre           || undefined,
+        apellido:         crearClienteForm.apellido         || undefined,
+        usuario_login:    crearClienteForm.usuario_login    || null,
+        correo:           crearClienteForm.correo           || null,
+        sexo:             crearClienteForm.sexo             || null,
+        ciudad:           crearClienteForm.ciudad           || null,
+        telefono:         crearClienteForm.telefono         || null,
+        fecha_nacimiento: crearClienteForm.fecha_nacimiento || null,
+        nit_ci:           crearClienteForm.nit_ci           || null,
+        razon_social:     crearClienteForm.razon_social     || null,
+        ...(crearClienteForm.password ? { password: crearClienteForm.password } : {}),
+      } as any);
+      await fetchClientes();
+      handleCloseCrearCliente();
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : 'Error desconocido'}`);
+    } finally { setSavingCrearCliente(false); }
+  };
+
+  // ── Stats ──────────────────────────────────────────────────────────────────
   const roleStats = {
     admin:    users.filter(u => u.rol === 'admin').length,
     vendedor: users.filter(u => u.rol === 'vendedor').length,
   };
 
-  // ── Helper campo formulario ────────────────────────────────────────────────
-  const field = (key: keyof FormData, label: string, type = 'text', required = false, placeholder = '') => (
-    <div key={key}>
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-      <input type={type} value={formData[key] as string}
-        onChange={e => setFormData({ ...formData, [key]: e.target.value })}
-        placeholder={placeholder} required={required}
-        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-    </div>
-  );
+  const hasUserErrors    = Object.values(userErrors).some(Boolean);
+  const hasClienteErrors = Object.values(clienteCrearErrors).some(Boolean);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -253,26 +326,16 @@ export function Users() {
           <h1 className="text-2xl font-bold text-gray-900">Usuarios</h1>
           <p className="text-gray-600">Gestión de personal y clientes registrados</p>
         </div>
-        <div className="flex flex-shrink-0 gap-2">
-          <button
-            onClick={activeTab === 'personal' ? fetchUsers : fetchClientes}
-            disabled={activeTab === 'personal' ? loading : loadingClientes}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 text-sm">
-            <RefreshCw className={`w-4 h-4 ${(loading || loadingClientes) ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">Refrescar</span>
-          </button>
-          {activeTab === 'personal' && (
-            <button onClick={() => handleOpenModal()}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">
-              <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span className="hidden sm:inline">Nuevo Usuario</span>
-              <span className="sm:hidden">Nuevo</span>
-            </button>
-          )}
-        </div>
+        <button
+          onClick={activeTab === 'personal' ? fetchUsers : fetchClientes}
+          disabled={activeTab === 'personal' ? loading : loadingClientes}
+          className="flex items-center gap-2 px-3 sm:px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 text-sm">
+          <RefreshCw className={`w-4 h-4 ${(loading || loadingClientes) ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline">Refrescar</span>
+        </button>
       </div>
 
-      {/* Tarjetas de estadísticas — solo tab personal */}
+      {/* Estadísticas */}
       {activeTab === 'personal' && (
         <div className="grid grid-cols-2 gap-4 sm:gap-6">
           {(['admin', 'vendedor'] as BackendRole[]).map(role => (
@@ -291,7 +354,6 @@ export function Users() {
         </div>
       )}
 
-      {/* Tarjeta de estadística — solo tab clientes */}
       {activeTab === 'clientes' && (
         <div className="grid grid-cols-2 gap-4 sm:gap-6">
           <div className="bg-white rounded-xl p-6 border border-gray-200">
@@ -308,35 +370,46 @@ export function Users() {
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Tabs + botón Crear cuenta */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="flex border-b border-gray-200">
-          <button
-            onClick={() => setActiveTab('personal')}
-            className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition-colors border-b-2 -mb-px ${
-              activeTab === 'personal'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}>
-            <Shield className="w-4 h-4" />
-            Personal
-            <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600">
-              {users.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveTab('clientes')}
-            className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition-colors border-b-2 -mb-px ${
-              activeTab === 'clientes'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}>
-            <UsersIcon className="w-4 h-4" />
-            Clientes
-            <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600">
-              {clientes.length}
-            </span>
-          </button>
+        <div className="flex items-center border-b border-gray-200">
+          <div className="flex flex-1">
+            <button
+              onClick={() => setActiveTab('personal')}
+              className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                activeTab === 'personal'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}>
+              <Shield className="w-4 h-4" />
+              Personal
+              <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600">
+                {users.length}
+              </span>
+            </button>
+            <button
+              onClick={() => setActiveTab('clientes')}
+              className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                activeTab === 'clientes'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}>
+              <UsersIcon className="w-4 h-4" />
+              Clientes
+              <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600">
+                {clientes.length}
+              </span>
+            </button>
+          </div>
+          {/* Botón Crear cuenta — cambia según tab */}
+          <div className="px-4">
+            <button
+              onClick={activeTab === 'personal' ? () => handleOpenModal() : handleOpenCrearCliente}
+              className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+              <Plus className="w-4 h-4" />
+              Crear cuenta
+            </button>
+          </div>
         </div>
 
         {/* ── Tab: Personal ── */}
@@ -462,6 +535,125 @@ export function Users() {
         )}
       </div>
 
+      {/* ── Modal crear / editar usuario ── */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <h2 className="text-xl font-semibold text-gray-900">
+                {editingUser ? 'Editar Usuario' : 'Nuevo Usuario'}
+              </h2>
+              <button onClick={handleClose} className="p-2 hover:bg-gray-100 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              {/* Nombre completo */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nombre completo *</label>
+                <input type="text" value={formData.nombre_completo} required
+                  onChange={e => setFormData({ ...formData, nombre_completo: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+              </div>
+
+              {/* Username con validación */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nombre de usuario *</label>
+                <input type="text" value={formData.username} required placeholder="ej: jperez"
+                  onChange={e => {
+                    setFormData({ ...formData, username: e.target.value });
+                    validateUserUsername(e.target.value, editingUser?.id);
+                  }}
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${userErrors.username ? 'border-red-400' : 'border-gray-300'}`} />
+                {userErrors.username && <p className="text-red-600 text-xs mt-1">{userErrors.username}</p>}
+              </div>
+
+              {/* Email con validación */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input type="email" value={formData.email}
+                  onChange={e => {
+                    setFormData({ ...formData, email: e.target.value });
+                    validateUserEmail(e.target.value, editingUser?.id);
+                  }}
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${userErrors.email ? 'border-red-400' : 'border-gray-300'}`} />
+                {userErrors.email && <p className="text-red-600 text-xs mt-1">{userErrors.email}</p>}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono</label>
+                  <input type="tel" value={formData.telefono}
+                    onChange={e => setFormData({ ...formData, telefono: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ciudad</label>
+                  <input type="text" value={formData.ciudad}
+                    onChange={e => setFormData({ ...formData, ciudad: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Fecha de nacimiento</label>
+                <input type="date" value={formData.fecha_nacimiento}
+                  onChange={e => setFormData({ ...formData, fecha_nacimiento: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Rol *</label>
+                <select value={formData.rol}
+                  onChange={e => setFormData({ ...formData, rol: e.target.value as BackendRole })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                  <option value="vendedor">Vendedor</option>
+                  <option value="admin">Administrador</option>
+                </select>
+              </div>
+
+              {/* Contraseña con mostrar/ocultar */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Contraseña {!editingUser && '*'}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={formData.password}
+                    onChange={e => setFormData({ ...formData, password: e.target.value })}
+                    required={!editingUser}
+                    className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                  <button type="button" onClick={() => setShowPassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {editingUser && <p className="text-xs text-gray-500 mt-1">Dejar vacío para no cambiar la contraseña.</p>}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input type="checkbox" id="activo" checked={formData.activo}
+                  onChange={e => setFormData({ ...formData, activo: e.target.checked })}
+                  className="w-4 h-4 text-blue-600 rounded" />
+                <label htmlFor="activo" className="text-sm font-medium text-gray-700">Usuario activo</label>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={handleClose}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={saving || hasUserErrors}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                  {saving ? 'Guardando...' : editingUser ? 'Guardar cambios' : 'Crear usuario'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* ── Modal editar cliente ── */}
       {isClienteModalOpen && editingCliente && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -474,18 +666,58 @@ export function Users() {
             </div>
             <form onSubmit={handleSubmitCliente} className="p-6 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {clienteField('nombre', 'Nombre *')}
-                {clienteField('apellido', 'Apellido *')}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre *</label>
+                  <input type="text" value={clienteForm.nombre}
+                    onChange={e => setClienteForm({ ...clienteForm, nombre: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Apellido *</label>
+                  <input type="text" value={clienteForm.apellido}
+                    onChange={e => setClienteForm({ ...clienteForm, apellido: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
               </div>
-              {clienteField('usuario_login', 'Usuario (login)')}
-              {clienteField('correo', 'Email', 'email')}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {clienteField('nit_ci', 'NIT / CI')}
-                {clienteField('razon_social', 'Razón Social')}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Usuario (login)</label>
+                <input type="text" value={clienteForm.usuario_login}
+                  onChange={e => setClienteForm({ ...clienteForm, usuario_login: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input type="email" value={clienteForm.correo}
+                  onChange={e => setClienteForm({ ...clienteForm, correo: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {clienteField('telefono', 'Teléfono', 'tel')}
-                {clienteField('ciudad', 'Ciudad')}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">NIT / CI</label>
+                  <input type="text" value={clienteForm.nit_ci}
+                    onChange={e => setClienteForm({ ...clienteForm, nit_ci: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Razón Social</label>
+                  <input type="text" value={clienteForm.razon_social}
+                    onChange={e => setClienteForm({ ...clienteForm, razon_social: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono</label>
+                  <input type="tel" value={clienteForm.telefono}
+                    onChange={e => setClienteForm({ ...clienteForm, telefono: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ciudad</label>
+                  <input type="text" value={clienteForm.ciudad}
+                    onChange={e => setClienteForm({ ...clienteForm, ciudad: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -499,7 +731,25 @@ export function Users() {
                     <option value="otro">Otro</option>
                   </select>
                 </div>
-                {clienteField('fecha_nacimiento', 'Nacimiento', 'date')}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nacimiento</label>
+                  <input type="date" value={clienteForm.fecha_nacimiento}
+                    onChange={e => setClienteForm({ ...clienteForm, fecha_nacimiento: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nueva contraseña</label>
+                <div className="relative">
+                  <input type={showClienteEditPassword ? 'text' : 'password'} value={clienteForm.password}
+                    onChange={e => setClienteForm({ ...clienteForm, password: e.target.value })}
+                    className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                  <button type="button" onClick={() => setShowClienteEditPassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    {showClienteEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Dejar vacío para no cambiar la contraseña.</p>
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={handleCloseClienteModal}
@@ -516,64 +766,128 @@ export function Users() {
         </div>
       )}
 
-      {/* ── Modal crear / editar usuario ── */}
-      {isModalOpen && (
+      {/* ── Modal crear cliente ── */}
+      {isCrearClienteModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <h2 className="text-xl font-semibold text-gray-900">
-                {editingUser ? 'Editar Usuario' : 'Nuevo Usuario'}
-              </h2>
-              <button onClick={handleClose} className="p-2 hover:bg-gray-100 rounded-lg">
+              <h2 className="text-xl font-semibold text-gray-900">Nuevo Cliente</h2>
+              <button onClick={handleCloseCrearCliente} className="p-2 hover:bg-gray-100 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              {field('nombre_completo', 'Nombre completo *', 'text', true)}
-              {field('username', 'Nombre de usuario *', 'text', true, 'ej: jperez')}
-              {field('email', 'Email', 'email')}
+            <form onSubmit={handleSubmitCrearCliente} className="p-6 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {field('telefono', 'Teléfono')}
-                {field('ciudad', 'Ciudad')}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Fecha de nacimiento</label>
-                <input type="date" value={formData.fecha_nacimiento}
-                  onChange={e => setFormData({ ...formData, fecha_nacimiento: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Rol *</label>
-                <select value={formData.rol}
-                  onChange={e => setFormData({ ...formData, rol: e.target.value as BackendRole })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-                  <option value="vendedor">Vendedor</option>
-                  <option value="admin">Administrador</option>
-                </select>
-              </div>
-              {!editingUser && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Contraseña *</label>
-                  <input type="password" value={formData.password}
-                    onChange={e => setFormData({ ...formData, password: e.target.value })}
-                    required
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre *</label>
+                  <input type="text" value={crearClienteForm.nombre} required
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, nombre: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
                 </div>
-              )}
-              <div className="flex items-center gap-3">
-                <input type="checkbox" id="activo" checked={formData.activo}
-                  onChange={e => setFormData({ ...formData, activo: e.target.checked })}
-                  className="w-4 h-4 text-blue-600 rounded" />
-                <label htmlFor="activo" className="text-sm font-medium text-gray-700">Usuario activo</label>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Apellido *</label>
+                  <input type="text" value={crearClienteForm.apellido} required
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, apellido: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
               </div>
+
+              {/* Usuario login con validación */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Usuario login</label>
+                <input type="text" value={crearClienteForm.usuario_login}
+                  onChange={e => {
+                    setCrearClienteForm({ ...crearClienteForm, usuario_login: e.target.value });
+                    validateClienteLogin(e.target.value);
+                  }}
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${clienteCrearErrors.usuario_login ? 'border-red-400' : 'border-gray-300'}`} />
+                {clienteCrearErrors.usuario_login && <p className="text-red-600 text-xs mt-1">{clienteCrearErrors.usuario_login}</p>}
+              </div>
+
+              {/* Correo con validación */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Correo</label>
+                <input type="email" value={crearClienteForm.correo}
+                  onChange={e => {
+                    setCrearClienteForm({ ...crearClienteForm, correo: e.target.value });
+                    validateClienteCorreo(e.target.value);
+                  }}
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 ${clienteCrearErrors.correo ? 'border-red-400' : 'border-gray-300'}`} />
+                {clienteCrearErrors.correo && <p className="text-red-600 text-xs mt-1">{clienteCrearErrors.correo}</p>}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">NIT / CI</label>
+                  <input type="text" value={crearClienteForm.nit_ci}
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, nit_ci: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Razón Social</label>
+                  <input type="text" value={crearClienteForm.razon_social}
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, razon_social: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono</label>
+                  <input type="tel" value={crearClienteForm.telefono}
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, telefono: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ciudad</label>
+                  <input type="text" value={crearClienteForm.ciudad}
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, ciudad: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Sexo</label>
+                  <select value={crearClienteForm.sexo}
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, sexo: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    <option value="">— No especificado —</option>
+                    <option value="masculino">Masculino</option>
+                    <option value="femenino">Femenino</option>
+                    <option value="otro">Otro</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nacimiento</label>
+                  <input type="date" value={crearClienteForm.fecha_nacimiento}
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, fecha_nacimiento: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+
+              {/* Contraseña con mostrar/ocultar */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Contraseña</label>
+                <div className="relative">
+                  <input type={showCrearClientePassword ? 'text' : 'password'} value={crearClienteForm.password}
+                    onChange={e => setCrearClienteForm({ ...crearClienteForm, password: e.target.value })}
+                    className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+                  <button type="button" onClick={() => setShowCrearClientePassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    {showCrearClientePassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={handleClose}
+                <button type="button" onClick={handleCloseCrearCliente}
                   className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">
                   Cancelar
                 </button>
-                <button type="submit" disabled={saving}
+                <button type="submit" disabled={savingCrearCliente || hasClienteErrors}
                   className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                  {saving ? 'Guardando...' : editingUser ? 'Guardar cambios' : 'Crear usuario'}
+                  {savingCrearCliente ? 'Guardando...' : 'Crear cliente'}
                 </button>
               </div>
             </form>

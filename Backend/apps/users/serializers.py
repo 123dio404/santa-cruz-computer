@@ -61,6 +61,30 @@ class UsuarioSerializer(serializers.ModelSerializer):
 
         return super().to_internal_value(data)
 
+    def validate_username(self, value):
+        # Excluir el propio registro al editar
+        qs = Usuario.objects.filter(username=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('Este nombre de usuario ya está en uso.')
+        # Verificar también en la tabla de clientes (unicidad cruzada)
+        if Cliente.objects.filter(usuario_login=value).exists():
+            raise serializers.ValidationError('Este nombre de usuario ya está registrado como cliente.')
+        return value
+
+    def validate_email(self, value):
+        if not value:
+            return value
+        qs = Usuario.objects.filter(email=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('Este email ya está en uso.')
+        if Cliente.objects.filter(correo=value).exists():
+            raise serializers.ValidationError('Este email ya está registrado como cliente.')
+        return value
+
     def create(self, validated_data):
         """Crea un usuario y hashea la contraseña si se proporcionó."""
         from django.contrib.auth.hashers import make_password
@@ -93,6 +117,31 @@ class ClienteSerializer(serializers.ModelSerializer):
             'nit_ci', 'razon_social', 'password',
         ]
         read_only_fields = ['id']
+
+    def validate_usuario_login(self, value):
+        if not value:
+            return value
+        qs = Cliente.objects.filter(usuario_login=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('Este usuario login ya está en uso.')
+        # Verificar también en la tabla de usuarios (unicidad cruzada)
+        if Usuario.objects.filter(username=value).exists():
+            raise serializers.ValidationError('Este usuario login ya está registrado como usuario del sistema.')
+        return value
+
+    def validate_correo(self, value):
+        if not value:
+            return value
+        qs = Cliente.objects.filter(correo=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('Este correo ya está en uso.')
+        if Usuario.objects.filter(email=value).exists():
+            raise serializers.ValidationError('Este correo ya está registrado como usuario del sistema.')
+        return value
 
     def create(self, validated_data):
         from django.contrib.auth.hashers import make_password
