@@ -191,7 +191,7 @@ export function Orders() {
 
               {selectedOrder.status === 'completed' && (
                 <button
-                  onClick={() => window.open(`http://localhost:8000/api/v1/orders/ventas/${selectedOrder.id}/pdf/`, '_blank')}
+                  onClick={() => window.open(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'}/orders/ventas/${selectedOrder.id}/pdf/`, '_blank')}
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors"
                 >
                   <FileText className="w-5 h-5" />
