@@ -362,7 +362,7 @@ export function SalesHistory() {
                       {v.status === 'completed' && (
                         <div className="px-4 pb-3 flex border-t border-gray-100 pt-3">
                           <button
-                            onClick={() => window.open(`http://localhost:8000/api/v1/orders/ventas/${v.id}/pdf/`, '_blank')}
+                            onClick={() => window.open(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'}/orders/ventas/${v.id}/pdf/`, '_blank')}
                             className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
                           >
                             <FileText className="w-4 h-4" />
@@ -586,7 +586,7 @@ export function SalesHistory() {
                       )}
                       {venta.status === 'completed' && (
                         <button
-                          onClick={() => window.open(`http://localhost:8000/api/v1/orders/ventas/${venta.id}/pdf/`, '_blank')}
+                          onClick={() => window.open(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'}/orders/ventas/${venta.id}/pdf/`, '_blank')}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
                         >
                           <FileText className="w-4 h-4" />
