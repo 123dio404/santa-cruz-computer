@@ -233,12 +233,28 @@ export function Store() {
                     className="w-full flex items-center justify-center gap-1 px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">
                     <Eye className="w-4 h-4" /> Ver detalles
                   </button>
-                  {stock > 0 ? (
-                    <button onClick={() => addToCart(product)}
-                      className="w-full flex items-center justify-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold">
-                      <ShoppingCart className="w-4 h-4" /> Agregar al carrito
-                    </button>
-                  ) : (
+                  {stock > 0 ? (() => {
+                    const cartItem = cartItems.find(i => i.productId === product.id);
+                    return cartItem ? (
+                      <div className="flex items-center justify-between gap-2 px-2 py-1 border-2 border-blue-600 rounded-lg">
+                        <button onClick={() => updateQty(product.id, cartItem.quantity - 1)}
+                          className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700">
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="font-bold text-blue-600 text-sm">{cartItem.quantity} en carrito</span>
+                        <button onClick={() => updateQty(product.id, cartItem.quantity + 1)}
+                          disabled={cartItem.quantity >= stock}
+                          className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40">
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button onClick={() => addToCart(product)}
+                        className="w-full flex items-center justify-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold">
+                        <ShoppingCart className="w-4 h-4" /> Agregar al carrito
+                      </button>
+                    );
+                  })() : (
                     <span className="block w-full text-center px-3 py-2 bg-gray-100 text-gray-500 rounded-lg text-sm">Agotado</span>
                   )}
                 </div>
