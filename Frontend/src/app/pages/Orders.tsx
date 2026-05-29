@@ -16,7 +16,7 @@
  */
 import { useState, useEffect } from 'react';
 import { Package, Eye, X, FileText } from 'lucide-react';
-import { ventasAPI, ApiVenta } from '../services/api';
+import { ventasAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 export function Orders() {
@@ -138,7 +138,7 @@ export function Orders() {
                         <div className="w-14 h-14 bg-blue-50 rounded-lg flex items-center justify-center overflow-hidden flex-shrink-0">
                           {d.producto_imagen
                             ? <img
-                                src={d.producto_imagen.startsWith('http') ? d.producto_imagen : `http://localhost:8000${d.producto_imagen}`}
+                                src={d.producto_imagen.startsWith('http') ? d.producto_imagen : `${BACKEND_ROOT_URL}${d.producto_imagen}`}
                                 alt={d.producto_name}
                                 className="w-full h-full object-cover"
                               />
@@ -191,7 +191,7 @@ export function Orders() {
 
               {selectedOrder.status === 'completed' && (
                 <button
-                  onClick={() => window.open(`${import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'}/orders/ventas/${selectedOrder.id}/pdf/`, '_blank')}
+                  onClick={() => window.open(`${API_BASE_URL}/orders/ventas/${selectedOrder.id}/pdf/`, '_blank')}
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors"
                 >
                   <FileText className="w-5 h-5" />

@@ -19,7 +19,7 @@
  */
 import { useState, useEffect } from 'react';
 import { ShoppingCart, Search, Filter, X, Plus, Minus, Package, Eye } from 'lucide-react';
-import { productosAPI, ApiProduct } from '../services/api';
+import { productosAPI, BACKEND_ROOT_URL, ApiProduct } from '../services/api';
 
 interface StoreCartItem {
   productId: number;
@@ -204,7 +204,7 @@ export function Store() {
               <div className="h-40 bg-gray-50 flex items-center justify-center relative overflow-hidden flex-shrink-0 border-b border-gray-100">
                 {product.imagen_url
                   ? <img
-                      src={product.imagen_url.startsWith('http') ? product.imagen_url : `http://localhost:8000${product.imagen_url}`}
+                      src={product.imagen_url.startsWith('http') ? product.imagen_url : `${BACKEND_ROOT_URL}${product.imagen_url}`}
                       alt={product.name}
                       className="w-full h-full object-contain p-2"
                     />
@@ -273,7 +273,7 @@ export function Store() {
             <div className="h-52 bg-gray-50 flex items-center justify-center relative overflow-hidden border-b border-gray-100">
               {detailProduct.imagen_url
                 ? <img
-                    src={detailProduct.imagen_url.startsWith('http') ? detailProduct.imagen_url : `http://localhost:8000${detailProduct.imagen_url}`}
+                    src={detailProduct.imagen_url.startsWith('http') ? detailProduct.imagen_url : `${BACKEND_ROOT_URL}${detailProduct.imagen_url}`}
                     alt={detailProduct.name}
                     className="w-full h-full object-contain p-3"
                   />

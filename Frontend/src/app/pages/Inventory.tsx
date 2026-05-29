@@ -18,7 +18,7 @@
  */
 import { useState, useEffect } from 'react';
 import { Search, AlertTriangle, Package, Eye, X, TrendingDown, TrendingUp, Warehouse } from 'lucide-react';
-import { productosAPI, comprasAPI, ventasAPI, ApiProduct, ApiCompra, ApiVenta } from '../services/api';
+import { productosAPI, comprasAPI, ventasAPI, BACKEND_ROOT_URL, ApiProduct, ApiCompra, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 type Tab = 'almacen' | 'entrada' | 'salida';
@@ -84,7 +84,7 @@ export function Inventory() {
 
 
   const imgSrc = (url: string) =>
-    url.startsWith('http') ? url : `http://localhost:8000${url}`;
+    url.startsWith('http') ? url : `${BACKEND_ROOT_URL}${url}`;
 
   // ── Filas aplanadas Entrada ────────────────────────────────────────────────
   const entradaRows = compras.flatMap(c =>
