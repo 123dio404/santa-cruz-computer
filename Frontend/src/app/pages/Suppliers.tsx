@@ -21,6 +21,7 @@ import {
   Plus, Edit, Trash2, X, Building2, ShoppingCart,
   PackageSearch, CheckCircle, AlertCircle, Loader2,
   ChevronDown, ChevronUp, ClipboardList,
+  FileSpreadsheet, FileText,
 } from 'lucide-react';
 import {
   proveedoresAPI, comprasAPI, productosAPI, categoriasAPI,
@@ -99,6 +100,7 @@ export function Suppliers() {
   const [expandedId, setExpandedId]       = useState<number | null>(null);
   const [histDesde, setHistDesde]         = useState('');
   const [histHasta, setHistHasta]         = useState('');
+  const [histProveedor, setHistProveedor] = useState<number | ''>('');
 
   // ── carga inicial ──────────────────────────────────────────────────────────
   useEffect(() => { fetchProveedores(); }, []);
@@ -240,6 +242,127 @@ export function Suppliers() {
     } finally {
       setSavingCompra(false);
     }
+  };
+
+  // ── Historial: filtrado por fechas + proveedor (usado en render y exportación) ─
+  const comprasFiltradas = compras.filter(c => {
+    const fecha = new Date(c.fecha_compra);
+    const desde = histDesde ? new Date(histDesde) : null;
+    const hasta = histHasta ? new Date(histHasta + 'T23:59:59') : null;
+    const okFecha = (!desde || fecha >= desde) && (!hasta || fecha <= hasta);
+    const okProv = histProveedor === '' || c.proveedor === histProveedor;
+    return okFecha && okProv;
+  });
+
+  const totalGeneral = comprasFiltradas.reduce((sum, c) => sum + Number(c.monto_total), 0);
+
+  const formatRangoFechas = () => {
+    if (histDesde && histHasta) return `Del ${histDesde} al ${histHasta}`;
+    if (histDesde) return `Desde ${histDesde}`;
+    if (histHasta) return `Hasta ${histHasta}`;
+    return 'Todos los registros';
+  };
+
+  const proveedorSeleccionadoNombre = histProveedor === ''
+    ? 'Todos los proveedores'
+    : (proveedores.find(p => p.id === histProveedor)?.nombre_empresa ?? '—');
+
+  // ── Exportar a Excel (CSV) ─────────────────────────────────────────────────
+  const descargarExcel = () => {
+    if (comprasFiltradas.length === 0) return;
+    const headers = ['# Compra', 'Proveedor', 'Fecha', 'Productos (items)', 'Total (Bs)'];
+    const rows = comprasFiltradas.map(c => [
+      `#${c.id}`,
+      c.proveedor_nombre,
+      new Date(c.fecha_compra).toLocaleDateString('es-BO'),
+      c.detalles?.length ?? 0,
+      Number(c.monto_total).toFixed(2),
+    ]);
+    rows.push(['', '', '', 'TOTAL', totalGeneral.toFixed(2)]);
+
+    const escape = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
+    const csv = [headers, ...rows].map(row => row.map(escape).join(',')).join('\n');
+    // BOM para que Excel reconozca UTF-8 (acentos en español)
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `reporte_compras_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Exportar a PDF (vía window.print) ──────────────────────────────────────
+  const descargarPDF = () => {
+    if (comprasFiltradas.length === 0) return;
+    const filas = comprasFiltradas.map(c => `
+      <tr>
+        <td>#${c.id}</td>
+        <td>${c.proveedor_nombre}</td>
+        <td>${new Date(c.fecha_compra).toLocaleDateString('es-BO')}</td>
+        <td class="right">${c.detalles?.length ?? 0}</td>
+        <td class="right">Bs ${Number(c.monto_total).toFixed(2)}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Reporte de Compras</title>
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: Arial, Helvetica, sans-serif; padding: 24px; color: #111; }
+        h1 { color: #1e40af; margin: 0 0 4px 0; }
+        .subtitle { color: #555; font-size: 13px; margin-bottom: 18px; }
+        .meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: #444; margin-bottom: 18px; }
+        .meta div { background: #f3f4f6; padding: 6px 10px; border-radius: 4px; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { background: #1e40af; color: white; padding: 10px 8px; text-align: left; }
+        th.right, td.right { text-align: right; }
+        td { padding: 8px; border-bottom: 1px solid #e5e7eb; }
+        tr:nth-child(even) td { background: #f9fafb; }
+        .total-row td { background: #dbeafe !important; color: #1e40af; font-weight: bold; padding: 12px 8px; border-top: 2px solid #1e40af; }
+        .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #ddd; color: #999; font-size: 11px; text-align: center; }
+        @media print { @page { margin: 1cm; } body { padding: 0; } }
+      </style></head><body>
+        <h1>Reporte de Compras a Proveedores</h1>
+        <div class="subtitle">Santa Cruz Computer - Sistema de Inventario</div>
+        <div class="meta">
+          <div><strong>Rango:</strong> ${formatRangoFechas()}</div>
+          <div><strong>Proveedor:</strong> ${proveedorSeleccionadoNombre}</div>
+          <div><strong>Total compras:</strong> ${comprasFiltradas.length}</div>
+          <div><strong>Generado:</strong> ${new Date().toLocaleString('es-BO')}</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th># Compra</th>
+              <th>Proveedor</th>
+              <th>Fecha</th>
+              <th class="right">Productos</th>
+              <th class="right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filas}
+            <tr class="total-row">
+              <td colspan="4" class="right">MONTO TOTAL</td>
+              <td class="right">Bs ${totalGeneral.toFixed(2)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="footer">Documento generado automaticamente desde el sistema</div>
+      </body></html>
+    `;
+
+    const win = window.open('', '_blank', 'width=900,height=700');
+    if (!win) {
+      alert('Permite las ventanas emergentes para descargar el PDF.');
+      return;
+    }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 300);
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -605,10 +728,11 @@ export function Suppliers() {
       {/* ══ TAB: HISTORIAL ══════════════════════════════════════════════════ */}
       {tab === 'historial' && (
         <div className="space-y-4">
-          {/* Filtro de fechas */}
-          <div className="bg-white rounded-xl border border-gray-200 px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-            <span className="text-sm font-medium text-gray-700 whitespace-nowrap">Rango de fechas:</span>
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 flex-1">
+          {/* Filtros + botones de exportación */}
+          <div className="bg-white rounded-xl border border-gray-200 px-4 sm:px-6 py-4 flex flex-col xl:flex-row items-start xl:items-center gap-3">
+            {/* Rango de fechas */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+              <span className="text-sm font-medium text-gray-700 whitespace-nowrap">Rango de fechas:</span>
               <div className="flex items-center gap-2">
                 <label className="text-sm text-gray-500 whitespace-nowrap">Desde</label>
                 <input type="date" value={histDesde} onChange={e => setHistDesde(e.target.value)}
@@ -620,24 +744,55 @@ export function Suppliers() {
                   min={histDesde}
                   className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
               </div>
-              {(histDesde || histHasta) && (
-                <button onClick={() => { setHistDesde(''); setHistHasta(''); }}
-                  className="text-xs text-red-500 hover:text-red-700 hover:underline whitespace-nowrap">
-                  Limpiar
-                </button>
-              )}
+            </div>
+
+            {/* Filtro de proveedor */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Proveedor:</label>
+              <select
+                value={histProveedor}
+                onChange={e => setHistProveedor(e.target.value === '' ? '' : Number(e.target.value))}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 bg-white min-w-[180px]"
+              >
+                <option value="">Todos los proveedores</option>
+                {proveedores.map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre_empresa}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Botón limpiar filtros */}
+            {(histDesde || histHasta || histProveedor !== '') && (
+              <button
+                onClick={() => { setHistDesde(''); setHistHasta(''); setHistProveedor(''); }}
+                className="text-xs text-red-500 hover:text-red-700 hover:underline whitespace-nowrap"
+              >
+                Limpiar filtros
+              </button>
+            )}
+
+            {/* Botones de exportación */}
+            <div className="flex items-center gap-2 xl:ml-auto">
+              <button
+                onClick={descargarExcel}
+                disabled={comprasFiltradas.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+                title="Descargar reporte en formato Excel (CSV)"
+              >
+                <FileSpreadsheet className="w-4 h-4" /> Excel
+              </button>
+              <button
+                onClick={descargarPDF}
+                disabled={comprasFiltradas.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+                title="Descargar reporte en formato PDF"
+              >
+                <FileText className="w-4 h-4" /> PDF
+              </button>
             </div>
           </div>
 
-          {(() => {
-            const comprasFiltradas = compras.filter(c => {
-              const fecha = new Date(c.fecha_compra);
-              const desde = histDesde ? new Date(histDesde) : null;
-              const hasta = histHasta ? new Date(histHasta + 'T23:59:59') : null;
-              return (!desde || fecha >= desde) && (!hasta || fecha <= hasta);
-            });
-
-            return loadingHist ? (
+          {loadingHist ? (
             <div className="flex items-center justify-center py-12 text-gray-400">
               <Loader2 className="w-6 h-6 animate-spin mr-2" /> Cargando historial…
             </div>
@@ -711,12 +866,11 @@ export function Suppliers() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 px-4 sm:px-6 py-3 bg-blue-50 border-t-2 border-blue-200">
                 <span className="col-span-1 sm:col-span-2 md:col-span-4 text-right text-sm font-semibold text-gray-700">Monto Total:</span>
                 <span className="font-bold text-blue-700">
-                  Bs {comprasFiltradas.reduce((sum, c) => sum + Number(c.monto_total), 0).toFixed(2)}
+                  Bs {totalGeneral.toFixed(2)}
                 </span>
               </div>
             </div>
-          );
-          })()}
+          )}
         </div>
       )}
 
