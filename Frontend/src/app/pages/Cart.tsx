@@ -18,7 +18,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Trash2, CreditCard, QrCode, ShoppingBag, X } from 'lucide-react';
-import { ventasAPI } from '../services/api';
+import { ventasAPI, BACKEND_ROOT_URL } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 interface StoreCartItem {
@@ -123,7 +123,7 @@ export function Cart() {
                   <div className="w-20 h-20 bg-blue-50 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden">
                     {item.imagen_url
                       ? <img
-                          src={item.imagen_url.startsWith('http') ? item.imagen_url : `http://localhost:8000${item.imagen_url}`}
+                          src={item.imagen_url.startsWith('http') ? item.imagen_url : `${BACKEND_ROOT_URL}${item.imagen_url}`}
                           alt={item.productName}
                           className="w-full h-full object-cover"
                         />

@@ -23,7 +23,7 @@
  */
 import { useState, useEffect, useRef } from 'react';
 import { Plus, Edit, Trash2, X, Upload, Package, AlertTriangle, Search } from 'lucide-react';
-import { productosAPI, categoriasAPI, ApiProduct, ApiCategoria } from '../services/api';
+import { productosAPI, categoriasAPI, BACKEND_ROOT_URL, ApiProduct, ApiCategoria } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 type FormData = {
@@ -292,7 +292,7 @@ export function Products() {
                                   src={
                                     product.imagen_url.startsWith('http')
                                       ? product.imagen_url
-                                      : `http://localhost:8000${product.imagen_url}`
+                                      : `${BACKEND_ROOT_URL}${product.imagen_url}`
                                   }
                                   alt={product.name}
                                   className="w-full h-full object-cover"

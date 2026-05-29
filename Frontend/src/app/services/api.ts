@@ -25,7 +25,9 @@
  */
 
 // URL base del backend (usa variable de entorno en producción, localhost en desarrollo)
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+// URL raíz del backend (sin /api/v1) para servir archivos estáticos como imágenes
+export const BACKEND_ROOT_URL = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
 
 // ── Manejo del Token JWT ──────────────────────────────────────────────────────
 const TOKEN_KEY = 'access_token';

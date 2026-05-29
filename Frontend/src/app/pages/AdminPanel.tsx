@@ -21,7 +21,7 @@
  */
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { usuariosAPI, clientesAPI, authAPI, ApiUser, ApiCliente } from '../services/api';
+import { usuariosAPI, clientesAPI, authAPI, API_BASE_URL, ApiUser, ApiCliente } from '../services/api';
 import { Lock, RotateCcw, Search, AlertCircle, Unlock, Eye, EyeOff, RefreshCw } from 'lucide-react';
 
 type BlockedEntry = { username: string; failed_attempts: number; estado: string };
@@ -140,8 +140,8 @@ export function AdminPanel() {
     setResetting(true);
     try {
       const endpoint = selectedUser.tabla === 'cliente'
-        ? `http://localhost:8000/api/v1/users/clientes/${selectedUser.id}/`
-        : `http://localhost:8000/api/v1/users/${selectedUser.id}/`;
+        ? `${API_BASE_URL}/users/clientes/${selectedUser.id}/`
+        : `${API_BASE_URL}/users/${selectedUser.id}/`;
       const token = localStorage.getItem('access_token');
       const res = await fetch(endpoint, {
         method: 'PATCH',

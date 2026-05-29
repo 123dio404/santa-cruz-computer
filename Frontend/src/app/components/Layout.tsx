@@ -17,7 +17,7 @@ import { ReactNode, useState, useEffect, FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { useAudit } from '../context/AuditContext';
-import { productosAPI, ventasAPI, authAPI, clearAuthToken, ApiProduct, ApiVenta } from '../services/api';
+import { productosAPI, ventasAPI, authAPI, clearAuthToken, BACKEND_ROOT_URL, ApiProduct, ApiVenta } from '../services/api';
 import {
   LayoutDashboard,
   Package,
@@ -368,7 +368,7 @@ export function Layout({ children }: LayoutProps) {
                                 <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-200 flex items-center justify-center">
                                   {product.imagen_url
                                     ? <img
-                                        src={product.imagen_url.startsWith('http') ? product.imagen_url : `http://localhost:8000${product.imagen_url}`}
+                                        src={product.imagen_url.startsWith('http') ? product.imagen_url : `${BACKEND_ROOT_URL}${product.imagen_url}`}
                                         alt={product.name}
                                         className="w-full h-full object-contain p-0.5"
                                       />
