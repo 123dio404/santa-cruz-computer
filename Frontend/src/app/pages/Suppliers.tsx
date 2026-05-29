@@ -268,17 +268,40 @@ export function Suppliers() {
     : (proveedores.find(p => p.id === histProveedor)?.nombre_empresa ?? '—');
 
   // ── Exportar a Excel (CSV) ─────────────────────────────────────────────────
+  // Formato plano: una fila por producto con datos de la compra repetidos.
+  // Permite filtrar, ordenar y hacer tablas dinamicas en Excel.
   const descargarExcel = () => {
     if (comprasFiltradas.length === 0) return;
-    const headers = ['# Compra', 'Proveedor', 'Fecha', 'Productos (items)', 'Total (Bs)'];
-    const rows = comprasFiltradas.map(c => [
-      `#${c.id}`,
-      c.proveedor_nombre,
-      new Date(c.fecha_compra).toLocaleDateString('es-BO'),
-      c.detalles?.length ?? 0,
-      Number(c.monto_total).toFixed(2),
-    ]);
-    rows.push(['', '', '', 'TOTAL', totalGeneral.toFixed(2)]);
+    const headers = [
+      '# Compra', 'Proveedor', 'Fecha',
+      'Producto', 'Cantidad', 'Costo Unit. (Bs)', 'Subtotal (Bs)',
+      'Total Compra (Bs)',
+    ];
+
+    const rows: (string | number)[][] = [];
+    comprasFiltradas.forEach(c => {
+      const fecha = new Date(c.fecha_compra).toLocaleDateString('es-BO');
+      const total = Number(c.monto_total).toFixed(2);
+      const detalles = c.detalles ?? [];
+      if (detalles.length === 0) {
+        rows.push([`#${c.id}`, c.proveedor_nombre, fecha, '(sin detalle)', '', '', '', total]);
+      } else {
+        detalles.forEach(d => {
+          const costo = Number(d.costo_unitario);
+          rows.push([
+            `#${c.id}`,
+            c.proveedor_nombre,
+            fecha,
+            d.producto_nombre,
+            d.cantidad,
+            costo.toFixed(2),
+            (d.cantidad * costo).toFixed(2),
+            total,
+          ]);
+        });
+      }
+    });
+    rows.push(['', '', '', '', '', '', 'TOTAL GENERAL', totalGeneral.toFixed(2)]);
 
     const escape = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
     const csv = [headers, ...rows].map(row => row.map(escape).join(',')).join('\n');
@@ -293,17 +316,53 @@ export function Suppliers() {
   };
 
   // ── Exportar a PDF (vía window.print) ──────────────────────────────────────
+  // Formato jerarquico: cada compra muestra su encabezado y los productos comprados.
   const descargarPDF = () => {
     if (comprasFiltradas.length === 0) return;
-    const filas = comprasFiltradas.map(c => `
-      <tr>
-        <td>#${c.id}</td>
-        <td>${c.proveedor_nombre}</td>
-        <td>${new Date(c.fecha_compra).toLocaleDateString('es-BO')}</td>
-        <td class="right">${c.detalles?.length ?? 0}</td>
-        <td class="right">Bs ${Number(c.monto_total).toFixed(2)}</td>
-      </tr>
-    `).join('');
+
+    const bloques = comprasFiltradas.map(c => {
+      const fecha = new Date(c.fecha_compra).toLocaleDateString('es-BO');
+      const total = Number(c.monto_total).toFixed(2);
+      const detalles = c.detalles ?? [];
+
+      const filasDetalle = detalles.length === 0
+        ? `<tr><td colspan="4" class="empty">Sin productos registrados</td></tr>`
+        : detalles.map(d => {
+            const costo = Number(d.costo_unitario);
+            return `
+              <tr>
+                <td>${d.producto_nombre}</td>
+                <td class="right">${d.cantidad}</td>
+                <td class="right">Bs ${costo.toFixed(2)}</td>
+                <td class="right">Bs ${(d.cantidad * costo).toFixed(2)}</td>
+              </tr>
+            `;
+          }).join('');
+
+      return `
+        <div class="compra">
+          <div class="compra-header">
+            <div>
+              <span class="badge">Compra #${c.id}</span>
+              <strong>${c.proveedor_nombre}</strong>
+              <span class="fecha">${fecha}</span>
+            </div>
+            <div class="compra-total">Bs ${total}</div>
+          </div>
+          <table class="detalle">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th class="right">Cantidad</th>
+                <th class="right">Costo Unit.</th>
+                <th class="right">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>${filasDetalle}</tbody>
+          </table>
+        </div>
+      `;
+    }).join('');
 
     const html = `
       <!DOCTYPE html><html><head><meta charset="utf-8">
@@ -313,15 +372,26 @@ export function Suppliers() {
         body { font-family: Arial, Helvetica, sans-serif; padding: 24px; color: #111; }
         h1 { color: #1e40af; margin: 0 0 4px 0; }
         .subtitle { color: #555; font-size: 13px; margin-bottom: 18px; }
-        .meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: #444; margin-bottom: 18px; }
+        .meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #444; margin-bottom: 20px; }
         .meta div { background: #f3f4f6; padding: 6px 10px; border-radius: 4px; }
-        table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        th { background: #1e40af; color: white; padding: 10px 8px; text-align: left; }
-        th.right, td.right { text-align: right; }
-        td { padding: 8px; border-bottom: 1px solid #e5e7eb; }
-        tr:nth-child(even) td { background: #f9fafb; }
-        .total-row td { background: #dbeafe !important; color: #1e40af; font-weight: bold; padding: 12px 8px; border-top: 2px solid #1e40af; }
-        .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #ddd; color: #999; font-size: 11px; text-align: center; }
+
+        .compra { border: 1px solid #d1d5db; border-radius: 6px; margin-bottom: 14px; overflow: hidden; page-break-inside: avoid; }
+        .compra-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #eff6ff; border-bottom: 1px solid #bfdbfe; font-size: 13px; }
+        .compra-header .badge { display: inline-block; background: #1e40af; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-right: 8px; font-weight: bold; }
+        .compra-header .fecha { color: #555; margin-left: 10px; font-size: 12px; }
+        .compra-total { font-weight: bold; color: #1e40af; font-size: 14px; }
+
+        .detalle { width: 100%; border-collapse: collapse; font-size: 11px; }
+        .detalle th { background: #f9fafb; color: #374151; padding: 6px 10px; text-align: left; border-bottom: 1px solid #e5e7eb; font-weight: 600; }
+        .detalle th.right, .detalle td.right { text-align: right; }
+        .detalle td { padding: 6px 10px; border-bottom: 1px solid #f3f4f6; }
+        .detalle tr:last-child td { border-bottom: none; }
+        .empty { color: #9ca3af; font-style: italic; text-align: center; padding: 10px; }
+
+        .total-general { margin-top: 18px; padding: 14px 16px; background: #1e40af; color: white; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+        .total-general strong { font-size: 16px; }
+
+        .footer { margin-top: 20px; padding-top: 10px; border-top: 1px solid #ddd; color: #999; font-size: 10px; text-align: center; }
         @media print { @page { margin: 1cm; } body { padding: 0; } }
       </style></head><body>
         <h1>Reporte de Compras a Proveedores</h1>
@@ -332,24 +402,11 @@ export function Suppliers() {
           <div><strong>Total compras:</strong> ${comprasFiltradas.length}</div>
           <div><strong>Generado:</strong> ${new Date().toLocaleString('es-BO')}</div>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th># Compra</th>
-              <th>Proveedor</th>
-              <th>Fecha</th>
-              <th class="right">Productos</th>
-              <th class="right">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${filas}
-            <tr class="total-row">
-              <td colspan="4" class="right">MONTO TOTAL</td>
-              <td class="right">Bs ${totalGeneral.toFixed(2)}</td>
-            </tr>
-          </tbody>
-        </table>
+        ${bloques}
+        <div class="total-general">
+          <span>MONTO TOTAL DEL REPORTE</span>
+          <strong>Bs ${totalGeneral.toFixed(2)}</strong>
+        </div>
         <div class="footer">Documento generado automaticamente desde el sistema</div>
       </body></html>
     `;
