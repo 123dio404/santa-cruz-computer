@@ -304,7 +304,10 @@ export function Suppliers() {
     rows.push(['', '', '', '', '', '', 'TOTAL GENERAL', totalGeneral.toFixed(2)]);
 
     const escape = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
-    const csv = [headers, ...rows].map(row => row.map(escape).join(',')).join('\n');
+    // "sep=," hint para Excel en regiones donde el separador por defecto es ";"
+    // (Bolivia/Latam usan coma como decimal, asi que Excel asume ; como separador
+    // de columnas). Sin esto, todo aparece en una sola columna.
+    const csv = 'sep=,\n' + [headers, ...rows].map(row => row.map(escape).join(',')).join('\n');
     // BOM para que Excel reconozca UTF-8 (acentos en español)
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
