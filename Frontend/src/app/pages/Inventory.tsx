@@ -20,6 +20,7 @@ import { useState, useEffect } from 'react';
 import { Search, AlertTriangle, Package, Eye, X, TrendingDown, TrendingUp, Warehouse, FileSpreadsheet, FileText } from 'lucide-react';
 import { productosAPI, comprasAPI, ventasAPI, BACKEND_ROOT_URL, ApiProduct, ApiCompra, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { exportToExcel } from '../utils/exportExcel';
 
 type Tab = 'almacen' | 'entrada' | 'salida';
 
@@ -131,19 +132,6 @@ export function Inventory() {
   });
 
   // ── Helpers de exportación ─────────────────────────────────────────────────
-  const escape = (val: any) => `"${String(val).replace(/"/g, '""')}"`;
-
-  const triggerCSV = (filename: string, headers: string[], rows: (string | number)[][]) => {
-    const csv = 'sep=,\n' + [headers, ...rows].map(row => row.map(escape).join(',')).join('\n');
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
   const triggerPDF = (title: string, metaItems: { label: string; value: string }[], headers: string[], rows: string[][], totalLabel: string, totalValue: string) => {
     const metaHtml = metaItems.map(m => `<div><strong>${m.label}:</strong> ${m.value}</div>`).join('');
     const headHtml = headers.map((h, i) => `<th${i >= headers.length - 1 ? ' class="right"' : ''}>${h}</th>`).join('');
@@ -195,20 +183,25 @@ export function Inventory() {
   const descargarAlmacenExcel = () => {
     if (filtered.length === 0) return;
     const headers = ['Producto', 'Marca', 'Modelo', 'Categoría', 'P. Venta (Bs)', 'P. Compra (Bs)', 'Stock', 'Stock Mín.', 'Disponibilidad'];
-    const rows = filtered.map(p => [
+    const rows: (string | number)[][] = filtered.map(p => [
       p.name,
       p.marca ?? '-',
       p.modelo ?? '-',
       p.categoria_nombre ?? '-',
-      parseFloat(String(p.precio_venta ?? p.price)).toFixed(2),
-      p.precio_compra != null ? parseFloat(String(p.precio_compra)).toFixed(2) : '-',
+      Number(parseFloat(String(p.precio_venta ?? p.price)).toFixed(2)),
+      p.precio_compra != null ? Number(parseFloat(String(p.precio_compra)).toFixed(2)) : '-',
       p.stock ?? 0,
       p.stock_minimo,
       p.is_low_stock ? 'Stock Bajo' : 'Disponible',
     ]);
-    rows.push(['', '', '', '', '', '', '', 'TOTAL UNIDADES', String(totalItems)]);
-    rows.push(['', '', '', '', '', '', '', 'VALOR INVENTARIO (Bs)', totalValue.toFixed(2)]);
-    triggerCSV(`reporte_almacen_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    rows.push(['', '', '', '', '', '', '', 'TOTAL UNIDADES', totalItems]);
+    rows.push(['', '', '', '', '', '', '', 'VALOR INVENTARIO (Bs)', Number(totalValue.toFixed(2))]);
+    exportToExcel({
+      filename: `reporte_almacen_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Almacén',
+      headers,
+      rows,
+    });
   };
 
   const descargarAlmacenPDF = () => {
@@ -248,8 +241,13 @@ export function Inventory() {
       r.modelo,
       r.cantidad,
     ]);
-    rows.push(['', '', '', 'TOTAL UNIDADES INGRESADAS', totalEntrada]);
-    triggerCSV(`reporte_entrada_stock_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    exportToExcel({
+      filename: `reporte_entrada_stock_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Entrada Stock',
+      headers,
+      rows,
+      totalRow: ['', '', '', 'TOTAL UNIDADES INGRESADAS', totalEntrada],
+    });
   };
 
   const descargarEntradaPDF = () => {
@@ -287,8 +285,13 @@ export function Inventory() {
       r.producto,
       r.cantidad,
     ]);
-    rows.push(['', '', '', 'TOTAL UNIDADES VENDIDAS', totalSalida]);
-    triggerCSV(`reporte_salida_stock_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    exportToExcel({
+      filename: `reporte_salida_stock_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Salida Stock',
+      headers,
+      rows,
+      totalRow: ['', '', '', 'TOTAL UNIDADES VENDIDAS', totalSalida],
+    });
   };
 
   const descargarSalidaPDF = () => {
