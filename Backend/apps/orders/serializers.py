@@ -75,11 +75,11 @@ class VentaSerializer(serializers.ModelSerializer):
             'id', 'cliente', 'cliente_nombre',
             'usuario', 'usuario_nombre',
             'fecha_venta', 'monto_total', 'estado', 'estado_entrega',
-            'detalles', 'pagos',
+            'detalles', 'pagos', 'descuento_aplicado',
             # compat
             'total', 'status', 'fecha', 'cliente_name', 'vendedor', 'vendedor_name',
         ]
-        read_only_fields = ['id', 'fecha_venta', 'monto_total']
+        read_only_fields = ['id', 'fecha_venta', 'monto_total', 'descuento_aplicado']
 
 
 class FacturaSerializer(serializers.ModelSerializer):
@@ -110,26 +110,80 @@ class VentaCreateSerializer(serializers.ModelSerializer):
       · trg_gestionar_stock_venta → descuenta stock_fisico
       · trg_actualizar_total_venta → suma monto_total en Venta
       · trg_actualizar_estado_venta → pasa estado a 'completed' cuando pagos >= total
+
+    DESCUENTO VIP:
+      Después de que el trigger calcula monto_total, si el cliente tiene
+      descuento_disponible, se aplica en bloques de 200 Bs (tantos como
+      caben en la compra). Luego se actualiza el acumulado del cliente y
+      se otorgan nuevos bonos si cruzo un umbral de 10000 Bs.
     """
     detalles = DetalleVentaWriteSerializer(many=True)
     pagos    = PagoVentaWriteSerializer(many=True, required=False)
+    # Opcional: el frontend puede mandar aplicar_descuento_vip=False para guardar el bono
+    aplicar_descuento_vip = serializers.BooleanField(write_only=True, required=False, default=True)
 
     class Meta:
         model  = Venta
-        fields = ['cliente', 'usuario', 'estado_entrega', 'pedido_online', 'detalles', 'pagos']
+        fields = ['cliente', 'usuario', 'estado_entrega', 'pedido_online',
+                  'detalles', 'pagos', 'aplicar_descuento_vip']
 
     def create(self, validated_data):
         from django.db import transaction
+        from decimal import Decimal
+        from apps.users.models import Cliente
+
         detalles_data = validated_data.pop('detalles', [])
         pagos_data    = validated_data.pop('pagos', [])
+        aplicar       = validated_data.pop('aplicar_descuento_vip', True)
 
         with transaction.atomic():
             venta = Venta.objects.create(**validated_data)
             for d in detalles_data:
                 DetalleVenta.objects.create(venta=venta, **d)
+
+            # Los triggers ya actualizaron monto_total. Refrescamos para leerlo.
+            venta.refresh_from_db()
+            original_total = venta.monto_total or Decimal('0')
+
+            # Lógica de descuento VIP (solo si hay cliente)
+            if venta.cliente_id:
+                cliente = Cliente.objects.select_for_update().get(pk=venta.cliente_id)
+
+                descuento_aplicado = Decimal('0')
+                if aplicar and cliente.descuento_disponible and original_total > 0:
+                    # Bloques de 200 disponibles vs los que caben en la compra (relajado: ≤)
+                    blocks_available    = int(cliente.descuento_disponible) // 200
+                    blocks_in_purchase  = int(original_total) // 200
+                    blocks_to_apply     = min(blocks_available, blocks_in_purchase)
+                    descuento_aplicado  = Decimal(blocks_to_apply * 200)
+
+                if descuento_aplicado > 0:
+                    # Reducir monto_total y registrar el descuento (no dispara trigger)
+                    Venta.objects.filter(pk=venta.pk).update(
+                        monto_total=original_total - descuento_aplicado,
+                        descuento_aplicado=descuento_aplicado,
+                    )
+                    cliente.descuento_disponible = cliente.descuento_disponible - descuento_aplicado
+
+                # Acumular el monto ANTES del descuento (premio a la lealtad real)
+                previo = cliente.total_acumulado or Decimal('0')
+                cliente.total_acumulado = previo + original_total
+
+                # Otorgar nuevos bonos por cada umbral de 10000 cruzado
+                prev_thresholds = int(previo) // 10000
+                new_thresholds  = int(cliente.total_acumulado) // 10000
+                new_bonuses     = new_thresholds - prev_thresholds
+                if new_bonuses > 0:
+                    cliente.descuento_disponible = (
+                        (cliente.descuento_disponible or Decimal('0')) + Decimal(new_bonuses * 200)
+                    )
+
+                cliente.save(update_fields=['total_acumulado', 'descuento_disponible'])
+
+            # Crear pagos al final: el trigger ahora compara contra el monto descontado
             for p in pagos_data:
                 PagoVenta.objects.create(venta=venta, **p)
-            # Refresca los campos actualizados por triggers (monto_total, estado)
+
             venta.refresh_from_db()
 
         return venta

@@ -17,8 +17,8 @@
  * - qr   → 'transferencia' en el backend
  */
 import { useEffect, useState } from 'react';
-import { Trash2, CreditCard, QrCode, ShoppingBag, X } from 'lucide-react';
-import { ventasAPI, BACKEND_ROOT_URL } from '../services/api';
+import { Trash2, CreditCard, QrCode, ShoppingBag, X, Crown } from 'lucide-react';
+import { ventasAPI, clientesAPI, BACKEND_ROOT_URL, ApiCliente } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 interface StoreCartItem {
@@ -41,6 +41,8 @@ export function Cart() {
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [processingOrder, setProcessingOrder] = useState(false);
+  const [cliente, setCliente] = useState<ApiCliente | null>(null);
+  const [aplicarDescuento, setAplicarDescuento] = useState(true);
 
   useEffect(() => {
     const saved = localStorage.getItem('storeCart');
@@ -48,6 +50,15 @@ export function Cart() {
       try { setCartItems(JSON.parse(saved)); } catch { /* ignore */ }
     }
   }, []);
+
+  // Carga info del cliente logueado (incluye descuento_disponible y total_acumulado)
+  useEffect(() => {
+    if (user?.id) {
+      clientesAPI.getById(parseInt(user.id))
+        .then(setCliente)
+        .catch(() => setCliente(null));
+    }
+  }, [user?.id]);
 
   // Guarda el carrito en estado y localStorage al mismo tiempo
   const saveCart = (items: StoreCartItem[]) => {
@@ -64,8 +75,18 @@ export function Cart() {
   // Elimina un producto del carrito
   const removeItem = (productId: number) => saveCart(cartItems.filter(i => i.productId !== productId));
 
-  // Suma el total de todos los ítems (precio × cantidad)
-  const total = cartItems.reduce((s, i) => s + i.price * i.quantity, 0);
+  // Suma el subtotal de todos los ítems (precio × cantidad)
+  const subtotal = cartItems.reduce((s, i) => s + i.price * i.quantity, 0);
+
+  // Descuento VIP en bloques de 200 Bs (regla relajada: descuento <= subtotal)
+  const descuentoDisponible = Number(cliente?.descuento_disponible ?? 0);
+  const blocksAvailable = Math.floor(descuentoDisponible / 200);
+  const blocksInPurchase = Math.floor(subtotal / 200);
+  const blocksToApply = Math.min(blocksAvailable, blocksInPurchase);
+  const descuentoMaxAplicable = blocksToApply * 200;
+  const descuentoAplicado = aplicarDescuento ? descuentoMaxAplicable : 0;
+  const total = subtotal - descuentoAplicado;
+  const esVip = !!cliente?.es_vip;
 
   // Envía el pedido al backend y limpia el carrito si fue exitoso
   const handleCheckout = async () => {
@@ -82,9 +103,14 @@ export function Cart() {
           precio_unitario: i.price,
         })),
         pagos: [{ monto: total, metodo: metodoPagoMap[paymentMethod] }],
+        aplicar_descuento_vip: aplicarDescuento,
       });
       setShowCheckoutModal(false);
       setShowSuccessModal(true);
+      // Refresca info del cliente para que el descuento_disponible quede actualizado
+      if (user?.id) {
+        clientesAPI.getById(parseInt(user.id)).then(setCliente).catch(() => {});
+      }
       setTimeout(() => {
         saveCart([]);
         setShowSuccessModal(false);
@@ -161,13 +187,62 @@ export function Cart() {
 
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl p-6 border border-gray-200 sticky top-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Resumen del Pedido</h2>
-              <div className="space-y-3 mb-6">
-                <div className="pt-3 border-t border-gray-200">
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-gray-900">Total</span>
-                    <span className="text-2xl font-bold text-gray-900">{total.toFixed(2)} Bs</span>
+              <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+                <h2 className="text-lg font-semibold text-gray-900">Resumen del Pedido</h2>
+                {esVip && (
+                  <span className="flex items-center gap-1 px-2.5 py-1 bg-yellow-100 border border-yellow-300 text-yellow-800 rounded-full text-xs font-bold">
+                    <Crown className="w-3.5 h-3.5" /> VIP
+                  </span>
+                )}
+              </div>
+
+              {/* Info VIP del cliente */}
+              {cliente && (descuentoDisponible > 0 || Number(cliente.total_acumulado ?? 0) > 0) && (
+                <div className="mb-4 p-3 bg-gradient-to-r from-yellow-50 to-amber-50 border border-yellow-200 rounded-lg text-sm space-y-1">
+                  <div className="text-gray-700">
+                    <strong>Acumulado:</strong> Bs {Number(cliente.total_acumulado ?? 0).toFixed(2)}
                   </div>
+                  {descuentoDisponible > 0 && (
+                    <div className="text-green-700 font-semibold">
+                      🎁 Descuento disponible: Bs {descuentoDisponible.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Checkbox aplicar descuento */}
+              {descuentoMaxAplicable > 0 && (
+                <div className="mb-3 p-2.5 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      checked={aplicarDescuento}
+                      onChange={e => setAplicarDescuento(e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                    />
+                    <span className="font-medium text-yellow-900">
+                      Aplicar descuento VIP (Bs {descuentoMaxAplicable.toFixed(2)})
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              <div className="space-y-2 mb-6">
+                {descuentoAplicado > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>Subtotal</span>
+                      <span>Bs {subtotal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm text-green-700 font-semibold">
+                      <span>Descuento VIP</span>
+                      <span>− Bs {descuentoAplicado.toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
+                <div className="flex justify-between pt-2 border-t border-gray-200">
+                  <span className="font-semibold text-gray-900">Total</span>
+                  <span className="text-2xl font-bold text-gray-900">{total.toFixed(2)} Bs</span>
                 </div>
               </div>
               <button onClick={() => setShowCheckoutModal(true)}
@@ -201,8 +276,20 @@ export function Cart() {
                   );
                 })}
               </div>
-              <div className="pt-4 border-t border-gray-200 mb-6">
-                <div className="flex justify-between">
+              <div className="pt-4 border-t border-gray-200 mb-6 space-y-1">
+                {descuentoAplicado > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>Subtotal:</span>
+                      <span>{subtotal.toFixed(2)} Bs</span>
+                    </div>
+                    <div className="flex justify-between text-sm text-green-700 font-semibold">
+                      <span>Descuento VIP:</span>
+                      <span>− {descuentoAplicado.toFixed(2)} Bs</span>
+                    </div>
+                  </>
+                )}
+                <div className="flex justify-between pt-2 border-t border-gray-100">
                   <span className="text-gray-600">Total a pagar:</span>
                   <span className="text-2xl font-bold text-gray-900">{total.toFixed(2)} Bs</span>
                 </div>

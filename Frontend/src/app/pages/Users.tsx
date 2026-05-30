@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, X, Shield, RefreshCw, Users as UsersIcon, UserCheck, Eye, EyeOff } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Shield, RefreshCw, Users as UsersIcon, UserCheck, Eye, EyeOff, Crown } from 'lucide-react';
 import { usuariosAPI, clientesAPI, ApiUser, ApiCliente } from '../services/api';
 import { useUsers } from '../context/UsersContext';
 
@@ -492,30 +492,45 @@ export function Users() {
                   <tr>
                     <th className="text-left py-3 px-4 font-medium text-gray-600">Nombre completo</th>
                     <th className="hidden sm:table-cell text-left py-3 px-4 font-medium text-gray-600">Usuario</th>
-                    <th className="hidden md:table-cell text-left py-3 px-4 font-medium text-gray-600">NIT/CI</th>
-                    <th className="hidden lg:table-cell text-left py-3 px-4 font-medium text-gray-600">Razón Social</th>
-                    <th className="hidden md:table-cell text-left py-3 px-4 font-medium text-gray-600">Email</th>
-                    <th className="hidden lg:table-cell text-left py-3 px-4 font-medium text-gray-600">Teléfono</th>
+                    <th className="hidden md:table-cell text-right py-3 px-4 font-medium text-gray-600">Acumulado</th>
+                    <th className="hidden md:table-cell text-right py-3 px-4 font-medium text-gray-600">Bono</th>
+                    <th className="hidden lg:table-cell text-left py-3 px-4 font-medium text-gray-600">NIT/CI</th>
+                    <th className="hidden lg:table-cell text-left py-3 px-4 font-medium text-gray-600">Email</th>
+                    <th className="hidden xl:table-cell text-left py-3 px-4 font-medium text-gray-600">Teléfono</th>
                     <th className="hidden xl:table-cell text-left py-3 px-4 font-medium text-gray-600">Ciudad</th>
-                    <th className="hidden xl:table-cell text-left py-3 px-4 font-medium text-gray-600">Nacimiento</th>
                     <th className="text-right py-3 px-4 font-medium text-gray-600">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {clientes.map(c => (
                     <tr key={c.id} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="py-3 px-4 font-medium text-gray-900">{c.nombre} {c.apellido}</td>
-                      <td className="hidden sm:table-cell py-3 px-4 font-mono text-gray-700">{c.usuario_login || '—'}</td>
-                      <td className="hidden md:table-cell py-3 px-4 text-gray-600">{c.nit_ci || '—'}</td>
-                      <td className="hidden lg:table-cell py-3 px-4 text-gray-600">{c.razon_social || '—'}</td>
-                      <td className="hidden md:table-cell py-3 px-4 text-gray-600">{c.correo || '—'}</td>
-                      <td className="hidden lg:table-cell py-3 px-4 text-gray-600">{c.telefono || '—'}</td>
-                      <td className="hidden xl:table-cell py-3 px-4 text-gray-600">{c.ciudad || '—'}</td>
-                      <td className="hidden xl:table-cell py-3 px-4 text-gray-500">
-                        {c.fecha_nacimiento
-                          ? new Date(c.fecha_nacimiento + 'T00:00:00').toLocaleDateString('es-BO')
-                          : '—'}
+                      <td className="py-3 px-4 font-medium text-gray-900">
+                        <div className="flex items-center gap-2">
+                          {c.es_vip && (
+                            <span title="Cliente VIP" className="flex items-center gap-1 px-1.5 py-0.5 bg-yellow-100 border border-yellow-300 text-yellow-800 rounded text-xs font-bold">
+                              <Crown className="w-3 h-3" /> VIP
+                            </span>
+                          )}
+                          <span>{c.nombre} {c.apellido}</span>
+                        </div>
                       </td>
+                      <td className="hidden sm:table-cell py-3 px-4 font-mono text-gray-700">{c.usuario_login || '—'}</td>
+                      <td className="hidden md:table-cell py-3 px-4 text-right text-gray-700">
+                        Bs {Number(c.total_acumulado ?? 0).toFixed(2)}
+                      </td>
+                      <td className="hidden md:table-cell py-3 px-4 text-right">
+                        {Number(c.descuento_disponible ?? 0) > 0 ? (
+                          <span className="font-semibold text-green-700">
+                            Bs {Number(c.descuento_disponible).toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="hidden lg:table-cell py-3 px-4 text-gray-600">{c.nit_ci || '—'}</td>
+                      <td className="hidden lg:table-cell py-3 px-4 text-gray-600">{c.correo || '—'}</td>
+                      <td className="hidden xl:table-cell py-3 px-4 text-gray-600">{c.telefono || '—'}</td>
+                      <td className="hidden xl:table-cell py-3 px-4 text-gray-600">{c.ciudad || '—'}</td>
                       <td className="py-3 px-4">
                         <div className="flex items-center justify-end gap-2">
                           <button onClick={() => handleOpenClienteModal(c)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg">
