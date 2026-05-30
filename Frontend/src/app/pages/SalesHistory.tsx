@@ -20,7 +20,7 @@
  */
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router';
-import { Package, DollarSign, Clock, ChevronDown, ChevronUp, CheckCircle, Banknote, CreditCard, QrCode, Users, Eye, ArrowLeft, FileText } from 'lucide-react';
+import { Package, DollarSign, Clock, ChevronDown, ChevronUp, CheckCircle, Banknote, CreditCard, QrCode, Users, Eye, ArrowLeft, FileText, FileSpreadsheet } from 'lucide-react';
 import { ventasAPI, clientesAPI, API_BASE_URL, ApiCliente, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -70,6 +70,10 @@ export function SalesHistory() {
     (searchParams.get('filtro') as Filtro) ?? 'todas'
   );
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+
+  // Estado SOLO para reportes (no afecta la visualizacion de las cards)
+  const [repDesde, setRepDesde] = useState('');
+  const [repHasta, setRepHasta] = useState('');
 
   // Client tab state
   const [clienteFiltrado, setClienteFiltrado] = useState<ApiCliente | null>(null);
@@ -199,6 +203,192 @@ export function SalesHistory() {
   const totalTarjeta       = (historialData?.ventas ?? []).reduce((s, v) => s + v.pagos.filter(p => p.metodo === 'tarjeta').reduce((a, p) => a + (Number(p.monto) || 0), 0), 0);
   const totalTransferencia = (historialData?.ventas ?? []).reduce((s, v) => s + v.pagos.filter(p => p.metodo === 'transferencia').reduce((a, p) => a + (Number(p.monto) || 0), 0), 0);
 
+  // ── Ventas para el reporte (tab activa + rango de fechas) ───────────────────
+  const ventasReporte = ventasFiltradas.filter(v => {
+    const fecha = new Date(v.fecha);
+    const desde = repDesde ? new Date(repDesde) : null;
+    const hasta = repHasta ? new Date(repHasta + 'T23:59:59') : null;
+    return (!desde || fecha >= desde) && (!hasta || fecha <= hasta);
+  });
+
+  const totalGeneralReporte = ventasReporte.reduce((s, v) => s + (Number(v.total) || 0), 0);
+
+  const formatRangoFechas = () => {
+    if (repDesde && repHasta) return `Del ${repDesde} al ${repHasta}`;
+    if (repDesde) return `Desde ${repDesde}`;
+    if (repHasta) return `Hasta ${repHasta}`;
+    return 'Todas las fechas';
+  };
+
+  const tipoReporte =
+    filtro === 'completadas' ? 'Ventas Completadas' :
+    filtro === 'pendientes' ? 'Ventas Pendientes' :
+    'Todas las Ventas';
+
+  // ── Exportar a Excel (CSV plano para análisis) ──────────────────────────────
+  const descargarExcel = () => {
+    if (ventasReporte.length === 0) return;
+    const headers = [
+      '# Venta', 'Cliente', 'Vendedor', 'Fecha', 'Estado',
+      'Producto', 'Cantidad', 'Precio Unit. (Bs)', 'Subtotal (Bs)',
+    ];
+
+    const rows: (string | number)[][] = [];
+    ventasReporte.forEach(v => {
+      const fecha = new Date(v.fecha).toLocaleDateString('es-BO');
+      const estado = v.status === 'completed' ? 'Completada'
+        : v.status === 'pending' ? 'Pendiente'
+        : v.status;
+      const detalles = v.detalles ?? [];
+
+      if (detalles.length === 0) {
+        rows.push([`#${v.id}`, v.cliente_name || 'General', v.vendedor_name || 'Pedido online',
+                   fecha, estado, '(sin detalle)', '', '', '']);
+      } else {
+        detalles.forEach(d => {
+          const precio = Number(d.precio_unitario);
+          rows.push([
+            `#${v.id}`,
+            v.cliente_name || 'General',
+            v.vendedor_name || 'Pedido online',
+            fecha,
+            estado,
+            d.producto_name,
+            d.cantidad,
+            precio.toFixed(2),
+            (Number(d.subtotal) || 0).toFixed(2),
+          ]);
+        });
+      }
+    });
+    // TOTAL GENERAL bajo "Precio Unit." y el valor bajo "Subtotal"
+    rows.push(['', '', '', '', '', '', '', 'TOTAL GENERAL', totalGeneralReporte.toFixed(2)]);
+
+    const escape = (val: any) => `"${String(val).replace(/"/g, '""')}"`;
+    // sep=, hace que Excel separe en columnas aun con regional es-LA
+    const csv = 'sep=,\n' + [headers, ...rows].map(row => row.map(escape).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `reporte_ventas_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Exportar a PDF (jerárquico, vía window.print) ───────────────────────────
+  const descargarPDF = () => {
+    if (ventasReporte.length === 0) return;
+
+    const bloques = ventasReporte.map(v => {
+      const fecha = new Date(v.fecha).toLocaleDateString('es-BO');
+      const hora = new Date(v.fecha).toLocaleTimeString('es-BO');
+      const total = (Number(v.total) || 0).toFixed(2);
+      const estado = v.status === 'completed' ? 'Completada'
+        : v.status === 'pending' ? 'Pendiente'
+        : v.status;
+      const estadoClass = v.status === 'completed' ? 'badge-ok' : 'badge-warn';
+      const detalles = v.detalles ?? [];
+
+      const filasDetalle = detalles.length === 0
+        ? `<tr><td colspan="4" class="empty">Sin productos registrados</td></tr>`
+        : detalles.map(d => `
+            <tr>
+              <td>${d.producto_name}</td>
+              <td class="right">${d.cantidad}</td>
+              <td class="right">Bs ${(Number(d.precio_unitario) || 0).toFixed(2)}</td>
+              <td class="right">Bs ${(Number(d.subtotal) || 0).toFixed(2)}</td>
+            </tr>
+          `).join('');
+
+      return `
+        <div class="venta">
+          <div class="venta-header">
+            <div>
+              <span class="badge">Venta #${v.id}</span>
+              <strong>${v.cliente_name || 'General'}</strong>
+              <span class="meta-info">${fecha} ${hora}</span>
+              <span class="badge ${estadoClass}">${estado}</span>
+            </div>
+            <div class="venta-total">Bs ${total}</div>
+          </div>
+          <div class="vendedor-info">Vendedor: ${v.vendedor_name || 'Pedido online'}</div>
+          <table class="detalle">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th class="right">Cantidad</th>
+                <th class="right">Precio Unit.</th>
+                <th class="right">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>${filasDetalle}</tbody>
+          </table>
+        </div>
+      `;
+    }).join('');
+
+    const html = `
+      <!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Reporte de Ventas</title>
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: Arial, Helvetica, sans-serif; padding: 24px; color: #111; }
+        h1 { color: #1e40af; margin: 0 0 4px 0; }
+        .subtitle { color: #555; font-size: 13px; margin-bottom: 18px; }
+        .meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #444; margin-bottom: 20px; }
+        .meta div { background: #f3f4f6; padding: 6px 10px; border-radius: 4px; }
+
+        .venta { border: 1px solid #d1d5db; border-radius: 6px; margin-bottom: 14px; overflow: hidden; page-break-inside: avoid; }
+        .venta-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #eff6ff; border-bottom: 1px solid #bfdbfe; font-size: 13px; }
+        .venta-header .badge { display: inline-block; background: #1e40af; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-right: 8px; font-weight: bold; }
+        .venta-header .badge-ok { background: #16a34a; }
+        .venta-header .badge-warn { background: #d97706; }
+        .venta-header .meta-info { color: #555; margin: 0 8px; font-size: 12px; }
+        .venta-total { font-weight: bold; color: #1e40af; font-size: 14px; }
+        .vendedor-info { padding: 6px 12px; background: #fafafa; font-size: 11px; color: #6b7280; border-bottom: 1px solid #e5e7eb; }
+
+        .detalle { width: 100%; border-collapse: collapse; font-size: 11px; }
+        .detalle th { background: #f9fafb; color: #374151; padding: 6px 10px; text-align: left; border-bottom: 1px solid #e5e7eb; font-weight: 600; }
+        .detalle th.right, .detalle td.right { text-align: right; }
+        .detalle td { padding: 6px 10px; border-bottom: 1px solid #f3f4f6; }
+        .detalle tr:last-child td { border-bottom: none; }
+        .empty { color: #9ca3af; font-style: italic; text-align: center; padding: 10px; }
+
+        .total-general { margin-top: 18px; padding: 14px 16px; background: #1e40af; color: white; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+        .total-general strong { font-size: 16px; }
+
+        .footer { margin-top: 20px; padding-top: 10px; border-top: 1px solid #ddd; color: #999; font-size: 10px; text-align: center; }
+        @media print { @page { margin: 1cm; } body { padding: 0; } }
+      </style></head><body>
+        <h1>Reporte de Ventas</h1>
+        <div class="subtitle">Santa Cruz Computer - Sistema de Inventario</div>
+        <div class="meta">
+          <div><strong>Tipo:</strong> ${tipoReporte}</div>
+          <div><strong>Rango:</strong> ${formatRangoFechas()}</div>
+          <div><strong>Total ventas:</strong> ${ventasReporte.length}</div>
+          <div><strong>Generado:</strong> ${new Date().toLocaleString('es-BO')}</div>
+        </div>
+        ${bloques}
+        <div class="total-general">
+          <span>MONTO TOTAL DEL REPORTE</span>
+          <strong>Bs ${totalGeneralReporte.toFixed(2)}</strong>
+        </div>
+        <div class="footer">Documento generado automaticamente desde el sistema</div>
+      </body></html>
+    `;
+
+    const win = window.open('', '_blank', 'width=900,height=700');
+    if (!win) {
+      alert('Permite las ventanas emergentes para descargar el PDF.');
+      return;
+    }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 300);
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -294,6 +484,56 @@ export function SalesHistory() {
           ))}
         </div>
       </div>
+
+      {/* Generar Reporte: rango de fechas + botones Excel/PDF (solo en tabs de ventas) */}
+      {filtro !== 'clientes' && historialData && historialData.ventas.length > 0 && (
+        <div className="bg-white rounded-xl p-4 border border-gray-200 flex flex-col lg:flex-row items-start lg:items-center gap-3">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-gray-500" />
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap">Generar Reporte:</span>
+          </div>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-gray-500 whitespace-nowrap">Desde</label>
+              <input type="date" value={repDesde} onChange={e => setRepDesde(e.target.value)}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-gray-500 whitespace-nowrap">Hasta</label>
+              <input type="date" value={repHasta} onChange={e => setRepHasta(e.target.value)}
+                min={repDesde}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
+            </div>
+            {(repDesde || repHasta) && (
+              <button onClick={() => { setRepDesde(''); setRepHasta(''); }}
+                className="text-xs text-red-500 hover:text-red-700 hover:underline whitespace-nowrap">
+                Limpiar
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 lg:ml-auto">
+            <span className="text-xs text-gray-500 whitespace-nowrap">
+              {ventasReporte.length} venta(s) - Bs {totalGeneralReporte.toFixed(2)}
+            </span>
+            <button
+              onClick={descargarExcel}
+              disabled={ventasReporte.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+              title="Descargar reporte en formato Excel (CSV)"
+            >
+              <FileSpreadsheet className="w-4 h-4" /> Excel
+            </button>
+            <button
+              onClick={descargarPDF}
+              disabled={ventasReporte.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+              title="Descargar reporte en formato PDF"
+            >
+              <FileText className="w-4 h-4" /> PDF
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── CLIENTES TAB ── */}
       {filtro === 'clientes' && (
