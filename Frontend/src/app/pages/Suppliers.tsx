@@ -27,6 +27,7 @@ import {
   proveedoresAPI, comprasAPI, productosAPI, categoriasAPI,
   ApiProveedor, ApiCompra, ApiProduct, ApiCategoria,
 } from '../services/api';
+import { exportToExcel } from '../utils/exportExcel';
 
 type Tab = 'proveedores' | 'nueva-compra' | 'historial';
 
@@ -267,9 +268,8 @@ export function Suppliers() {
     ? 'Todos los proveedores'
     : (proveedores.find(p => p.id === histProveedor)?.nombre_empresa ?? '—');
 
-  // ── Exportar a Excel (CSV) ─────────────────────────────────────────────────
+  // ── Exportar a Excel (.xlsx) ───────────────────────────────────────────────
   // Formato plano: una fila por producto con datos de la compra repetidos.
-  // Permite filtrar, ordenar y hacer tablas dinamicas en Excel.
   const descargarExcel = () => {
     if (comprasFiltradas.length === 0) return;
     const headers = [
@@ -292,28 +292,21 @@ export function Suppliers() {
             fecha,
             d.producto_nombre,
             d.cantidad,
-            costo.toFixed(2),
-            (d.cantidad * costo).toFixed(2),
+            Number(costo.toFixed(2)),
+            Number((d.cantidad * costo).toFixed(2)),
           ]);
         });
       }
     });
-    // TOTAL GENERAL bajo "Costo Unit." y el valor bajo "Subtotal"
-    rows.push(['', '', '', '', '', 'TOTAL GENERAL', totalGeneral.toFixed(2)]);
 
-    const escape = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
-    // "sep=," hint para Excel en regiones donde el separador por defecto es ";"
-    // (Bolivia/Latam usan coma como decimal, asi que Excel asume ; como separador
-    // de columnas). Sin esto, todo aparece en una sola columna.
-    const csv = 'sep=,\n' + [headers, ...rows].map(row => row.map(escape).join(',')).join('\n');
-    // BOM para que Excel reconozca UTF-8 (acentos en español)
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `reporte_compras_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    exportToExcel({
+      filename: `reporte_compras_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Compras',
+      headers,
+      rows,
+      // TOTAL GENERAL bajo "Costo Unit." y el valor bajo "Subtotal"
+      totalRow: ['', '', '', '', '', 'TOTAL GENERAL', Number(totalGeneral.toFixed(2))],
+    });
   };
 
   // ── Exportar a PDF (vía window.print) ──────────────────────────────────────

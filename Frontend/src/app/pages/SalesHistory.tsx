@@ -23,6 +23,7 @@ import { useSearchParams } from 'react-router';
 import { Package, DollarSign, Clock, ChevronDown, ChevronUp, CheckCircle, Banknote, CreditCard, QrCode, Users, Eye, ArrowLeft, FileText, FileSpreadsheet } from 'lucide-react';
 import { ventasAPI, clientesAPI, API_BASE_URL, ApiCliente, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { exportToExcel } from '../utils/exportExcel';
 
 interface VentaDetail {
   id: number;
@@ -247,7 +248,7 @@ export function SalesHistory() {
     filtro === 'pendientes' ? 'Ventas Pendientes' :
     'Todas las Ventas';
 
-  // ── Exportar a Excel (CSV plano para análisis) ──────────────────────────────
+  // ── Exportar a Excel (.xlsx) ────────────────────────────────────────────────
   const descargarExcel = () => {
     if (ventasReporte.length === 0) return;
     const headers = [
@@ -277,25 +278,21 @@ export function SalesHistory() {
             estado,
             d.producto_name,
             d.cantidad,
-            precio.toFixed(2),
-            (Number(d.subtotal) || 0).toFixed(2),
+            Number(precio.toFixed(2)),
+            Number((Number(d.subtotal) || 0).toFixed(2)),
           ]);
         });
       }
     });
-    // TOTAL GENERAL bajo "Precio Unit." y el valor bajo "Subtotal"
-    rows.push(['', '', '', '', '', '', '', 'TOTAL GENERAL', totalGeneralReporte.toFixed(2)]);
 
-    const escape = (val: any) => `"${String(val).replace(/"/g, '""')}"`;
-    // sep=, hace que Excel separe en columnas aun con regional es-LA
-    const csv = 'sep=,\n' + [headers, ...rows].map(row => row.map(escape).join(',')).join('\n');
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `reporte_ventas_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    exportToExcel({
+      filename: `reporte_ventas_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Ventas',
+      headers,
+      rows,
+      // TOTAL GENERAL bajo "Precio Unit." y el valor bajo "Subtotal"
+      totalRow: ['', '', '', '', '', '', '', 'TOTAL GENERAL', Number(totalGeneralReporte.toFixed(2))],
+    });
   };
 
   // ── Exportar a PDF (jerárquico, vía window.print) ───────────────────────────
