@@ -108,6 +108,12 @@ class UsuarioSerializer(serializers.ModelSerializer):
 
 class ClienteSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    # Flag calculado: VIP es cualquier cliente que alguna vez haya acumulado 10000 Bs
+    es_vip = serializers.SerializerMethodField()
+
+    def get_es_vip(self, obj):
+        total = obj.total_acumulado or 0
+        return bool(total and total >= 10000)
 
     class Meta:
         model  = Cliente
@@ -115,8 +121,9 @@ class ClienteSerializer(serializers.ModelSerializer):
             'id', 'nombre', 'apellido', 'usuario_login', 'correo',
             'sexo', 'ciudad', 'telefono', 'fecha_nacimiento',
             'nit_ci', 'razon_social', 'password',
+            'total_acumulado', 'descuento_disponible', 'es_vip',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'total_acumulado', 'descuento_disponible', 'es_vip']
 
     def validate_usuario_login(self, value):
         if not value:

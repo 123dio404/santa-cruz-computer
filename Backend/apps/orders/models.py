@@ -81,6 +81,8 @@ class Venta(models.Model):
         default=EstadoEntrega.PENDIENTE,
     )
     pedido_online  = models.BooleanField(default=False)
+    # Descuento VIP aplicado a esta venta (0 si el cliente no usó descuento)
+    descuento_aplicado = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         managed             = False

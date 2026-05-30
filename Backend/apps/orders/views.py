@@ -211,10 +211,19 @@ class FacturaPDFView(View):
             for p in venta.pagos.all()
         ) or 'Sin registrar'
 
-        total_data = [
-            ['', Paragraph(f'<b>Método(s) de pago:</b> {metodos_str}', s_normal)],
-            ['', Paragraph(f'<b>TOTAL:</b>  Bs {float(venta.monto_total):.2f}', s_total)],
-        ]
+        descuento_vip = float(venta.descuento_aplicado or 0)
+        subtotal_original = float(venta.monto_total) + descuento_vip
+
+        total_data = []
+        if descuento_vip > 0:
+            s_descuento = ParagraphStyle(
+                'descuento', fontSize=10, fontName='Helvetica-Bold',
+                textColor=colors.HexColor('#16a34a'), alignment=TA_RIGHT,
+            )
+            total_data.append(['', Paragraph(f'Subtotal: Bs {subtotal_original:.2f}', s_normal)])
+            total_data.append(['', Paragraph(f'Descuento VIP: − Bs {descuento_vip:.2f}', s_descuento)])
+        total_data.append(['', Paragraph(f'<b>Método(s) de pago:</b> {metodos_str}', s_normal)])
+        total_data.append(['', Paragraph(f'<b>TOTAL:</b>  Bs {float(venta.monto_total):.2f}', s_total)])
         total_table = Table(total_data, colWidths=[9 * cm, 8 * cm])
         total_table.setStyle(TableStyle([
             ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),

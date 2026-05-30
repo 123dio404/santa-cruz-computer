@@ -20,7 +20,7 @@
  * - qr   → 'transferencia'
  */
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, CreditCard, Banknote, QrCode, ShoppingCart, FileText, Package } from 'lucide-react';
+import { Plus, Trash2, CreditCard, Banknote, QrCode, ShoppingCart, FileText, Package, Crown } from 'lucide-react';
 import { ventasAPI, productosAPI, clientesAPI, categoriasAPI, ApiProduct, ApiCliente, ApiCategoria } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -67,6 +67,7 @@ export function Sales() {
   const [customerName, setCustomerName] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [aplicarDescuento, setAplicarDescuento] = useState(true);
   const [showInvoice, setShowInvoice] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [backendProducts, setBackendProducts] = useState<SaleProduct[]>([]);
@@ -128,6 +129,17 @@ export function Sales() {
 
   const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
 
+  // Calculo del descuento VIP (bloques de 200 Bs, regla relajada: descuento <= subtotal)
+  const selectedClient = clients.find(c => String(c.id) === selectedCustomerId);
+  const descuentoDisponible = Number(selectedClient?.descuento_disponible ?? 0);
+  const blocksAvailable = Math.floor(descuentoDisponible / 200);
+  const blocksInPurchase = Math.floor(subtotal / 200);
+  const blocksToApply = Math.min(blocksAvailable, blocksInPurchase);
+  const descuentoMaxAplicable = blocksToApply * 200;
+  const descuentoAplicado = aplicarDescuento ? descuentoMaxAplicable : 0;
+  const totalFinal = subtotal - descuentoAplicado;
+  const esVip = !!selectedClient?.es_vip;
+
   const handleShowInvoice = () => {
     if (cart.length === 0 || !customerName || !customerNit) {
       alert('Por favor complete todos los campos');
@@ -150,8 +162,11 @@ export function Sales() {
           cantidad: item.quantity,
           precio_unitario: item.product.price,
         })),
-        pagos: [{ monto: subtotal, metodo: metodoPagoMap[paymentMethod] }],
+        pagos: [{ monto: totalFinal, metodo: metodoPagoMap[paymentMethod] }],
+        aplicar_descuento_vip: aplicarDescuento,
       });
+      // Refresca clientes para reflejar el nuevo descuento_disponible y total_acumulado
+      clientesAPI.getAll().then(setClients).catch(() => {});
 
       setShowInvoice(false);
       setShowSuccessModal(true);
@@ -190,7 +205,14 @@ export function Sales() {
         <div className="lg:col-span-2 space-y-6">
           {/* Customer Selection */}
           <div className="bg-white rounded-xl p-6 border border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Datos del Cliente</h2>
+            <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+              <h2 className="text-lg font-semibold text-gray-900">Datos del Cliente</h2>
+              {esVip && (
+                <span className="flex items-center gap-1 px-2.5 py-1 bg-yellow-100 border border-yellow-300 text-yellow-800 rounded-full text-xs font-bold">
+                  <Crown className="w-3.5 h-3.5" /> Cliente VIP
+                </span>
+              )}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <select
                 value={selectedCustomerId}
@@ -200,7 +222,7 @@ export function Sales() {
                 <option value="">Seleccionar cliente...</option>
                 {clients.map(client => (
                   <option key={client.id} value={String(client.id)}>
-                    {client.nombre} {client.apellido}
+                    {client.es_vip ? '★ ' : ''}{client.nombre} {client.apellido}
                   </option>
                 ))}
               </select>
@@ -221,6 +243,20 @@ export function Sales() {
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
+
+            {/* Info VIP del cliente seleccionado */}
+            {selectedClient && (descuentoDisponible > 0 || (selectedClient.total_acumulado ?? 0) > 0) && (
+              <div className="mt-3 p-3 bg-gradient-to-r from-yellow-50 to-amber-50 border border-yellow-200 rounded-lg flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                <span className="text-gray-700">
+                  <strong>Acumulado:</strong> Bs {Number(selectedClient.total_acumulado ?? 0).toFixed(2)}
+                </span>
+                {descuentoDisponible > 0 && (
+                  <span className="text-green-700 font-semibold">
+                    🎁 Descuento disponible: Bs {descuentoDisponible.toFixed(2)}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Product Selection */}
@@ -390,10 +426,39 @@ export function Sales() {
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-gray-200">
-                <div className="flex justify-between mb-4">
+              <div className="pt-4 border-t border-gray-200 space-y-2">
+                {descuentoMaxAplicable > 0 && (
+                  <div className="p-2.5 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <label className="flex items-center gap-2 cursor-pointer text-sm">
+                      <input
+                        type="checkbox"
+                        checked={aplicarDescuento}
+                        onChange={e => setAplicarDescuento(e.target.checked)}
+                        className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                      />
+                      <span className="font-medium text-yellow-900">
+                        Aplicar descuento VIP (Bs {descuentoMaxAplicable.toFixed(2)})
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                {descuentoAplicado > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>Subtotal</span>
+                      <span>Bs {subtotal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm text-green-700 font-semibold">
+                      <span>Descuento VIP</span>
+                      <span>− Bs {descuentoAplicado.toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
+
+                <div className="flex justify-between mb-4 pt-2 border-t border-gray-100">
                   <span className="font-semibold text-gray-900">Total</span>
-                  <span className="text-2xl font-bold text-gray-900">{subtotal.toFixed(2)} Bs</span>
+                  <span className="text-2xl font-bold text-gray-900">{totalFinal.toFixed(2)} Bs</span>
                 </div>
 
                 <button
@@ -465,9 +530,21 @@ export function Sales() {
               </table>
 
               <div className="space-y-2 mb-6">
+                {descuentoAplicado > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>Subtotal:</span>
+                      <span>{subtotal.toFixed(2)} Bs</span>
+                    </div>
+                    <div className="flex justify-between text-sm text-green-700 font-semibold">
+                      <span>Descuento VIP:</span>
+                      <span>− {descuentoAplicado.toFixed(2)} Bs</span>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between text-lg font-bold text-gray-900 pt-2 border-t border-gray-200">
                   <span>TOTAL:</span>
-                  <span>{subtotal.toFixed(2)} Bs</span>
+                  <span>{totalFinal.toFixed(2)} Bs</span>
                 </div>
               </div>
 

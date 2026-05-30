@@ -59,6 +59,9 @@ class Cliente(models.Model):
     razon_social     = models.CharField(max_length=150, blank=True, null=True)
     # La contraseña del cliente también se hashea (make_password) igual que Usuario
     password         = models.CharField(max_length=255, blank=True, null=True)
+    # Descuento VIP por fidelidad: cada 10000 Bs acumulados otorga 200 Bs de descuento
+    total_acumulado      = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    descuento_disponible = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         managed             = False   # Django no gestiona esta tabla

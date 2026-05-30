@@ -196,6 +196,7 @@ export interface ApiVenta {
   total: number;
   status: string;
   fecha: string;
+  descuento_aplicado?: number;
   detalles?: ApiDetalleVenta[];
   pagos?: ApiPago[];
 }
@@ -231,6 +232,9 @@ export interface ApiCliente {
   fecha_nacimiento: string | null;
   nit_ci: string | null;
   razon_social: string | null;
+  total_acumulado?: number;
+  descuento_disponible?: number;
+  es_vip?: boolean;
 }
 
 // ============ CLIENTES ============
@@ -238,6 +242,10 @@ export const clientesAPI = {
   getAll: async (): Promise<ApiCliente[]> => {
     const r = await fetch(`${API_BASE_URL}/users/clientes/?page_size=1000`, { headers: authHeaders() });
     return handlePaginated(r);
+  },
+  getById: async (id: number): Promise<ApiCliente> => {
+    const r = await fetch(`${API_BASE_URL}/users/clientes/${id}/`, { headers: authHeaders() });
+    return handleJson(r);
   },
   create: async (data: Partial<ApiCliente>): Promise<ApiCliente> => {
     const r = await fetch(`${API_BASE_URL}/users/clientes/`, {
