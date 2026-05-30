@@ -275,16 +275,14 @@ export function Suppliers() {
     const headers = [
       '# Compra', 'Proveedor', 'Fecha',
       'Producto', 'Cantidad', 'Costo Unit. (Bs)', 'Subtotal (Bs)',
-      'Total Compra (Bs)',
     ];
 
     const rows: (string | number)[][] = [];
     comprasFiltradas.forEach(c => {
       const fecha = new Date(c.fecha_compra).toLocaleDateString('es-BO');
-      const total = Number(c.monto_total).toFixed(2);
       const detalles = c.detalles ?? [];
       if (detalles.length === 0) {
-        rows.push([`#${c.id}`, c.proveedor_nombre, fecha, '(sin detalle)', '', '', '', total]);
+        rows.push([`#${c.id}`, c.proveedor_nombre, fecha, '(sin detalle)', '', '', '']);
       } else {
         detalles.forEach(d => {
           const costo = Number(d.costo_unitario);
@@ -296,12 +294,12 @@ export function Suppliers() {
             d.cantidad,
             costo.toFixed(2),
             (d.cantidad * costo).toFixed(2),
-            total,
           ]);
         });
       }
     });
-    rows.push(['', '', '', '', '', '', 'TOTAL GENERAL', totalGeneral.toFixed(2)]);
+    // TOTAL GENERAL bajo "Costo Unit." y el valor bajo "Subtotal"
+    rows.push(['', '', '', '', '', 'TOTAL GENERAL', totalGeneral.toFixed(2)]);
 
     const escape = (v: any) => `"${String(v).replace(/"/g, '""')}"`;
     // "sep=," hint para Excel en regiones donde el separador por defecto es ";"
