@@ -74,6 +74,7 @@ export function SalesHistory() {
   // Estado SOLO para reportes (no afecta la visualizacion de las cards)
   const [repDesde, setRepDesde] = useState('');
   const [repHasta, setRepHasta] = useState('');
+  const [repVendedor, setRepVendedor] = useState<string>(''); // '', 'online' o id en string
 
   // Client tab state
   const [clienteFiltrado, setClienteFiltrado] = useState<ApiCliente | null>(null);
@@ -203,12 +204,27 @@ export function SalesHistory() {
   const totalTarjeta       = (historialData?.ventas ?? []).reduce((s, v) => s + v.pagos.filter(p => p.metodo === 'tarjeta').reduce((a, p) => a + (Number(p.monto) || 0), 0), 0);
   const totalTransferencia = (historialData?.ventas ?? []).reduce((s, v) => s + v.pagos.filter(p => p.metodo === 'transferencia').reduce((a, p) => a + (Number(p.monto) || 0), 0), 0);
 
-  // ── Ventas para el reporte (tab activa + rango de fechas) ───────────────────
+  // Lista unica de vendedores presentes en las ventas (excluye pedidos online)
+  const vendedoresUnicos = (() => {
+    const map = new Map<number, string>();
+    (historialData?.ventas ?? []).forEach(v => {
+      if (v.vendedor && v.vendedor_name) map.set(v.vendedor, v.vendedor_name);
+    });
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  })();
+
+  // ── Ventas para el reporte (tab activa + rango de fechas + vendedor) ───────
   const ventasReporte = ventasFiltradas.filter(v => {
     const fecha = new Date(v.fecha);
     const desde = repDesde ? new Date(repDesde) : null;
     const hasta = repHasta ? new Date(repHasta + 'T23:59:59') : null;
-    return (!desde || fecha >= desde) && (!hasta || fecha <= hasta);
+    const okFecha = (!desde || fecha >= desde) && (!hasta || fecha <= hasta);
+
+    let okVend = true;
+    if (repVendedor === 'online') okVend = !v.vendedor;
+    else if (repVendedor !== '') okVend = v.vendedor === Number(repVendedor);
+
+    return okFecha && okVend;
   });
 
   const totalGeneralReporte = ventasReporte.reduce((s, v) => s + (Number(v.total) || 0), 0);
@@ -219,6 +235,12 @@ export function SalesHistory() {
     if (repHasta) return `Hasta ${repHasta}`;
     return 'Todas las fechas';
   };
+
+  const vendedorReporteNombre = repVendedor === ''
+    ? 'Todos'
+    : repVendedor === 'online'
+      ? 'Pedidos online'
+      : (vendedoresUnicos.find(x => x.id === Number(repVendedor))?.name ?? '—');
 
   const tipoReporte =
     filtro === 'completadas' ? 'Ventas Completadas' :
@@ -366,6 +388,7 @@ export function SalesHistory() {
         <div class="meta">
           <div><strong>Tipo:</strong> ${tipoReporte}</div>
           <div><strong>Rango:</strong> ${formatRangoFechas()}</div>
+          <div><strong>Vendedor:</strong> ${vendedorReporteNombre}</div>
           <div><strong>Total ventas:</strong> ${ventasReporte.length}</div>
           <div><strong>Generado:</strong> ${new Date().toLocaleString('es-BO')}</div>
         </div>
@@ -504,8 +527,22 @@ export function SalesHistory() {
                 min={repDesde}
                 className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
             </div>
-            {(repDesde || repHasta) && (
-              <button onClick={() => { setRepDesde(''); setRepHasta(''); }}
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-gray-500 whitespace-nowrap">Vendedor</label>
+              <select
+                value={repVendedor}
+                onChange={e => setRepVendedor(e.target.value)}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 bg-white min-w-[160px]"
+              >
+                <option value="">Todos</option>
+                <option value="online">Pedidos online</option>
+                {vendedoresUnicos.map(v => (
+                  <option key={v.id} value={String(v.id)}>{v.name}</option>
+                ))}
+              </select>
+            </div>
+            {(repDesde || repHasta || repVendedor !== '') && (
+              <button onClick={() => { setRepDesde(''); setRepHasta(''); setRepVendedor(''); }}
                 className="text-xs text-red-500 hover:text-red-700 hover:underline whitespace-nowrap">
                 Limpiar
               </button>
