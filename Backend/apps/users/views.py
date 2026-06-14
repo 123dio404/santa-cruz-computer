@@ -474,21 +474,29 @@ def _lookup_user_by_identifier(identifier: str):
     Searches usuario first, then cliente.
     """
     from django.db import connection
-    if '@' not in identifier:
-        with connection.cursor() as cursor:
+    is_email = '@' in identifier
+
+    # ── 1. Buscar en usuario (admin / vendedor) — la columna del correo es 'email'
+    with connection.cursor() as cursor:
+        if is_email:
+            cursor.execute(
+                "SELECT idusuario, email FROM usuario WHERE LOWER(email) = LOWER(%s) AND activo = TRUE LIMIT 1",
+                [identifier],
+            )
+        else:
             cursor.execute(
                 "SELECT idusuario, email FROM usuario WHERE username = %s AND activo = TRUE LIMIT 1",
                 [identifier],
             )
-            row = cursor.fetchone()
-        if row:
-            email = row[1] or ''
-            return (row[0], email, 'usuario')
-    # Buscar en cliente por usuario_login o correo
+        row = cursor.fetchone()
+    if row:
+        return (row[0], row[1] or '', 'usuario')
+
+    # ── 2. Buscar en cliente — la columna del correo es 'correo'
     with connection.cursor() as cursor:
-        if '@' in identifier:
+        if is_email:
             cursor.execute(
-                "SELECT idcliente, correo FROM cliente WHERE correo = %s LIMIT 1",
+                "SELECT idcliente, correo FROM cliente WHERE LOWER(correo) = LOWER(%s) LIMIT 1",
                 [identifier],
             )
         else:
