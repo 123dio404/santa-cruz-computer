@@ -38,6 +38,7 @@ class Usuario(models.Model):
         db_table            = 'usuario'
         verbose_name        = 'Usuario'
         verbose_name_plural = 'Usuarios'
+        ordering            = ['id']   # evita UnorderedObjectListWarning al paginar
 
     def __str__(self):
         return self.username
@@ -68,6 +69,7 @@ class Cliente(models.Model):
         db_table            = 'cliente'
         verbose_name        = 'Cliente'
         verbose_name_plural = 'Clientes'
+        ordering            = ['id']   # evita UnorderedObjectListWarning al paginar
 
     def __str__(self):
         return f'{self.nombre} {self.apellido}'
