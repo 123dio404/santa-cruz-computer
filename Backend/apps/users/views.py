@@ -502,6 +502,47 @@ def _lookup_user_by_identifier(identifier: str):
     return None
 
 
+def _send_brevo_email(to_email: str, subject: str, text_content: str, html_content: str = None):
+    """
+    Envía un correo transaccional usando el API HTTP de Brevo.
+    Endpoint: https://api.brevo.com/v3/smtp/email
+
+    Usa urllib (librería estándar) para no añadir dependencias.
+    Lee la clave y el remitente desde settings (BREVO_*). Lanza excepción si falla.
+    """
+    import json
+    import urllib.request
+
+    api_key = getattr(django_settings, 'BREVO_API_KEY', '')
+    if not api_key:
+        raise RuntimeError('BREVO_API_KEY no está configurada en .env')
+
+    payload = {
+        'sender': {
+            'email': getattr(django_settings, 'BREVO_FROM_EMAIL', ''),
+            'name':  getattr(django_settings, 'BREVO_FROM_NAME', 'Santa Cruz Computer'),
+        },
+        'to':      [{'email': to_email}],
+        'subject': subject,
+        'textContent': text_content,
+    }
+    if html_content:
+        payload['htmlContent'] = html_content
+
+    req = urllib.request.Request(
+        'https://api.brevo.com/v3/smtp/email',
+        data=json.dumps(payload).encode('utf-8'),
+        headers={
+            'accept':       'application/json',
+            'api-key':      api_key,
+            'content-type': 'application/json',
+        },
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return resp.status
+
+
 class ForgotPasswordView(APIView):
     """
     POST /api/v1/users/forgot-password/
@@ -538,28 +579,32 @@ class ForgotPasswordView(APIView):
             'tabla':     tabla,
         }
 
-        subject  = 'Código de recuperación - SantaCruz Computer'
+        subject  = getattr(django_settings, 'BREVO_OTP_SUBJECT', '') or 'Código de recuperación - Santa Cruz Computer'
         body_txt = (
             f'Hola,\n\n'
-            f'Recibiste este correo porque solicitaste recuperar tu contraseña en SantaCruz Computer.\n\n'
+            f'Recibiste este correo porque solicitaste recuperar tu contraseña en Santa Cruz Computer.\n\n'
             f'Tu código de verificación es:\n\n'
             f'    {code}\n\n'
             f'Este código es válido por 10 minutos.\n'
             f'Si no solicitaste este cambio, puedes ignorar este mensaje con seguridad.\n\n'
-            f'— Equipo SantaCruz Computer'
+            f'— Equipo Santa Cruz Computer'
+        )
+        body_html = (
+            f'<p>Hola,</p>'
+            f'<p>Recibiste este correo porque solicitaste recuperar tu contraseña en '
+            f'<strong>Santa Cruz Computer</strong>.</p>'
+            f'<p>Tu código de verificación es:</p>'
+            f'<p style="font-size:24px;font-weight:bold;letter-spacing:4px">{code}</p>'
+            f'<p>Este código es válido por <strong>10 minutos</strong>.</p>'
+            f'<p>Si no solicitaste este cambio, puedes ignorar este mensaje con seguridad.</p>'
+            f'<p>— Equipo Santa Cruz Computer</p>'
         )
         try:
-            send_mail(
-                subject=subject,
-                message=body_txt,
-                from_email=django_settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[email],
-                fail_silently=False,
-            )
+            _send_brevo_email(email, subject, body_txt, html_content=body_html)
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
-            logger.error(f'Failed to send OTP email to {email}: {e}')
+            logger.error(f'Failed to send OTP email via Brevo to {email}: {e}')
             print(f'\n{"="*50}\nOTP para {identifier} ({tabla}): {code}\n{"="*50}\n')
 
         return Response({'message': 'Si los datos son correctos, recibirás un código en tu correo.'})

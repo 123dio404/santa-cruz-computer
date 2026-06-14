@@ -193,7 +193,7 @@ export function Login() {
     setSuccess('');
 
     if (!forgotIdentifier) {
-      setError('Por favor ingresa tu usuario o correo electrónico');
+      setError('Por favor ingresa tu correo electrónico');
       return;
     }
 
@@ -716,21 +716,21 @@ export function Login() {
               <div className="text-center mb-6">
                 <h2 className="text-xl font-bold text-gray-900">Recuperar Contraseña</h2>
                 <p className="text-sm text-gray-600 mt-2">
-                  Ingresa tu usuario o correo electrónico y enviaremos un código a tu correo registrado
+                  Ingresa tu correo electrónico y enviaremos un código a tu correo registrado
                 </p>
               </div>
 
               <div>
                 <label htmlFor="forgot-identifier" className="block text-sm font-medium text-gray-700 mb-2">
-                  Usuario o correo electrónico
+                  Correo electrónico
                 </label>
                 <input
                   id="forgot-identifier"
-                  type="text"
+                  type="email"
                   value={forgotIdentifier}
                   onChange={(e) => setForgotIdentifier(e.target.value)}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Juan123 o JuanPerez123@gmail.com"
+                  placeholder="JuanPerez123@gmail.com"
                   required
                 />
               </div>
