@@ -261,3 +261,11 @@ EMAIL_USE_SSL      = config('EMAIL_USE_SSL',      default=False, cast=bool)
 EMAIL_HOST_USER    = config('EMAIL_HOST_USER',    default='')
 EMAIL_HOST_PASSWORD= config('EMAIL_HOST_PASSWORD',default='')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='SantaCruz Computer <noreply@santacruz.com>')
+
+# ── Brevo (correos transaccionales vía API HTTP) ───────────────────────────────
+# La clave se obtiene en Brevo → "SMTP y API" → "Claves API".
+# El correo OTP se envía con esta API (ver apps/users/views.py → _send_brevo_email).
+BREVO_API_KEY     = config('BREVO_API_KEY',     default='')
+BREVO_FROM_EMAIL  = config('BREVO_FROM_EMAIL',  default='jcvillarroeld126@ficct.uagrm.edu.bo')
+BREVO_FROM_NAME   = config('BREVO_FROM_NAME',   default='Santa Cruz Computer')
+BREVO_OTP_SUBJECT = config('BREVO_OTP_SUBJECT', default='Código de recuperación - Santa Cruz Computer')
