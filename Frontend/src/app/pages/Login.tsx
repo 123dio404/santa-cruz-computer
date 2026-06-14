@@ -790,7 +790,7 @@ export function Login() {
                   value={resetCode}
                   onChange={(e) => setResetCode(e.target.value)}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                  placeholder="ABC123"
+                  placeholder="Dígitos"
                   required
                 />
               </div>

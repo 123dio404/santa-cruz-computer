@@ -17,13 +17,13 @@ BLOQUEO DE CUENTAS (_failed dict en memoria):
   ADVERTENCIA: _failed se resetea si el servidor se reinicia.
 
 RECUPERACIÓN DE CONTRASEÑA (_otps dict en memoria):
-  Los OTPs son 6 caracteres alfanuméricos en mayúsculas (ej: AB3X9K).
-  Expiran a los 15 minutos. Funcionan para tabla 'usuario' y 'cliente'.
+  Los OTPs son 6 dígitos numéricos (ej: 483920), generados aleatoriamente.
+  Expiran a los 10 minutos. Funcionan para tabla 'usuario' y 'cliente'.
   ADVERTENCIA: _otps se resetea si el servidor se reinicia.
 
 CORREO OTP:
-  Enviado por SMTP usando Resend (smtp.resend.com:465 con SSL).
-  Configurado en .env con EMAIL_HOST_PASSWORD = re_<api_key>.
+  Enviado con el API HTTP de Brevo (ver _send_brevo_email).
+  Configurado en .env con BREVO_API_KEY / BREVO_FROM_EMAIL / BREVO_FROM_NAME.
 """
 import random
 import string
@@ -474,21 +474,29 @@ def _lookup_user_by_identifier(identifier: str):
     Searches usuario first, then cliente.
     """
     from django.db import connection
-    if '@' not in identifier:
-        with connection.cursor() as cursor:
+    is_email = '@' in identifier
+
+    # ── 1. Buscar en usuario (admin / vendedor) — la columna del correo es 'email'
+    with connection.cursor() as cursor:
+        if is_email:
+            cursor.execute(
+                "SELECT idusuario, email FROM usuario WHERE LOWER(email) = LOWER(%s) AND activo = TRUE LIMIT 1",
+                [identifier],
+            )
+        else:
             cursor.execute(
                 "SELECT idusuario, email FROM usuario WHERE username = %s AND activo = TRUE LIMIT 1",
                 [identifier],
             )
-            row = cursor.fetchone()
-        if row:
-            email = row[1] or ''
-            return (row[0], email, 'usuario')
-    # Buscar en cliente por usuario_login o correo
+        row = cursor.fetchone()
+    if row:
+        return (row[0], row[1] or '', 'usuario')
+
+    # ── 2. Buscar en cliente — la columna del correo es 'correo'
     with connection.cursor() as cursor:
-        if '@' in identifier:
+        if is_email:
             cursor.execute(
-                "SELECT idcliente, correo FROM cliente WHERE correo = %s LIMIT 1",
+                "SELECT idcliente, correo FROM cliente WHERE LOWER(correo) = LOWER(%s) LIMIT 1",
                 [identifier],
             )
         else:
@@ -567,9 +575,14 @@ class ForgotPasswordView(APIView):
         if not email:
             return Response({'message': 'Si los datos son correctos, recibirás un código en tu correo.'})
 
-        # Generate 6-character OTP (uppercase letters + digits)
-        characters = string.ascii_uppercase + string.digits
-        code       = ''.join(random.choices(characters, k=6))
+        # Generar OTP de 6 dígitos numéricos, aleatorio.
+        # Se regenera si coincide con el código anterior del mismo usuario
+        # o si todos los dígitos son iguales (ej: 000000) para evitar códigos triviales.
+        previous_code = _otps.get(identifier, {}).get('code')
+        while True:
+            code = ''.join(random.choices(string.digits, k=6))
+            if code != previous_code and len(set(code)) > 1:
+                break
         expires_at = timezone.now() + timedelta(minutes=10)
         _otps[identifier] = {
             'code':      code,
