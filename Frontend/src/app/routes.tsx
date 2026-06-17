@@ -38,6 +38,7 @@ import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
 import { PaymentSuccess } from './pages/PaymentSuccess';
 import { Orders } from './pages/Orders';
+import { Warranties } from './pages/Warranties';
 import { AdminPanel } from './pages/AdminPanel';
 import { AuditLog } from './pages/AuditLog';
 import { Layout } from './components/Layout';
@@ -265,6 +266,23 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['client']}>
         <Layout>
           <Orders />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
+
+  /**
+   * /warranties - Reclamos de Garantía
+   * - Gestión de garantías y reclamos de los clientes
+   * - Aprobar/rechazar reclamos, verificar vigencia, generar retroactivas
+   * - Acceso: Admin, Empleado
+   */
+  {
+    path: '/warranties',
+    element: (
+      <ProtectedRoute allowedRoles={['admin', 'employee']}>
+        <Layout>
+          <Warranties />
         </Layout>
       </ProtectedRoute>
     )

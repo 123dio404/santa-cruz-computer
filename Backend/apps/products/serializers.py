@@ -42,7 +42,7 @@ class ProductoSerializer(serializers.ModelSerializer):
             'nombre', 'marca', 'modelo', 'imagen_url',
             'precio_compra', 'precio_actual',
             'stock_fisico', 'stock_minimo', 'is_low_stock',
-            'descripcion',
+            'descripcion', 'meses_garantia',
         ]
         read_only_fields = ['id']
 

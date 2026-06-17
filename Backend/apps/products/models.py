@@ -54,6 +54,9 @@ class Producto(models.Model):
     stock_fisico  = models.IntegerField(default=0)
     stock_minimo  = models.IntegerField(default=0)
     descripcion   = models.TextField(null=True, blank=True)
+    # Duración de la garantía del producto en meses (0 = sin garantía).
+    # La garantía de cada venta se cuenta desde la fecha de venta + estos meses.
+    meses_garantia = models.IntegerField(default=0)
 
     class Meta:
         managed             = False

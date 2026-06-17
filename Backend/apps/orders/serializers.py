@@ -22,7 +22,7 @@ ALIASES EN VentaSerializer:
   - 'cliente_name' → calculado como nombre + apellido del cliente
 """
 from rest_framework import serializers
-from .models import Venta, DetalleVenta, PagoVenta, Factura
+from .models import Venta, DetalleVenta, PagoVenta, Factura, Garantia
 
 
 # ── Lectura ────────────────────────────────────────────────────────────────────
@@ -87,6 +87,47 @@ class FacturaSerializer(serializers.ModelSerializer):
         model            = Factura
         fields           = ['id', 'venta', 'nro_factura', 'cuf', 'cufd', 'estado_siat', 'fecha_emision']
         read_only_fields = ['id', 'fecha_emision']
+
+
+class GarantiaSerializer(serializers.ModelSerializer):
+    """Lectura de garantías. 'vencida' NO está en BD: se calcula por fecha."""
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    producto_imagen = serializers.ImageField(source='producto.imagen_url', read_only=True)
+    cliente_nombre  = serializers.SerializerMethodField()
+    estado_efectivo = serializers.SerializerMethodField()  # vigente|vencida|reclamada|aprobada|rechazada
+    vigente         = serializers.SerializerMethodField()  # se puede reclamar
+    dias_restantes  = serializers.SerializerMethodField()
+    venta_estado    = serializers.CharField(source='venta.estado', read_only=True)
+
+    class Meta:
+        model  = Garantia
+        fields = [
+            'id', 'venta', 'detalle', 'producto', 'producto_nombre', 'producto_imagen',
+            'cliente', 'cliente_nombre', 'cantidad', 'meses',
+            'fecha_inicio', 'fecha_fin', 'estado', 'estado_efectivo', 'vigente',
+            'dias_restantes', 'motivo_reclamo', 'fecha_reclamo',
+            'resolucion', 'fecha_resolucion', 'venta_estado',
+        ]
+
+    def _hoy(self):
+        from django.utils import timezone
+        return timezone.localdate()
+
+    def get_cliente_nombre(self, obj):
+        if obj.cliente:
+            return f"{obj.cliente.nombre} {obj.cliente.apellido}".strip()
+        return None
+
+    def get_estado_efectivo(self, obj):
+        if obj.estado == 'activa':
+            return 'vigente' if obj.fecha_fin >= self._hoy() else 'vencida'
+        return obj.estado
+
+    def get_vigente(self, obj):
+        return obj.estado == 'activa' and obj.fecha_fin >= self._hoy()
+
+    def get_dias_restantes(self, obj):
+        return max((obj.fecha_fin - self._hoy()).days, 0)
 
 
 # ── Escritura (POST) ────────────────────────────────────────────────────────────
@@ -183,6 +224,10 @@ class VentaCreateSerializer(serializers.ModelSerializer):
             # Crear pagos al final: el trigger ahora compara contra el monto descontado
             for p in pagos_data:
                 PagoVenta.objects.create(venta=venta, **p)
+
+            # Generar garantías de los productos vendidos (1 por ítem con meses_garantia > 0)
+            from .garantia_service import crear_garantias_de_venta
+            crear_garantias_de_venta(venta)
 
             venta.refresh_from_db()
 

@@ -180,6 +180,7 @@ export interface ApiProduct {
   stock_minimo: number;
   estado: string | null;
   descripcion: string | null;
+  meses_garantia: number;
   imagen_url: string | null;
   categoria: number | null;
   categoria_nombre: string | null;
@@ -218,6 +219,31 @@ export interface ApiPago {
   monto: number;
   metodo: string;
   fecha: string;
+}
+
+export interface ApiGarantia {
+  id: number;
+  venta: number;
+  detalle: number;
+  producto: number;
+  producto_nombre: string;
+  producto_imagen: string | null;
+  cliente: number | null;
+  cliente_nombre: string | null;
+  cantidad: number;
+  meses: number;
+  fecha_inicio: string;   // YYYY-MM-DD
+  fecha_fin: string;      // YYYY-MM-DD
+  estado: 'activa' | 'reclamada' | 'aprobada' | 'rechazada';
+  // calculado por el backend: vigente | vencida | reclamada | aprobada | rechazada
+  estado_efectivo: 'vigente' | 'vencida' | 'reclamada' | 'aprobada' | 'rechazada';
+  vigente: boolean;       // true → se puede reclamar
+  dias_restantes: number;
+  motivo_reclamo: string | null;
+  fecha_reclamo: string | null;
+  resolucion: string | null;
+  fecha_resolucion: string | null;
+  venta_estado: string;   // 'pending' | 'completed'
 }
 
 export interface ApiCliente {
@@ -507,6 +533,56 @@ export const stripeAPI = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ session_id: sessionId }),
+    });
+    return handleJson(r);
+  },
+};
+
+// ============ GARANTÍAS ============
+export const garantiasAPI = {
+  // Garantías de un cliente (para "Mis Pedidos")
+  getByCliente: async (clienteId: number): Promise<ApiGarantia[]> => {
+    const r = await fetch(`${API_BASE_URL}/orders/garantias/?cliente=${clienteId}&page_size=1000`);
+    return handlePaginated(r);
+  },
+  // Todas las garantías (panel interno). Opcionalmente filtra por estado.
+  getAll: async (estado?: string): Promise<ApiGarantia[]> => {
+    const q = estado ? `&estado=${estado}` : '';
+    const r = await fetch(`${API_BASE_URL}/orders/garantias/?page_size=1000${q}`);
+    return handlePaginated(r);
+  },
+  // Cliente reporta un problema con el producto
+  reclamar: async (id: number, motivo: string): Promise<ApiGarantia> => {
+    const r = await fetch(`${API_BASE_URL}/orders/garantias/${id}/reclamar/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ motivo }),
+    });
+    return handleJson(r);
+  },
+  // Vendedor/admin: el reclamo procede
+  aprobar: async (id: number, resolucion: string): Promise<ApiGarantia> => {
+    const r = await fetch(`${API_BASE_URL}/orders/garantias/${id}/aprobar/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ resolucion }),
+    });
+    return handleJson(r);
+  },
+  // Vendedor/admin: el reclamo NO procede (producto manipulado/mal uso)
+  rechazar: async (id: number, resolucion: string): Promise<ApiGarantia> => {
+    const r = await fetch(`${API_BASE_URL}/orders/garantias/${id}/rechazar/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ resolucion }),
+    });
+    return handleJson(r);
+  },
+  // Genera las garantías faltantes de ventas anteriores
+  generarRetroactivas: async (): Promise<{ creadas: number }> => {
+    const r = await fetch(`${API_BASE_URL}/orders/garantias/generar-retroactivas/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
     return handleJson(r);
   },
