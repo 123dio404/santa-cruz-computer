@@ -22,7 +22,7 @@ ALIASES EN VentaSerializer:
   - 'cliente_name' → calculado como nombre + apellido del cliente
 """
 from rest_framework import serializers
-from .models import Venta, DetalleVenta, PagoVenta, Factura, Garantia
+from .models import Venta, DetalleVenta, PagoVenta, Factura, Garantia, Resena
 
 
 # ── Lectura ────────────────────────────────────────────────────────────────────
@@ -128,6 +128,24 @@ class GarantiaSerializer(serializers.ModelSerializer):
 
     def get_dias_restantes(self, obj):
         return max((obj.fecha_fin - self._hoy()).days, 0)
+
+
+class ResenaSerializer(serializers.ModelSerializer):
+    """Lectura de reseñas. El nombre se muestra como 'Juan P.' (privacidad)."""
+    cliente_nombre = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Resena
+        fields = ['id', 'venta', 'cliente', 'cliente_nombre',
+                  'puntuacion', 'comentario', 'estado', 'fecha']
+
+    def get_cliente_nombre(self, obj):
+        if not obj.cliente:
+            return 'Cliente'
+        nombre   = obj.cliente.nombre or 'Cliente'
+        apellido = obj.cliente.apellido or ''
+        inicial  = f' {apellido[:1].upper()}.' if apellido else ''
+        return f'{nombre}{inicial}'.strip()
 
 
 # ── Escritura (POST) ────────────────────────────────────────────────────────────

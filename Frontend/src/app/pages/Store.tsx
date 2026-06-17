@@ -18,8 +18,9 @@
  * - El carrito persiste entre sesiones del navegador
  */
 import { useState, useEffect } from 'react';
-import { ShoppingCart, Search, Filter, X, Plus, Minus, Package, Eye } from 'lucide-react';
-import { productosAPI, BACKEND_ROOT_URL, ApiProduct } from '../services/api';
+import { ShoppingCart, Search, Filter, X, Plus, Minus, Package, Eye, Star, MessageSquare } from 'lucide-react';
+import { productosAPI, resenasAPI, BACKEND_ROOT_URL, ApiProduct, ResenasPublicas } from '../services/api';
+import { StarRating } from '../components/StarRating';
 
 interface StoreCartItem {
   productId: number;
@@ -39,13 +40,19 @@ export function Store() {
   const [cartItems, setCartItems] = useState<StoreCartItem[]>([]);
   const [showCart, setShowCart] = useState(false);
   const [detailProduct, setDetailProduct] = useState<ApiProduct | null>(null);
+  const [opiniones, setOpiniones] = useState<ResenasPublicas>({ promedio: 0, total: 0, resenas: [] });
 
   useEffect(() => {
     productosAPI.getAll()
       .then(setProducts)
       .catch(() => alert('Error al cargar productos'))
       .finally(() => setLoading(false));
+    resenasAPI.getPublicas()
+      .then(setOpiniones)
+      .catch(() => { /* sin opiniones */ });
   }, []);
+
+  const formatFecha = (f: string) => new Date(f).toLocaleDateString('es-BO');
 
   useEffect(() => {
     const saved = localStorage.getItem('storeCart');
@@ -113,6 +120,13 @@ export function Store() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tienda</h1>
           <p className="text-gray-600">Explora nuestro catálogo de productos</p>
+          {opiniones.total > 0 && (
+            <div className="flex items-center gap-2 mt-1">
+              <StarRating value={opiniones.promedio} readOnly size={16} />
+              <span className="text-sm font-semibold text-gray-800">{opiniones.promedio.toFixed(1)}</span>
+              <span className="text-sm text-gray-500">· {opiniones.total} opinión{opiniones.total === 1 ? '' : 'es'}</span>
+            </div>
+          )}
         </div>
         <button onClick={() => setShowCart(!showCart)}
           className="relative flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
@@ -263,6 +277,37 @@ export function Store() {
           );
         })}
       </div>
+
+      {/* Opiniones de nuestros clientes */}
+      {opiniones.total > 0 && (
+        <div className="bg-white rounded-xl p-6 border border-gray-200">
+          <div className="flex items-center gap-2 mb-4">
+            <MessageSquare className="w-5 h-5 text-blue-600" />
+            <h2 className="text-lg font-bold text-gray-900">Opiniones de nuestros clientes</h2>
+            <span className="flex items-center gap-1 ml-2 text-sm text-gray-600">
+              <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
+              <span className="font-semibold text-gray-800">{opiniones.promedio.toFixed(1)}</span>
+              ({opiniones.total})
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {opiniones.resenas.map(r => (
+              <div key={r.id} className="border border-gray-100 rounded-lg p-4 bg-gray-50">
+                <div className="flex items-center justify-between mb-1">
+                  <StarRating value={r.puntuacion} readOnly size={16} />
+                  <span className="text-xs text-gray-400">{formatFecha(r.fecha)}</span>
+                </div>
+                {r.comentario && <p className="text-sm text-gray-700 mb-2">"{r.comentario}"</p>}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-gray-900">{r.cliente_nombre}</span>
+                  <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded-full">✔ Compra verificada</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Modal de detalle de producto */}
       {detailProduct && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"

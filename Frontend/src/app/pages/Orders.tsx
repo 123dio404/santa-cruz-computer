@@ -17,16 +17,24 @@
  *   reclamo queda registrado para que el vendedor/admin lo atienda en tienda.
  */
 import { useState, useEffect } from 'react';
-import { Package, Eye, X, FileText, ShieldCheck } from 'lucide-react';
-import { ventasAPI, garantiasAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia } from '../services/api';
+import { Package, Eye, X, FileText, ShieldCheck, Star } from 'lucide-react';
+import { ventasAPI, garantiasAPI, resenasAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia, ApiResena } from '../services/api';
+import { StarRating } from '../components/StarRating';
 import { useAuth } from '../context/AuthContext';
 
 export function Orders() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<ApiVenta[]>([]);
   const [garantias, setGarantias] = useState<ApiGarantia[]>([]);
+  const [resenas, setResenas] = useState<ApiResena[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<ApiVenta | null>(null);
+
+  // Calificación del pedido seleccionado
+  const [ratingValue, setRatingValue] = useState(0);
+  const [ratingComentario, setRatingComentario] = useState('');
+  const [enviandoResena, setEnviandoResena] = useState(false);
+  const [resenaError, setResenaError] = useState('');
 
   // Estado del modal de reclamo
   const [reclamarTarget, setReclamarTarget] = useState<ApiGarantia | null>(null);
@@ -37,15 +45,50 @@ export function Orders() {
   const cargarGarantias = (clienteId: number) =>
     garantiasAPI.getByCliente(clienteId).then(setGarantias).catch(() => setGarantias([]));
 
-  // Al montar el componente, carga las ventas y garantías del cliente logueado
+  const cargarResenas = (clienteId: number) =>
+    resenasAPI.getByCliente(clienteId).then(setResenas).catch(() => setResenas([]));
+
+  // Al montar el componente, carga las ventas, garantías y reseñas del cliente
   useEffect(() => {
     if (!user) return;
     const clienteId = parseInt(user.id);
     Promise.all([
       ventasAPI.getByCliente(clienteId).then(setOrders).catch(() => setOrders([])),
       cargarGarantias(clienteId),
+      cargarResenas(clienteId),
     ]).finally(() => setLoading(false));
   }, [user]);
+
+  // Reseña del pedido (si ya fue calificado)
+  const resenaDeVenta = (ventaId: number) => resenas.find(r => r.venta === ventaId);
+
+  // Abrir detalle: resetear el formulario de calificación
+  const abrirDetalle = (order: ApiVenta) => {
+    setSelectedOrder(order);
+    setRatingValue(0);
+    setRatingComentario('');
+    setResenaError('');
+  };
+
+  const enviarResena = async () => {
+    if (!selectedOrder || !user) return;
+    if (ratingValue < 1) { setResenaError('Selecciona una puntuación de 1 a 5 estrellas.'); return; }
+    setEnviandoResena(true);
+    setResenaError('');
+    try {
+      await resenasAPI.create({
+        cliente: parseInt(user.id),
+        venta: selectedOrder.id,
+        puntuacion: ratingValue,
+        comentario: ratingComentario.trim() || undefined,
+      });
+      await cargarResenas(parseInt(user.id));
+    } catch (err: any) {
+      setResenaError(err.message || 'No se pudo enviar la calificación.');
+    } finally {
+      setEnviandoResena(false);
+    }
+  };
 
   // Mapa: id del detalle (ítem) → su garantía
   const garantiaPorDetalle: Record<number, ApiGarantia> = {};
@@ -149,7 +192,7 @@ export function Orders() {
                     <p className="text-sm text-gray-600">Total</p>
                     <p className="text-xl font-bold text-gray-900">{parseFloat(String(order.total)).toFixed(2)} Bs</p>
                   </div>
-                  <button onClick={() => setSelectedOrder(order)}
+                  <button onClick={() => abrirDetalle(order)}
                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
                     <Eye className="w-4 h-4" /> Ver Detalles
                   </button>
@@ -294,6 +337,51 @@ export function Orders() {
                   Descargar Factura PDF
                 </button>
               )}
+
+              {/* Califica tu compra (solo pedidos completados) */}
+              {selectedOrder.status === 'completed' && (() => {
+                const yaResena = resenaDeVenta(selectedOrder.id);
+                return (
+                  <div className="border-t border-gray-200 pt-4">
+                    <h3 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                      <Star className="w-5 h-5 text-amber-400 fill-amber-400" />
+                      {yaResena ? 'Tu calificación' : 'Califica tu compra'}
+                    </h3>
+                    {yaResena ? (
+                      <div className="bg-amber-50 rounded-lg p-4 space-y-2">
+                        <StarRating value={yaResena.puntuacion} readOnly size={22} />
+                        {yaResena.comentario && (
+                          <p className="text-sm text-gray-700 italic">"{yaResena.comentario}"</p>
+                        )}
+                        <p className="text-xs text-gray-500">Gracias por tu opinión. La calificación no se puede modificar.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-sm text-gray-600">Cuéntanos sobre la atención y la calidad del producto.</p>
+                        {resenaError && (
+                          <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{resenaError}</div>
+                        )}
+                        <StarRating value={ratingValue} onChange={setRatingValue} size={28} />
+                        <textarea
+                          value={ratingComentario}
+                          onChange={e => setRatingComentario(e.target.value)}
+                          rows={3}
+                          placeholder="Comentario (opcional): atención, calidad del producto..."
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                        <button
+                          onClick={enviarResena}
+                          disabled={enviandoResena}
+                          className="w-full px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 disabled:opacity-50"
+                        >
+                          {enviandoResena ? 'Enviando...' : 'Enviar calificación'}
+                        </button>
+                        <p className="text-xs text-gray-400">Una vez enviada, la calificación no se puede modificar.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>

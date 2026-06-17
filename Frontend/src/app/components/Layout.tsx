@@ -35,6 +35,7 @@ import {
   Lock,
   Shield,
   ShieldCheck,
+  MessageSquare,
   ClipboardList,
   History,
   Clock,
@@ -162,6 +163,7 @@ export function Layout({ children }: LayoutProps) {
       { path: '/sales-history', icon: History, label: 'Historial de Ventas' },
       { path: '/suppliers', icon: Building2, label: 'Proveedores' },
       { path: '/warranties', icon: ShieldCheck, label: 'Reclamos de Garantía' },
+      { path: '/reviews', icon: MessageSquare, label: 'Reseñas' },
       { path: '/users', icon: Users, label: 'Usuarios' },
       { path: '/audit-log', icon: ClipboardList, label: 'Bitácora' }
     ];
