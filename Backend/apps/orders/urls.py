@@ -15,6 +15,7 @@ ENDPOINTS DISPONIBLES (bajo /api/v1/orders/):
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import VentaViewSet, PagoVentaViewSet, DetalleVentaViewSet, FacturaPDFView
+from .stripe_views import CreateCheckoutSessionView, ConfirmCheckoutView
 
 router = DefaultRouter()
 router.register(r'ventas',   VentaViewSet,       basename='venta')
@@ -24,4 +25,6 @@ router.register(r'detalles', DetalleVentaViewSet, basename='detalle-venta')
 urlpatterns = [
     path('', include(router.urls)),
     path('ventas/<int:venta_id>/pdf/', FacturaPDFView.as_view(), name='factura-pdf'),
+    path('stripe/create-checkout-session/', CreateCheckoutSessionView.as_view(), name='stripe-create-session'),
+    path('stripe/confirm/', ConfirmCheckoutView.as_view(), name='stripe-confirm'),
 ]

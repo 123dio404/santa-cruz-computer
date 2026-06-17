@@ -269,3 +269,15 @@ BREVO_API_KEY     = config('BREVO_API_KEY',     default='')
 BREVO_FROM_EMAIL  = config('BREVO_FROM_EMAIL',  default='jcvillarroeld126@ficct.uagrm.edu.bo')
 BREVO_FROM_NAME   = config('BREVO_FROM_NAME',   default='Santa Cruz Computer')
 BREVO_OTP_SUBJECT = config('BREVO_OTP_SUBJECT', default='Código de recuperación - Santa Cruz Computer')
+
+# ── Stripe (pago con tarjeta vía Checkout hospedado) ───────────────────────────
+# Claves en el dashboard de Stripe → Desarrolladores → Claves de API (modo TEST).
+# El cobro se hace en la moneda STRIPE_CURRENCY (bob = Bolivianos).
+# Flujo: el cliente paga en Stripe → al volver, se confirma la sesión y RECIÉN se
+# crea la venta (estado 'pending') → ver apps/orders/stripe_views.py.
+STRIPE_SECRET_KEY      = config('STRIPE_SECRET_KEY',      default='')
+STRIPE_PUBLISHABLE_KEY = config('STRIPE_PUBLISHABLE_KEY', default='')
+STRIPE_WEBHOOK_SECRET  = config('STRIPE_WEBHOOK_SECRET',  default='')
+STRIPE_CURRENCY        = config('STRIPE_CURRENCY',        default='bob')
+# URL del frontend (Vercel) para las páginas de retorno success/cancel de Stripe.
+FRONTEND_URL           = config('FRONTEND_URL',           default='https://santa-cruz-computer.vercel.app')

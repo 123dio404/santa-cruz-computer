@@ -17,8 +17,8 @@
  * - qr   → 'transferencia' en el backend
  */
 import { useEffect, useState } from 'react';
-import { Trash2, CreditCard, QrCode, ShoppingBag, X, Crown } from 'lucide-react';
-import { ventasAPI, clientesAPI, BACKEND_ROOT_URL, ApiCliente } from '../services/api';
+import { Trash2, CreditCard, ShoppingBag, X, Crown } from 'lucide-react';
+import { clientesAPI, stripeAPI, BACKEND_ROOT_URL, ApiCliente } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 interface StoreCartItem {
@@ -30,16 +30,14 @@ interface StoreCartItem {
   imagen_url?: string | null;
 }
 
-type PaymentMethod = 'card' | 'qr';
-
-const metodoPagoMap: Record<PaymentMethod, string> = { card: 'tarjeta', qr: 'transferencia' };
+// Único método de pago: tarjeta vía Stripe (el QR se retiró por no estar disponible).
+type PaymentMethod = 'card';
 
 export function Cart() {
   const { user } = useAuth();
   const [cartItems, setCartItems] = useState<StoreCartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
-  const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [processingOrder, setProcessingOrder] = useState(false);
   const [cliente, setCliente] = useState<ApiCliente | null>(null);
   const [aplicarDescuento, setAplicarDescuento] = useState(true);
@@ -88,43 +86,34 @@ export function Cart() {
   const total = subtotal - descuentoAplicado;
   const esVip = !!cliente?.es_vip;
 
-  // Envía el pedido al backend y limpia el carrito si fue exitoso
+  // Procesa el pedido: crea la sesión de Stripe y redirige a la pasarela de pago.
+  // La venta se crea al volver del pago (página /payment-success). El carrito se
+  // conserva por si el cliente cancela el pago.
   const handleCheckout = async () => {
     if (!user) { alert('Debes iniciar sesión para realizar un pedido'); return; }
     setProcessingOrder(true);
     try {
-      await ventasAPI.create({
+      const detalles = cartItems.map(i => ({
+        producto: i.productId,
+        cantidad: i.quantity,
+        precio_unitario: i.price,
+      }));
+
+      const { url } = await stripeAPI.createCheckoutSession({
         cliente: parseInt(user.id),
-        usuario: null,
-        pedido_online: true,
-        detalles: cartItems.map(i => ({
-          producto: i.productId,
-          cantidad: i.quantity,
-          precio_unitario: i.price,
-        })),
-        pagos: [{ monto: total, metodo: metodoPagoMap[paymentMethod] }],
+        detalles,
+        monto: total,
         aplicar_descuento_vip: aplicarDescuento,
       });
-      setShowCheckoutModal(false);
-      setShowSuccessModal(true);
-      // Refresca info del cliente para que el descuento_disponible quede actualizado
-      if (user?.id) {
-        clientesAPI.getById(parseInt(user.id)).then(setCliente).catch(() => {});
-      }
-      setTimeout(() => {
-        saveCart([]);
-        setShowSuccessModal(false);
-      }, 2500);
+      window.location.href = url;
     } catch (err) {
-      alert(`Error al procesar pedido: ${err instanceof Error ? err.message : 'Error desconocido'}`);
-    } finally {
+      alert(`Error al procesar el pago: ${err instanceof Error ? err.message : 'Error desconocido'}`);
       setProcessingOrder(false);
     }
   };
 
   const paymentMethods = [
     { value: 'card' as PaymentMethod, label: 'Tarjeta de Crédito/Débito', icon: CreditCard },
-    { value: 'qr' as PaymentMethod, label: 'Código QR', icon: QrCode },
   ];
 
   return (
@@ -296,21 +285,12 @@ export function Cart() {
               </div>
               <button onClick={handleCheckout} disabled={processingOrder}
                 className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50">
-                {processingOrder ? 'Procesando...' : 'Confirmar Pedido'}
+                {processingOrder ? 'Procesando...' : 'Pagar con tarjeta'}
               </button>
+              <p className="mt-2 text-xs text-center text-gray-500">
+                Serás redirigido a la pasarela segura de Stripe para completar el pago.
+              </p>
             </div>
-          </div>
-        </div>
-      )}
-
-      {showSuccessModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-8 max-w-sm mx-4 text-center">
-            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <ShoppingBag className="w-8 h-8 text-green-600" />
-            </div>
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">¡Pedido Confirmado!</h3>
-            <p className="text-gray-600">Tu pedido ha sido procesado exitosamente</p>
           </div>
         </div>
       )}
