@@ -17,7 +17,7 @@ import { ReactNode, useState, useEffect, FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { useAudit } from '../context/AuditContext';
-import { productosAPI, ventasAPI, authAPI, clearAuthToken, BACKEND_ROOT_URL, ApiProduct, ApiVenta } from '../services/api';
+import { productosAPI, ventasAPI, garantiasAPI, authAPI, clearAuthToken, BACKEND_ROOT_URL, ApiProduct, ApiVenta, ApiGarantia } from '../services/api';
 import {
   LayoutDashboard,
   Package,
@@ -34,6 +34,7 @@ import {
   AlertTriangle,
   Lock,
   Shield,
+  ShieldCheck,
   ClipboardList,
   History,
   Clock,
@@ -56,6 +57,7 @@ export function Layout({ children }: LayoutProps) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [lowStockProducts, setLowStockProducts] = useState<ApiProduct[]>([]);
   const [pendingVentas, setPendingVentas]       = useState<ApiVenta[]>([]);
+  const [pendingReclamos, setPendingReclamos]   = useState<ApiGarantia[]>([]);
   const [changePwOpen, setChangePwOpen]         = useState(false);
   const [cpCurrent, setCpCurrent]               = useState('');
   const [cpNew, setCpNew]                       = useState('');
@@ -75,6 +77,9 @@ export function Layout({ children }: LayoutProps) {
     ventasAPI.getAll()
       .then(ventas => setPendingVentas(ventas.filter(v => v.status === 'pending')))
       .catch(() => {});
+    garantiasAPI.getAll('reclamada')
+      .then(setPendingReclamos)
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -83,7 +88,7 @@ export function Layout({ children }: LayoutProps) {
     return () => clearInterval(interval);
   }, [user]);
 
-  const totalNotifications = lowStockProducts.length + pendingVentas.length;
+  const totalNotifications = lowStockProducts.length + pendingVentas.length + pendingReclamos.length;
 
   const handleLogout = () => {
     // Registrar logout en auditoría
@@ -156,6 +161,7 @@ export function Layout({ children }: LayoutProps) {
       { path: '/sales', icon: ShoppingCart, label: 'Nueva Venta' },
       { path: '/sales-history', icon: History, label: 'Historial de Ventas' },
       { path: '/suppliers', icon: Building2, label: 'Proveedores' },
+      { path: '/warranties', icon: ShieldCheck, label: 'Reclamos de Garantía' },
       { path: '/users', icon: Users, label: 'Usuarios' },
       { path: '/audit-log', icon: ClipboardList, label: 'Bitácora' }
     ];
@@ -164,6 +170,7 @@ export function Layout({ children }: LayoutProps) {
       { path: '/inventory', icon: Warehouse, label: 'Inventario' },
       { path: '/sales', icon: ShoppingCart, label: 'Nueva Venta' },
       { path: '/sales-history', icon: History, label: 'Historial de Ventas' },
+      { path: '/warranties', icon: ShieldCheck, label: 'Reclamos de Garantía' },
     ];
 
     const clientItems = [
@@ -456,6 +463,61 @@ export function Layout({ children }: LayoutProps) {
                               className="text-xs text-blue-600 hover:underline"
                             >
                               Ver todos los pendientes →
+                            </Link>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ── Sección: Reclamos de Garantía ── */}
+                      <div className="border-t border-gray-200">
+                        <div className="flex items-center gap-2 px-4 py-2 bg-amber-50">
+                          <ShieldCheck className="w-4 h-4 text-amber-600" />
+                          <span className="text-xs font-semibold text-amber-700 uppercase tracking-wide">
+                            Reclamos de Garantía ({pendingReclamos.length})
+                          </span>
+                        </div>
+                        {pendingReclamos.length === 0 ? (
+                          <div className="px-4 py-3 text-xs text-gray-400 flex items-center gap-2">
+                            <CheckCircle className="w-4 h-4 text-green-500" /> Sin reclamos pendientes
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-gray-100">
+                            {pendingReclamos.map(g => (
+                              <Link
+                                key={g.id}
+                                to="/warranties"
+                                onClick={() => setNotificationsOpen(false)}
+                                className="flex items-center gap-3 px-4 py-3 hover:bg-amber-50 transition-colors"
+                              >
+                                <div className="p-2 bg-amber-100 rounded-lg flex-shrink-0">
+                                  <ShieldCheck className="w-4 h-4 text-amber-600" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-semibold text-gray-900 truncate">
+                                    {g.producto_nombre}
+                                  </p>
+                                  <p className="text-xs text-gray-500 truncate">
+                                    {g.cliente_nombre || 'Cliente'} · Pedido #{g.venta}
+                                  </p>
+                                  {g.motivo_reclamo && (
+                                    <p className="text-xs text-gray-400 truncate">{g.motivo_reclamo}</p>
+                                  )}
+                                </div>
+                                <span className="text-xs text-amber-700 font-medium flex-shrink-0">
+                                  Reclamo
+                                </span>
+                              </Link>
+                            ))}
+                          </div>
+                        )}
+                        {pendingReclamos.length > 0 && (
+                          <div className="px-4 py-2">
+                            <Link
+                              to="/warranties"
+                              onClick={() => setNotificationsOpen(false)}
+                              className="text-xs text-blue-600 hover:underline"
+                            >
+                              Ver todos los reclamos →
                             </Link>
                           </div>
                         )}

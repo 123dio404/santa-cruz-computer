@@ -7,32 +7,49 @@
  * FUNCIONALIDADES:
  * - Lista de pedidos con estado (Pendiente, Completado, Cancelado)
  * - Detalle expandido de cada pedido (productos, cantidades, pago)
+ * - Garantía por producto (fechas + estado) y botón "Reclamar" en pedidos entregados
  * - Descarga de factura PDF para pedidos completados
  *
- * FLUJO:
- * 1. Al cargar, consulta las ventas del cliente actual al backend
- * 2. Muestra la lista ordenada por fecha
- * 3. Al hacer clic en "Ver Detalles", abre un modal con toda la info del pedido
+ * GARANTÍAS:
+ * - Cada producto comprado tiene su garantía (si el producto la define en meses).
+ * - El botón "Reclamar" solo aparece en pedidos Completados (ya entregados) y
+ *   mientras la garantía esté vigente. El cliente describe el problema y el
+ *   reclamo queda registrado para que el vendedor/admin lo atienda en tienda.
  */
 import { useState, useEffect } from 'react';
-import { Package, Eye, X, FileText } from 'lucide-react';
-import { ventasAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta } from '../services/api';
+import { Package, Eye, X, FileText, ShieldCheck } from 'lucide-react';
+import { ventasAPI, garantiasAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 export function Orders() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<ApiVenta[]>([]);
+  const [garantias, setGarantias] = useState<ApiGarantia[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<ApiVenta | null>(null);
 
-  // Al montar el componente, carga las ventas del cliente logueado
+  // Estado del modal de reclamo
+  const [reclamarTarget, setReclamarTarget] = useState<ApiGarantia | null>(null);
+  const [motivo, setMotivo] = useState('');
+  const [reclamando, setReclamando] = useState(false);
+  const [reclamoError, setReclamoError] = useState('');
+
+  const cargarGarantias = (clienteId: number) =>
+    garantiasAPI.getByCliente(clienteId).then(setGarantias).catch(() => setGarantias([]));
+
+  // Al montar el componente, carga las ventas y garantías del cliente logueado
   useEffect(() => {
     if (!user) return;
-    ventasAPI.getByCliente(parseInt(user.id))
-      .then(setOrders)
-      .catch(() => setOrders([]))
-      .finally(() => setLoading(false));
+    const clienteId = parseInt(user.id);
+    Promise.all([
+      ventasAPI.getByCliente(clienteId).then(setOrders).catch(() => setOrders([])),
+      cargarGarantias(clienteId),
+    ]).finally(() => setLoading(false));
   }, [user]);
+
+  // Mapa: id del detalle (ítem) → su garantía
+  const garantiaPorDetalle: Record<number, ApiGarantia> = {};
+  garantias.forEach(g => { garantiaPorDetalle[g.detalle] = g; });
 
   // Devuelve una etiqueta visual de color según el estado del pedido
   const getStatusBadge = (status: string) => {
@@ -46,6 +63,54 @@ export function Orders() {
     return <span className={`px-3 py-1 rounded-full text-sm font-medium ${s.color}`}>{s.label}</span>;
   };
 
+  // Texto del tiempo restante de garantía
+  const restante = (dias: number) => {
+    if (dias <= 0) return '';
+    if (dias < 30) return `quedan ${dias} día${dias === 1 ? '' : 's'}`;
+    const meses = Math.round(dias / 30);
+    return `quedan ~${meses} mes${meses === 1 ? '' : 'es'}`;
+  };
+
+  // Badge visual del estado de la garantía
+  const garantiaBadge = (g: ApiGarantia) => {
+    const map: Record<string, { label: string; color: string }> = {
+      vigente:   { label: `🟢 Vigente${g.dias_restantes ? ` (${restante(g.dias_restantes)})` : ''}`, color: 'text-green-700' },
+      vencida:   { label: '⚪ Vencida', color: 'text-gray-500' },
+      reclamada: { label: '🟡 En reclamo', color: 'text-yellow-700' },
+      aprobada:  { label: '🔵 Reclamo aprobado', color: 'text-blue-700' },
+      rechazada: { label: '🔴 Reclamo rechazado', color: 'text-red-600' },
+    };
+    const s = map[g.estado_efectivo] ?? { label: g.estado_efectivo, color: 'text-gray-600' };
+    return <span className={`text-xs font-semibold ${s.color}`}>{s.label}</span>;
+  };
+
+  const formatFecha = (f: string) => {
+    const [y, m, d] = f.split('-');
+    return `${d}/${m}/${y.slice(2)}`;
+  };
+
+  const abrirReclamo = (g: ApiGarantia) => {
+    setReclamarTarget(g);
+    setMotivo('');
+    setReclamoError('');
+  };
+
+  const enviarReclamo = async () => {
+    if (!reclamarTarget) return;
+    if (!motivo.trim()) { setReclamoError('Describe el problema del producto.'); return; }
+    setReclamando(true);
+    setReclamoError('');
+    try {
+      await garantiasAPI.reclamar(reclamarTarget.id, motivo.trim());
+      if (user) await cargarGarantias(parseInt(user.id));
+      setReclamarTarget(null);
+    } catch (err: any) {
+      setReclamoError(err.message || 'No se pudo enviar el reclamo.');
+    } finally {
+      setReclamando(false);
+    }
+  };
+
   if (loading) return (
     <div className="flex items-center justify-center h-64">
       <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
@@ -56,7 +121,7 @@ export function Orders() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Mis Pedidos</h1>
-        <p className="text-gray-600">Historial de compras y seguimiento</p>
+        <p className="text-gray-600">Historial de compras, garantías y seguimiento</p>
       </div>
 
       {orders.length === 0 ? (
@@ -133,27 +198,58 @@ export function Orders() {
                 <div>
                   <h3 className="font-semibold text-gray-900 mb-3">Productos</h3>
                   <div className="space-y-3">
-                    {selectedOrder.detalles.map(d => (
-                      <div key={d.id} className="flex gap-4 p-4 bg-gray-50 rounded-lg">
-                        <div className="w-14 h-14 bg-blue-50 rounded-lg flex items-center justify-center overflow-hidden flex-shrink-0">
-                          {d.producto_imagen
-                            ? <img
-                                src={d.producto_imagen.startsWith('http') ? d.producto_imagen : `${BACKEND_ROOT_URL}${d.producto_imagen}`}
-                                alt={d.producto_name}
-                                className="w-full h-full object-cover"
-                              />
-                            : <Package className="w-6 h-6 text-blue-300" />
-                          }
-                        </div>
-                        <div className="flex-1">
-                          <h4 className="font-medium text-gray-900">{d.producto_name}</h4>
-                          <div className="flex items-center justify-between mt-1">
-                            <span className="text-sm text-gray-600">Cantidad: {d.cantidad}</span>
-                            <span className="font-semibold text-gray-900">{parseFloat(String(d.subtotal)).toFixed(2)} Bs</span>
+                    {selectedOrder.detalles.map(d => {
+                      const g = garantiaPorDetalle[d.id];
+                      return (
+                        <div key={d.id} className="flex gap-4 p-4 bg-gray-50 rounded-lg">
+                          <div className="w-14 h-14 bg-blue-50 rounded-lg flex items-center justify-center overflow-hidden flex-shrink-0">
+                            {d.producto_imagen
+                              ? <img
+                                  src={d.producto_imagen.startsWith('http') ? d.producto_imagen : `${BACKEND_ROOT_URL}${d.producto_imagen}`}
+                                  alt={d.producto_name}
+                                  className="w-full h-full object-cover"
+                                />
+                              : <Package className="w-6 h-6 text-blue-300" />
+                            }
+                          </div>
+                          <div className="flex-1">
+                            <h4 className="font-medium text-gray-900">{d.producto_name}</h4>
+                            <div className="flex items-center justify-between mt-1">
+                              <span className="text-sm text-gray-600">Cantidad: {d.cantidad}</span>
+                              <span className="font-semibold text-gray-900">{parseFloat(String(d.subtotal)).toFixed(2)} Bs</span>
+                            </div>
+
+                            {/* Garantía del producto */}
+                            {g && (
+                              <div className="mt-2 pt-2 border-t border-gray-200">
+                                <div className="flex items-center gap-2 text-xs text-gray-600">
+                                  <ShieldCheck className="w-4 h-4 text-blue-600" />
+                                  <span>Garantía: {formatFecha(g.fecha_inicio)} – {formatFecha(g.fecha_fin)}</span>
+                                </div>
+                                <div className="flex items-center justify-between mt-1">
+                                  {garantiaBadge(g)}
+                                  {/* Reclamar: solo en pedidos entregados y con garantía vigente */}
+                                  {selectedOrder.status === 'completed' && g.vigente && (
+                                    <button
+                                      onClick={() => abrirReclamo(g)}
+                                      className="text-xs px-3 py-1 bg-amber-500 text-white rounded-lg hover:bg-amber-600 font-medium"
+                                    >
+                                      Reclamar
+                                    </button>
+                                  )}
+                                </div>
+                                {/* Resolución del vendedor/admin */}
+                                {(g.estado === 'aprobada' || g.estado === 'rechazada') && g.resolucion && (
+                                  <p className="text-xs text-gray-600 mt-1">
+                                    <span className="font-medium">Respuesta:</span> {g.resolucion}
+                                  </p>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -198,6 +294,58 @@ export function Orders() {
                   Descargar Factura PDF
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de reclamo de garantía */}
+      {reclamarTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 rounded-lg">
+                  <ShieldCheck className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Reclamar garantía</h2>
+                  <p className="text-xs text-gray-500">{reclamarTarget.producto_nombre}</p>
+                </div>
+              </div>
+              <button onClick={() => setReclamarTarget(null)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600">
+                Garantía vigente hasta <span className="font-medium">{formatFecha(reclamarTarget.fecha_fin)}</span>.
+                Describe el problema del producto (defecto de fábrica, falla, etc.).
+              </p>
+              {reclamoError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{reclamoError}</div>
+              )}
+              <textarea
+                value={motivo}
+                onChange={e => setMotivo(e.target.value)}
+                rows={4}
+                placeholder="Ej: La pantalla parpadea y se apaga sola."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <div className="bg-amber-50 p-3 rounded-lg text-xs text-amber-800">
+                Tras enviar el reclamo, acércate a la tienda con el producto y tu comprobante.
+                El equipo revisará tu caso.
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setReclamarTarget(null)}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                  Cancelar
+                </button>
+                <button onClick={enviarReclamo} disabled={reclamando}
+                  className="flex-1 px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 disabled:opacity-50">
+                  {reclamando ? 'Enviando...' : 'Enviar reclamo'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

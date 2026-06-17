@@ -36,6 +36,7 @@ type FormData = {
   stock_minimo: string;
   categoria: string;
   descripcion: string;
+  meses_garantia: string;
 };
 
 const emptyForm: FormData = {
@@ -43,6 +44,7 @@ const emptyForm: FormData = {
   price: '', precio_compra: '', precio_venta: '',
   stock_minimo: '0', categoria: '',
   descripcion: '',
+  meses_garantia: '0',
 };
 
 export function Products() {
@@ -95,6 +97,7 @@ export function Products() {
         stock_minimo:  String(product.stock_minimo ?? 0),
         categoria:     product.categoria      ? String(product.categoria)      : '',
         descripcion:   product.descripcion    ?? '',
+        meses_garantia: String(product.meses_garantia ?? 0),
       });
       setImagePreview(product.imagen_url ?? null);
     } else {
@@ -137,6 +140,7 @@ export function Products() {
         stock_minimo:  parseInt(formData.stock_minimo) || 0,
         categoria:     formData.categoria     ? parseInt(formData.categoria)      : null,
         descripcion:   formData.descripcion   || null,
+        meses_garantia: parseInt(formData.meses_garantia) || 0,
       };
 
       if (editingProduct) {
@@ -461,16 +465,28 @@ export function Products() {
                 {textField('precio_venta', 'Precio venta (Bs) *', 'number', true)}
               </div>
 
-              {/* Stock mínimo */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Stock mínimo
-                  <span className="ml-1 text-xs text-gray-400 font-normal">(alerta)</span>
-                </label>
-                <input type="number" min="0" value={formData.stock_minimo}
-                  onChange={e => setFormData({ ...formData, stock_minimo: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+              {/* Stock mínimo | Garantía */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Stock mínimo
+                    <span className="ml-1 text-xs text-gray-400 font-normal">(alerta)</span>
+                  </label>
+                  <input type="number" min="0" value={formData.stock_minimo}
+                    onChange={e => setFormData({ ...formData, stock_minimo: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Garantía (meses)
+                    <span className="ml-1 text-xs text-gray-400 font-normal">(0 = sin garantía)</span>
+                  </label>
+                  <input type="number" min="0" value={formData.meses_garantia}
+                    onChange={e => setFormData({ ...formData, meses_garantia: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
               </div>
 
               <div className="flex gap-3 pt-2">

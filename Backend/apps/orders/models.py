@@ -180,3 +180,56 @@ class Factura(models.Model):
 
     def __str__(self):
         return f"Factura #{self.nro_factura} — Venta #{self.venta_id}"
+
+
+class EstadoGarantia(models.TextChoices):
+    ACTIVA    = 'activa',    'Activa'        # vigente o vencida (se calcula por fecha)
+    RECLAMADA = 'reclamada', 'Reclamada'     # el cliente reportó un problema
+    APROBADA  = 'aprobada',  'Aprobada'      # el reclamo procede (se cubre)
+    RECHAZADA = 'rechazada', 'Rechazada'     # no procede (manipulación/mal uso)
+
+
+class Garantia(models.Model):
+    """
+    Garantía de un producto vendido (una por ítem de la venta).
+
+    La garantía nace al CREAR la venta: fecha_inicio = fecha_venta y
+    fecha_fin = fecha_inicio + producto.meses_garantia. El estado 'vencida'
+    NO se guarda: se deriva comparando fecha_fin con la fecha actual.
+    Solo se persisten los estados explícitos (activa/reclamada/aprobada/rechazada).
+    """
+    id               = models.AutoField(primary_key=True, db_column='idgarantia')
+    venta            = models.ForeignKey(
+        Venta, on_delete=models.CASCADE, db_column='idventa', related_name='garantias',
+    )
+    detalle          = models.OneToOneField(
+        DetalleVenta, on_delete=models.CASCADE, db_column='iddetalle', related_name='garantia',
+    )
+    producto         = models.ForeignKey(
+        Producto, on_delete=models.DO_NOTHING, db_column='idproducto', related_name='garantias',
+    )
+    cliente          = models.ForeignKey(
+        Cliente, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idcliente', related_name='garantias',
+    )
+    cantidad         = models.IntegerField(default=1)
+    meses            = models.IntegerField(default=0)
+    fecha_inicio     = models.DateField()
+    fecha_fin        = models.DateField()
+    estado           = models.CharField(
+        max_length=20, choices=EstadoGarantia.choices, default=EstadoGarantia.ACTIVA,
+    )
+    motivo_reclamo   = models.TextField(null=True, blank=True)
+    fecha_reclamo    = models.DateTimeField(null=True, blank=True)
+    resolucion       = models.TextField(null=True, blank=True)
+    fecha_resolucion = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        managed             = False
+        db_table            = 'garantia'
+        verbose_name        = 'Garantía'
+        verbose_name_plural = 'Garantías'
+        ordering            = ['-id']
+
+    def __str__(self):
+        return f"Garantía #{self.id} — Venta #{self.venta_id}"

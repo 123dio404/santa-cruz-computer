@@ -39,10 +39,10 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.filters import OrderingFilter
-from .models import Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat
+from .models import Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia
 from .serializers import (
     VentaSerializer, VentaCreateSerializer,
-    DetalleVentaSerializer, PagoVentaSerializer,
+    DetalleVentaSerializer, PagoVentaSerializer, GarantiaSerializer,
 )
 from apps.audit.utils import log_action, actor_from_request
 
@@ -53,7 +53,7 @@ class FacturaPDFView(View):
         try:
             venta = (
                 Venta.objects
-                .prefetch_related('detalles__producto', 'pagos')
+                .prefetch_related('detalles__producto', 'pagos', 'garantias')
                 .select_related('cliente', 'usuario')
                 .get(pk=venta_id)
             )
@@ -171,6 +171,10 @@ class FacturaPDFView(View):
         header_style = ParagraphStyle('th', fontSize=9, fontName='Helvetica-Bold', textColor=colors.white, alignment=TA_CENTER)
         cell_style   = ParagraphStyle('td', fontSize=9, fontName='Helvetica',      textColor=colors.HexColor('#333333'))
         cell_right   = ParagraphStyle('tdr', fontSize=9, fontName='Helvetica',     textColor=colors.HexColor('#333333'), alignment=TA_RIGHT)
+        cell_garantia = ParagraphStyle('tdg', fontSize=7, fontName='Helvetica-Oblique', textColor=colors.HexColor('#1e3a5f'), spaceBefore=1)
+
+        # Garantías de esta venta, indexadas por el ítem (detalle) al que pertenecen
+        garantias_por_detalle = {g.detalle_id: g for g in venta.garantias.all()}
 
         tabla_data = [[
             Paragraph('#',              header_style),
@@ -182,9 +186,17 @@ class FacturaPDFView(View):
 
         for i, det in enumerate(venta.detalles.all(), 1):
             nombre_prod = det.producto.nombre if det.producto else f'Producto #{det.producto_id}'
+            # Celda del producto: nombre + (si tiene) línea de garantía
+            prod_cell = [Paragraph(nombre_prod, cell_style)]
+            g = garantias_por_detalle.get(det.id)
+            if g:
+                prod_cell.append(Paragraph(
+                    f'Garantía: {g.fecha_inicio.strftime("%d/%m/%y")} – {g.fecha_fin.strftime("%d/%m/%y")}',
+                    cell_garantia,
+                ))
             tabla_data.append([
                 Paragraph(str(i), cell_style),
-                Paragraph(nombre_prod, cell_style),
+                prod_cell,
                 Paragraph(str(det.cantidad), cell_style),
                 Paragraph(f'Bs {float(det.precio_unitario):.2f}', cell_right),
                 Paragraph(f'Bs {float(det.subtotal):.2f}', cell_right),
@@ -365,3 +377,112 @@ class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class   = DetalleVentaSerializer
     permission_classes = []
     filter_backends    = []
+
+
+class GarantiaViewSet(viewsets.ModelViewSet):
+    """
+    Garantías de productos vendidos.
+
+      GET  /garantias/?cliente=<id>   → garantías del cliente (Mis Pedidos)
+      GET  /garantias/?estado=<...>   → filtro para el panel interno
+      PATCH /garantias/{id}/reclamar/ → cliente reporta un problema (motivo)
+      PATCH /garantias/{id}/aprobar/  → vendedor/admin: el reclamo procede
+      PATCH /garantias/{id}/rechazar/ → vendedor/admin: no procede (motivo)
+      POST /garantias/generar-retroactivas/ → genera las faltantes de ventas pasadas
+    """
+    queryset           = Garantia.objects.select_related('producto', 'cliente', 'venta', 'detalle')
+    serializer_class   = GarantiaSerializer
+    permission_classes = []
+    http_method_names  = ['get', 'patch', 'post', 'head', 'options']
+    filter_backends    = [OrderingFilter]
+    ordering_fields    = ['id', 'fecha_fin', 'fecha_reclamo']
+    ordering           = ['-id']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        cliente_id = self.request.query_params.get('cliente')
+        estado     = self.request.query_params.get('estado')
+        if cliente_id:
+            qs = qs.filter(cliente_id=cliente_id)
+        if estado:
+            qs = qs.filter(estado=estado)
+        return qs
+
+    @action(detail=True, methods=['patch'])
+    def reclamar(self, request, pk=None):
+        from django.utils import timezone
+        g = self.get_object()
+        if g.estado != 'activa':
+            return Response({'error': 'Esta garantía ya tiene un reclamo registrado.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if g.fecha_fin < timezone.localdate():
+            return Response({'error': 'La garantía está vencida; no se puede reclamar.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        motivo = (request.data.get('motivo') or '').strip()
+        if not motivo:
+            return Response({'error': 'Debes describir el motivo del reclamo.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        g.estado         = 'reclamada'
+        g.motivo_reclamo = motivo
+        g.fecha_reclamo  = timezone.now()
+        g.save(update_fields=['estado', 'motivo_reclamo', 'fecha_reclamo'])
+        # El cliente NO es un Usuario → idusuario None para no romper la FK de bitácora
+        cli    = g.cliente
+        nombre = f'{cli.nombre} {cli.apellido}'.strip() if cli else 'Cliente'
+        prod   = g.producto.nombre if g.producto else 'producto'
+        log_action(
+            accion='UPDATE', modulo='Garantía',
+            descripcion=(f'Cliente {nombre} reclamó la garantía #{g.id} '
+                         f'({prod}, pedido #{g.venta_id}). Motivo: {motivo}'),
+            usuario_id=None, usuario_nombre=nombre, usuario_rol='client',
+            ip_address=request.META.get('REMOTE_ADDR'),
+        )
+        g.refresh_from_db()
+        return Response(GarantiaSerializer(g).data)
+
+    @action(detail=True, methods=['patch'])
+    def aprobar(self, request, pk=None):
+        return self._resolver(request, aprobar=True)
+
+    @action(detail=True, methods=['patch'])
+    def rechazar(self, request, pk=None):
+        return self._resolver(request, aprobar=False)
+
+    def _resolver(self, request, aprobar):
+        from django.utils import timezone
+        g = self.get_object()
+        if g.estado != 'reclamada':
+            return Response({'error': 'Solo se pueden resolver garantías que están reclamadas.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        resolucion = (request.data.get('resolucion') or '').strip()
+        if not aprobar and not resolucion:
+            return Response({'error': 'Debes indicar el motivo del rechazo.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        g.estado           = 'aprobada' if aprobar else 'rechazada'
+        g.resolucion       = resolucion
+        g.fecha_resolucion = timezone.now()
+        g.save(update_fields=['estado', 'resolucion', 'fecha_resolucion'])
+        actor = actor_from_request(request)
+        verbo = 'APROBÓ' if aprobar else 'RECHAZÓ'
+        prod  = g.producto.nombre if g.producto else 'producto'
+        extra = f' — motivo: {resolucion}' if resolucion else ''
+        log_action(
+            accion='UPDATE', modulo='Garantía',
+            descripcion=(f'{actor.get("usuario_nombre") or "Usuario"} {verbo} el reclamo de '
+                         f'garantía #{g.id} ({prod}, pedido #{g.venta_id}){extra}'),
+            **actor,
+        )
+        g.refresh_from_db()
+        return Response(GarantiaSerializer(g).data)
+
+    @action(detail=False, methods=['post'], url_path='generar-retroactivas')
+    def generar_retroactivas(self, request):
+        from .garantia_service import generar_garantias_faltantes
+        total = generar_garantias_faltantes()
+        actor = actor_from_request(request)
+        log_action(
+            accion='UPDATE', modulo='Garantía',
+            descripcion=f'Se generaron {total} garantía(s) de ventas anteriores.',
+            **actor,
+        )
+        return Response({'creadas': total})
