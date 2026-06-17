@@ -14,6 +14,13 @@ def log_action(*, accion: str, modulo: str, descripcion: str,
     from django.db import connection
     try:
         with connection.cursor() as cursor:
+            # idusuario referencia la tabla 'usuario' (personal interno). Los clientes
+            # NO están ahí (viven en 'cliente'), así que si el id no existe como usuario
+            # se guarda NULL para no violar la FK; el nombre y rol del actor igual quedan.
+            if usuario_id is not None:
+                cursor.execute("SELECT 1 FROM usuario WHERE idusuario = %s", [usuario_id])
+                if cursor.fetchone() is None:
+                    usuario_id = None
             cursor.execute(
                 "INSERT INTO bitacora "
                 "(idusuario, usuario_nombre, usuario_rol, accion, modulo, descripcion, ip_address, fecha) "
