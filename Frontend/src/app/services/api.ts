@@ -485,6 +485,33 @@ export const ventasAPI = {
   },
 };
 
+// ============ STRIPE (pago con tarjeta) ============
+export const stripeAPI = {
+  // Crea la sesión de pago en Stripe y devuelve la URL hospedada. NO crea la venta aún.
+  createCheckoutSession: async (data: {
+    cliente: number;
+    detalles: { producto: number; cantidad: number; precio_unitario: number }[];
+    monto: number;
+    aplicar_descuento_vip: boolean;
+  }): Promise<{ url: string; session_id: string }> => {
+    const r = await fetch(`${API_BASE_URL}/orders/stripe/create-checkout-session/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data),
+    });
+    return handleJson(r);
+  },
+  // Confirma el pago al volver de Stripe; el backend verifica y crea la venta (pending).
+  confirm: async (sessionId: string): Promise<ApiVenta> => {
+    const r = await fetch(`${API_BASE_URL}/orders/stripe/confirm/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    return handleJson(r);
+  },
+};
+
 // ============ DETALLES ============
 export const detallesVentaAPI = {
   getAll: async (): Promise<ApiDetalleVenta[]> => {

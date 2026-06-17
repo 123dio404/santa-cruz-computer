@@ -36,6 +36,7 @@ import { Users } from './pages/Users';
 import { Suppliers } from './pages/Suppliers';
 import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
+import { PaymentSuccess } from './pages/PaymentSuccess';
 import { Orders } from './pages/Orders';
 import { AdminPanel } from './pages/AdminPanel';
 import { AuditLog } from './pages/AuditLog';
@@ -229,6 +230,23 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['client']}>
         <Layout>
           <Cart />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
+
+  /**
+   * /payment-success - Retorno del pago con Stripe
+   * - Aquí llega el cliente tras pagar con tarjeta (success_url de Stripe)
+   * - Confirma el pago, crea el pedido (pending) y limpia el carrito
+   * - Acceso: Solo Clientes
+   */
+  {
+    path: '/payment-success',
+    element: (
+      <ProtectedRoute allowedRoles={['client']}>
+        <Layout>
+          <PaymentSuccess />
         </Layout>
       </ProtectedRoute>
     )
