@@ -246,6 +246,23 @@ export interface ApiGarantia {
   venta_estado: string;   // 'pending' | 'completed'
 }
 
+export interface ApiResena {
+  id: number;
+  venta: number;
+  cliente: number;
+  cliente_nombre: string;   // "Juan P."
+  puntuacion: number;       // 1-5
+  comentario: string | null;
+  estado: 'visible' | 'oculto';
+  fecha: string;
+}
+
+export interface ResenasPublicas {
+  promedio: number;
+  total: number;
+  resenas: ApiResena[];
+}
+
 export interface ApiCliente {
   id: number;
   nombre: string;
@@ -582,6 +599,49 @@ export const garantiasAPI = {
   generarRetroactivas: async (): Promise<{ creadas: number }> => {
     const r = await fetch(`${API_BASE_URL}/orders/garantias/generar-retroactivas/`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    });
+    return handleJson(r);
+  },
+};
+
+// ============ RESEÑAS ============
+export const resenasAPI = {
+  // Reseñas de un cliente (para saber qué pedidos ya calificó en Mis Pedidos)
+  getByCliente: async (clienteId: number): Promise<ApiResena[]> => {
+    const r = await fetch(`${API_BASE_URL}/orders/resenas/?cliente=${clienteId}&page_size=1000`);
+    return handlePaginated(r);
+  },
+  // Todas las reseñas incl. ocultas (moderación admin)
+  getAll: async (): Promise<ApiResena[]> => {
+    const r = await fetch(`${API_BASE_URL}/orders/resenas/?page_size=1000`);
+    return handlePaginated(r);
+  },
+  // Resumen público para la Tienda: promedio + total + lista visible
+  getPublicas: async (): Promise<ResenasPublicas> => {
+    const r = await fetch(`${API_BASE_URL}/orders/resenas/publicas/`);
+    return handleJson(r);
+  },
+  // Cliente califica una venta completada (1 por venta)
+  create: async (data: { cliente: number; venta: number; puntuacion: number; comentario?: string }): Promise<ApiResena> => {
+    const r = await fetch(`${API_BASE_URL}/orders/resenas/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data),
+    });
+    return handleJson(r);
+  },
+  // Admin: ocultar / mostrar (moderación)
+  ocultar: async (id: number): Promise<ApiResena> => {
+    const r = await fetch(`${API_BASE_URL}/orders/resenas/${id}/ocultar/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    });
+    return handleJson(r);
+  },
+  mostrar: async (id: number): Promise<ApiResena> => {
+    const r = await fetch(`${API_BASE_URL}/orders/resenas/${id}/mostrar/`, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
     return handleJson(r);

@@ -233,3 +233,41 @@ class Garantia(models.Model):
 
     def __str__(self):
         return f"Garantía #{self.id} — Venta #{self.venta_id}"
+
+
+class EstadoResena(models.TextChoices):
+    VISIBLE = 'visible', 'Visible'
+    OCULTO  = 'oculto',  'Oculto'
+
+
+class Resena(models.Model):
+    """
+    Reseña de una venta completa (opinión de la tienda: atención + producto).
+
+    1 por venta (UNIQUE), solo de ventas completadas del propio cliente.
+    Una vez creada es fija (no se edita ni borra por el cliente). El admin
+    puede ocultarla (estado='oculto') sin perder el registro.
+    """
+    id          = models.AutoField(primary_key=True, db_column='idresena')
+    venta       = models.OneToOneField(
+        Venta, on_delete=models.CASCADE, db_column='idventa', related_name='resena',
+    )
+    cliente     = models.ForeignKey(
+        Cliente, on_delete=models.CASCADE, db_column='idcliente', related_name='resenas',
+    )
+    puntuacion  = models.SmallIntegerField()
+    comentario  = models.TextField(null=True, blank=True)
+    estado      = models.CharField(
+        max_length=20, choices=EstadoResena.choices, default=EstadoResena.VISIBLE,
+    )
+    fecha       = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed             = False
+        db_table            = 'resena'
+        verbose_name        = 'Reseña'
+        verbose_name_plural = 'Reseñas'
+        ordering            = ['-id']
+
+    def __str__(self):
+        return f"Reseña #{self.id} — Venta #{self.venta_id} ({self.puntuacion}★)"

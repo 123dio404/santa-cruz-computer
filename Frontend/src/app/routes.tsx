@@ -39,6 +39,7 @@ import { Cart } from './pages/Cart';
 import { PaymentSuccess } from './pages/PaymentSuccess';
 import { Orders } from './pages/Orders';
 import { Warranties } from './pages/Warranties';
+import { Reviews } from './pages/Reviews';
 import { AdminPanel } from './pages/AdminPanel';
 import { AuditLog } from './pages/AuditLog';
 import { Layout } from './components/Layout';
@@ -283,6 +284,22 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['admin', 'employee']}>
         <Layout>
           <Warranties />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
+
+  /**
+   * /reviews - Reseñas (moderación)
+   * - El admin ve todas las reseñas y puede ocultar/mostrar las inapropiadas
+   * - Acceso: Solo Admin
+   */
+  {
+    path: '/reviews',
+    element: (
+      <ProtectedRoute allowedRoles={['admin']}>
+        <Layout>
+          <Reviews />
         </Layout>
       </ProtectedRoute>
     )

@@ -39,10 +39,10 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.filters import OrderingFilter
-from .models import Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia
+from .models import Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia, Resena
 from .serializers import (
     VentaSerializer, VentaCreateSerializer,
-    DetalleVentaSerializer, PagoVentaSerializer, GarantiaSerializer,
+    DetalleVentaSerializer, PagoVentaSerializer, GarantiaSerializer, ResenaSerializer,
 )
 from apps.audit.utils import log_action, actor_from_request
 
@@ -486,3 +486,106 @@ class GarantiaViewSet(viewsets.ModelViewSet):
             **actor,
         )
         return Response({'creadas': total})
+
+
+class ResenaViewSet(viewsets.ModelViewSet):
+    """
+    Reseñas de la tienda (opinión por venta: atención + producto).
+
+      GET  /resenas/?cliente=<id>  → reseñas del cliente (para Mis Pedidos)
+      GET  /resenas/               → todas, incl. ocultas (moderación admin)
+      GET  /resenas/publicas/      → promedio + total + lista visible (Tienda)
+      POST /resenas/               → crear (valida venta del cliente y completada)
+      PATCH /resenas/{id}/ocultar/ → admin oculta
+      PATCH /resenas/{id}/mostrar/ → admin vuelve a mostrar
+    """
+    queryset           = Resena.objects.select_related('cliente', 'venta')
+    serializer_class   = ResenaSerializer
+    permission_classes = []
+    http_method_names  = ['get', 'post', 'patch', 'head', 'options']
+    filter_backends    = [OrderingFilter]
+    ordering_fields    = ['id', 'fecha', 'puntuacion']
+    ordering           = ['-id']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        cliente_id = self.request.query_params.get('cliente')
+        if cliente_id:
+            qs = qs.filter(cliente_id=cliente_id)
+        return qs
+
+    @action(detail=False, methods=['get'])
+    def publicas(self, request):
+        """Resumen para la Tienda: promedio, total y lista de reseñas visibles."""
+        from django.db.models import Avg, Count
+        visibles = Resena.objects.filter(estado='visible').select_related('cliente')
+        agg = visibles.aggregate(prom=Avg('puntuacion'), tot=Count('id'))
+        return Response({
+            'promedio': round(agg['prom'], 1) if agg['prom'] is not None else 0,
+            'total':    agg['tot'] or 0,
+            'resenas':  ResenaSerializer(visibles, many=True).data,
+        })
+
+    def create(self, request, *args, **kwargs):
+        cliente_id = request.data.get('cliente')
+        venta_id   = request.data.get('venta')
+        try:
+            puntuacion = int(request.data.get('puntuacion'))
+        except (TypeError, ValueError):
+            return Response({'error': 'La puntuación es obligatoria (1 a 5).'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        comentario = (request.data.get('comentario') or '').strip() or None
+
+        if puntuacion < 1 or puntuacion > 5:
+            return Response({'error': 'La puntuación debe estar entre 1 y 5.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            venta = Venta.objects.get(pk=venta_id)
+        except Venta.DoesNotExist:
+            return Response({'error': 'Venta no encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+        if str(venta.cliente_id) != str(cliente_id):
+            return Response({'error': 'Esta venta no pertenece al cliente.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        if venta.estado != 'completed':
+            return Response({'error': 'Solo puedes calificar pedidos completados.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if Resena.objects.filter(venta_id=venta_id).exists():
+            return Response({'error': 'Esta compra ya tiene una calificación.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        resena = Resena.objects.create(
+            venta_id=venta_id, cliente_id=cliente_id,
+            puntuacion=puntuacion, comentario=comentario, estado='visible',
+        )
+        cli    = resena.cliente
+        nombre = f'{cli.nombre} {cli.apellido}'.strip() if cli else 'Cliente'
+        log_action(
+            accion='CREATE', modulo='Reseña',
+            descripcion=(f'Cliente {nombre} calificó la venta #{venta_id} con '
+                         f'{puntuacion}★{(" — " + comentario) if comentario else ""}'),
+            usuario_id=None, usuario_nombre=nombre, usuario_rol='client',
+            ip_address=request.META.get('REMOTE_ADDR'),
+        )
+        return Response(ResenaSerializer(resena).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['patch'])
+    def ocultar(self, request, pk=None):
+        return self._moderar(request, 'oculto')
+
+    @action(detail=True, methods=['patch'])
+    def mostrar(self, request, pk=None):
+        return self._moderar(request, 'visible')
+
+    def _moderar(self, request, nuevo_estado):
+        r = self.get_object()
+        r.estado = nuevo_estado
+        r.save(update_fields=['estado'])
+        actor = actor_from_request(request)
+        verbo = 'ocultó' if nuevo_estado == 'oculto' else 'volvió a mostrar'
+        log_action(
+            accion='UPDATE', modulo='Reseña',
+            descripcion=(f'{actor.get("usuario_nombre") or "Admin"} {verbo} la reseña '
+                         f'#{r.id} (venta #{r.venta_id})'),
+            **actor,
+        )
+        return Response(ResenaSerializer(r).data)
