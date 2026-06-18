@@ -281,3 +281,11 @@ STRIPE_WEBHOOK_SECRET  = config('STRIPE_WEBHOOK_SECRET',  default='')
 STRIPE_CURRENCY        = config('STRIPE_CURRENCY',        default='bob')
 # URL del frontend (Vercel) para las páginas de retorno success/cancel de Stripe.
 FRONTEND_URL           = config('FRONTEND_URL',           default='https://santa-cruz-computer.vercel.app')
+
+# ── Gemini (IA de Google para interpretar comandos de voz) ─────────────────────
+# La clave se obtiene gratis en https://aistudio.google.com/apikey (formato AQ...).
+# Se usa SOLO como respaldo: el frontend primero intenta entender el comando por
+# reglas; si no puede, manda el texto a este backend y consulta a Gemini.
+# Ver apps/orders/voz_views.py. La clave nunca sale al frontend.
+GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
+GEMINI_MODEL   = config('GEMINI_MODEL',   default='gemini-2.0-flash')

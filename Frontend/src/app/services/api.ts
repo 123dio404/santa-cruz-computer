@@ -648,6 +648,24 @@ export const resenasAPI = {
   },
 };
 
+// ============ VOZ (interpretación de comandos con Gemini) ============
+export type VozReporte = 'almacen' | 'entradas' | 'salidas' | 'ventas' | 'compras';
+export interface VozIntencion {
+  reporte: VozReporte | null;
+  formato: 'excel' | 'pdf';
+}
+export const vozAPI = {
+  // Respaldo: si las reglas del frontend no entienden el comando, Gemini lo interpreta
+  interpretar: async (texto: string): Promise<VozIntencion> => {
+    const r = await fetch(`${API_BASE_URL}/orders/voz-intencion/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ texto }),
+    });
+    return handleJson(r);
+  },
+};
+
 // ============ DETALLES ============
 export const detallesVentaAPI = {
   getAll: async (): Promise<ApiDetalleVenta[]> => {
