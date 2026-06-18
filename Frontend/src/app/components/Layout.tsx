@@ -18,6 +18,7 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { useAudit } from '../context/AuditContext';
 import { productosAPI, ventasAPI, garantiasAPI, authAPI, clearAuthToken, BACKEND_ROOT_URL, ApiProduct, ApiVenta, ApiGarantia } from '../services/api';
+import { VoiceAssistant } from './VoiceAssistant';
 import {
   LayoutDashboard,
   Package,
@@ -542,6 +543,9 @@ export function Layout({ children }: LayoutProps) {
           {children}
         </main>
       </div>
+
+      {/* Asistente de voz para reportes — solo admin */}
+      {user?.role === 'admin' && <VoiceAssistant />}
 
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
