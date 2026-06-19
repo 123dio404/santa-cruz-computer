@@ -2,46 +2,186 @@
  * vozReportes.ts - Generación de reportes disparada por voz
  *
  * Centraliza, para el asistente de voz (solo admin):
- *  1. parseIntent(texto): reglas locales que detectan reporte + formato sin IA.
- *  2. generarReporte(reporte, formato): trae los datos con las APIs existentes
- *     y exporta en Excel (reusa exportToExcel) o PDF (helper local estilo print).
+ *  1. parseIntent(texto): reglas locales que detectan reporte + formato + periodo
+ *     (mes, rango de días, "hoy", "este mes", "este año"…) y rankings, sin IA.
+ *  2. requiereIA(texto, intencion): decide si conviene confirmar con Gemini
+ *     (cuando hay palabras de fecha/ranking que las reglas no resolvieron).
+ *  3. generarReporte(reporte, formato, rango): trae los datos con las APIs
+ *     existentes, los filtra por rango de fechas y exporta en Excel, PDF o ambos.
  *
- * Reportes soportados: almacen | entradas | salidas | ventas | compras.
+ * Reportes: almacen | entradas | salidas | ventas | compras
+ *           | top_vendidos | top_comprados | top_clientes | top_proveedores.
  * Funciona desde cualquier pantalla porque trae sus propios datos.
  */
 import { productosAPI, ventasAPI, comprasAPI } from '../services/api';
-import type { VozReporte, VozIntencion } from '../services/api';
+import type { VozReporte, VozFormato, VozIntencion } from '../services/api';
 import { exportToExcel } from './exportExcel';
 
 export const REPORTE_LABEL: Record<VozReporte, string> = {
-  almacen:  'Almacén (stock)',
-  entradas: 'Entradas de stock',
-  salidas:  'Salidas de stock',
-  ventas:   'Ventas',
-  compras:  'Compras a proveedores',
+  almacen:         'Almacén (stock)',
+  entradas:        'Entradas de stock',
+  salidas:         'Salidas de stock',
+  ventas:          'Ventas',
+  compras:         'Compras a proveedores',
+  top_vendidos:    'Productos más vendidos',
+  top_comprados:   'Productos más comprados',
+  top_clientes:    'Clientes más frecuentes',
+  top_proveedores: 'Proveedores con más compras',
 };
 
-// ── 1. Reglas locales (sin IA) ───────────────────────────────────────────────
-export function parseIntent(textoRaw: string): VozIntencion | null {
-  const t = textoRaw.toLowerCase();
+export type Rango = { desde?: string | null; hasta?: string | null };
 
-  // Formato: pdf si lo menciona; excel por defecto
-  const formato: 'excel' | 'pdf' = /\bpdf\b/.test(t) ? 'pdf' : 'excel';
+// Quita acentos y pasa a minúsculas para que las reglas sean tolerantes a la voz.
+const DIACRITICOS = /[̀-ͯ]/g;
+const norm = (s: string) =>
+  s.toLowerCase().normalize('NFD').replace(DIACRITICOS, '');
 
-  let reporte: VozReporte | null = null;
-  // El orden importa: "compras"/"ventas" antes que entradas/salidas genéricas
-  if (/\b(compra|compras|proveedor|proveedores)\b/.test(t)) reporte = 'compras';
-  else if (/\b(venta|ventas|vendido|vendidas?)\b/.test(t)) reporte = 'ventas';
-  else if (/\b(entrada|entradas|ingreso|ingresos)\b/.test(t)) reporte = 'entradas';
-  else if (/\b(salida|salidas|egreso|egresos)\b/.test(t)) reporte = 'salidas';
-  else if (/\b(almac[eé]n|inventario|stock|producto|productos|existencias?)\b/.test(t)) reporte = 'almacen';
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
-  if (!reporte) return null;
-  return { reporte, formato };
+const isoOf = (y: number, m: number, d: number) =>
+  `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+const ultimoDia = (y: number, m1: number) => new Date(y, m1, 0).getDate();
+
+// ── 1. Detección de periodo (fechas) sin IA ───────────────────────────────────
+function parseFechas(t: string): Rango | null {
+  const now = new Date();
+  const Y = now.getFullYear();
+  const hoy = isoOf(Y, now.getMonth() + 1, now.getDate());
+
+  if (/\bhoy\b/.test(t)) return { desde: hoy, hasta: hoy };
+  if (/\bayer\b/.test(t)) {
+    const d = new Date(now); d.setDate(d.getDate() - 1);
+    const i = isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    return { desde: i, hasta: i };
+  }
+
+  let m: RegExpMatchArray | null;
+  if ((m = t.match(/ultim\w*\s+(\d{1,3})\s+dias/))) {
+    const n = Math.max(1, parseInt(m[1], 10));
+    const d = new Date(now); d.setDate(d.getDate() - (n - 1));
+    return { desde: isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate()), hasta: hoy };
+  }
+  if (/(esta semana|ultima semana|semana pasada)/.test(t)) {
+    const d = new Date(now); d.setDate(d.getDate() - 6);
+    return { desde: isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate()), hasta: hoy };
+  }
+
+  const idxMes = (name: string) => {
+    const i = MESES.indexOf(name);
+    if (i >= 0) return i + 1;
+    return name === 'setiembre' ? 9 : -1;
+  };
+
+  // "del 1 al 15 de junio [de 2025]"
+  if ((m = t.match(/del\s+(\d{1,2})\s+al\s+(\d{1,2})\s+de\s+([a-z]+)(?:\s+(?:de\s+)?(20\d{2}))?/))) {
+    const mi = idxMes(m[3]);
+    if (mi > 0) {
+      const yy = m[4] ? parseInt(m[4], 10) : Y;
+      const d1 = Math.min(+m[1], +m[2]);
+      const d2 = Math.min(Math.max(+m[1], +m[2]), ultimoDia(yy, mi));
+      return { desde: isoOf(yy, mi, d1), hasta: isoOf(yy, mi, d2) };
+    }
+  }
+
+  // Mes nombrado ("mayo", "mayo de 2025") → mes completo
+  for (let i = 0; i < MESES.length; i++) {
+    if (new RegExp(`\\b${MESES[i]}\\b`).test(t) || (i === 8 && /\bsetiembre\b/.test(t))) {
+      const ym = t.match(/\b(20\d{2})\b/);
+      const yy = ym ? parseInt(ym[1], 10) : Y;
+      const mi = i + 1;
+      return { desde: isoOf(yy, mi, 1), hasta: isoOf(yy, mi, ultimoDia(yy, mi)) };
+    }
+  }
+
+  if (/(este mes|mes actual)/.test(t)) {
+    const mi = now.getMonth() + 1;
+    return { desde: isoOf(Y, mi, 1), hasta: isoOf(Y, mi, ultimoDia(Y, mi)) };
+  }
+  if (/(este ano|ano actual)/.test(t)) return { desde: isoOf(Y, 1, 1), hasta: isoOf(Y, 12, 31) };
+  const ym = t.match(/\b(20\d{2})\b/);
+  if (ym) { const yy = parseInt(ym[1], 10); return { desde: isoOf(yy, 1, 1), hasta: isoOf(yy, 12, 31) }; }
+
+  return null;
 }
 
-const hoyISO = () => new Date().toISOString().split('T')[0];
-const fechaBO = (f: string) => new Date(f).toLocaleDateString('es-BO');
+// ── 2. Reglas locales (reporte + formato + periodo) ───────────────────────────
+export function parseIntent(textoRaw: string): VozIntencion | null {
+  const t = norm(textoRaw);
+
+  // Formato: "ambos" si pide los dos; pdf si lo menciona; excel por defecto.
+  let formato: VozFormato = 'excel';
+  if (/(ambos|los dos|excel y pdf|pdf y excel|en excel y|y en pdf)/.test(t)) formato = 'ambos';
+  else if (/\bpdf\b/.test(t)) formato = 'pdf';
+
+  const tieneRanking = /(mas|mayor|top|frecuente|mejor)/.test(t);
+  let reporte: VozReporte | null = null;
+
+  // Rankings primero (más específicos que los listados normales).
+  if (tieneRanking && /proveedor/.test(t)) reporte = 'top_proveedores';
+  else if (tieneRanking && /cliente/.test(t)) reporte = 'top_clientes';
+  else if (tieneRanking && /(vendid|vendi|vendio|vende|venta)/.test(t)) reporte = 'top_vendidos';
+  else if (tieneRanking && /(comprad|compre|compro|compr)/.test(t) && /(producto|articulo|item)/.test(t)) reporte = 'top_comprados';
+
+  // Listados normales (orden: compras/ventas antes que entradas/salidas genéricas).
+  if (!reporte) {
+    if (/\b(compra|compras|proveedor|proveedores)\b/.test(t)) reporte = 'compras';
+    else if (/\b(venta|ventas|vendido|vendidas?)\b/.test(t)) reporte = 'ventas';
+    else if (/\b(entrada|entradas|ingreso|ingresos)\b/.test(t)) reporte = 'entradas';
+    else if (/\b(salida|salidas|egreso|egresos)\b/.test(t)) reporte = 'salidas';
+    else if (/\b(almacen|inventario|stock|producto|productos|existencias?)\b/.test(t)) reporte = 'almacen';
+  }
+
+  if (!reporte) return null;
+  const rango = parseFechas(t);
+  return { reporte, formato, desde: rango?.desde ?? null, hasta: rango?.hasta ?? null };
+}
+
+// ¿Conviene confirmar con Gemini? Cuando hay pistas de fecha/ranking sin resolver.
+const HINT_TEMPORAL = /(mes|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|semana|dia|dias|hoy|ayer|ano|trimestre|del \d)/;
+const HINT_RANKING = /(mas|mayor|top|frecuente|menos|mejor)/;
+export function requiereIA(textoRaw: string, intencion: VozIntencion | null): boolean {
+  const t = norm(textoRaw);
+  const tieneRango = !!(intencion && (intencion.desde || intencion.hasta));
+  const esRanking = !!(intencion?.reporte && intencion.reporte.startsWith('top_'));
+  if (HINT_TEMPORAL.test(t) && !tieneRango) return true;
+  if (HINT_RANKING.test(t) && !esRanking) return true;
+  return false;
+}
+
+// ── Helpers de fecha / periodo ────────────────────────────────────────────────
+const hoyISO = () => {
+  const d = new Date();
+  return isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate());
+};
+const isoToBO = (iso: string) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+const fechaBO = (f: string) => isoToBO((f || '').slice(0, 10));
+
+function enRango(fechaRaw: string, rango?: Rango): boolean {
+  if (!rango || (!rango.desde && !rango.hasta)) return true;
+  const f = (fechaRaw || '').slice(0, 10);
+  if (rango.desde && f < rango.desde) return false;
+  if (rango.hasta && f > rango.hasta) return false;
+  return true;
+}
+
+function periodoLabel(rango?: Rango): string | null {
+  if (!rango || (!rango.desde && !rango.hasta)) return null;
+  if (rango.desde && rango.hasta) return `${isoToBO(rango.desde)} a ${isoToBO(rango.hasta)}`;
+  if (rango.desde) return `desde ${isoToBO(rango.desde)}`;
+  return `hasta ${isoToBO(rango.hasta!)}`;
+}
+
+function metaPeriodo(rango: Rango | undefined, count: number): { label: string; value: string }[] {
+  const m: { label: string; value: string }[] = [];
+  const p = periodoLabel(rango);
+  if (p) m.push({ label: 'Periodo', value: p });
+  m.push({ label: 'Filas', value: String(count) });
+  return m;
+}
+
+const sufijo = (r?: Rango) =>
+  (r && (r.desde || r.hasta)) ? `_${r.desde || 'inicio'}_a_${r.hasta || 'fin'}` : `_${hoyISO()}`;
 
 // ── Helper PDF (misma estética que los reportes existentes, vía window.print) ──
 function triggerPDF(
@@ -93,7 +233,7 @@ function triggerPDF(
   setTimeout(() => win.print(), 300);
 }
 
-// ── 2. Generadores de reportes ───────────────────────────────────────────────
+// ── 3. Generadores de reportes ───────────────────────────────────────────────
 
 async function reporteAlmacen(formato: 'excel' | 'pdf') {
   const productos = await productosAPI.getAll();
@@ -124,59 +264,57 @@ async function reporteAlmacen(formato: 'excel' | 'pdf') {
   }
 }
 
-async function reporteEntradas(formato: 'excel' | 'pdf') {
-  const compras = await comprasAPI.getAll();
+async function reporteEntradas(formato: 'excel' | 'pdf', rango?: Rango) {
+  const compras = (await comprasAPI.getAll()).filter(c => enRango(c.fecha_compra, rango));
   const rowsBase: { compra: number; fecha: string; proveedor: string; producto: string; cantidad: number }[] = [];
   compras.forEach(c => (c.detalles ?? []).forEach(d => rowsBase.push({
     compra: c.id, fecha: c.fecha_compra, proveedor: c.proveedor_nombre,
     producto: d.producto_nombre, cantidad: d.cantidad,
   })));
-  if (rowsBase.length === 0) throw new Error('No hay entradas de stock registradas.');
+  if (rowsBase.length === 0) throw new Error('No hay entradas de stock en el periodo indicado.');
   const total = rowsBase.reduce((s, r) => s + r.cantidad, 0);
   const headers = ['# Compra', 'Fecha', 'Proveedor', 'Producto', 'Cantidad'];
 
   if (formato === 'excel') {
     const rows: (string | number)[][] = rowsBase.map(r => [`#${r.compra}`, fechaBO(r.fecha), r.proveedor, r.producto, r.cantidad]);
     exportToExcel({
-      filename: `reporte_entrada_stock_${hoyISO()}`, sheetName: 'Entrada Stock', headers, rows,
+      filename: `reporte_entrada_stock${sufijo(rango)}`, sheetName: 'Entrada Stock', headers, rows,
       totalRow: ['', '', '', 'TOTAL UNIDADES INGRESADAS', total],
     });
   } else {
     const rows = rowsBase.map(r => [`#${r.compra}`, fechaBO(r.fecha), r.proveedor, r.producto, `+${r.cantidad}`]);
-    triggerPDF('Reporte de Entrada de Stock',
-      [{ label: 'Total líneas', value: String(rowsBase.length) }],
+    triggerPDF('Reporte de Entrada de Stock', metaPeriodo(rango, rowsBase.length),
       headers, rows, 'TOTAL UNIDADES INGRESADAS', `+${total}`);
   }
 }
 
-async function reporteSalidas(formato: 'excel' | 'pdf') {
-  const ventas = await ventasAPI.getAll();
+async function reporteSalidas(formato: 'excel' | 'pdf', rango?: Rango) {
+  const ventas = (await ventasAPI.getAll()).filter(v => enRango(v.fecha, rango));
   const rowsBase: { venta: number; fecha: string; cliente: string; producto: string; cantidad: number }[] = [];
   ventas.forEach(v => (v.detalles ?? []).forEach(d => rowsBase.push({
     venta: v.id, fecha: v.fecha, cliente: v.cliente_name || 'Consumidor Final',
     producto: d.producto_name || `Producto #${d.producto}`, cantidad: d.cantidad,
   })));
-  if (rowsBase.length === 0) throw new Error('No hay salidas de stock registradas.');
+  if (rowsBase.length === 0) throw new Error('No hay salidas de stock en el periodo indicado.');
   const total = rowsBase.reduce((s, r) => s + r.cantidad, 0);
   const headers = ['# Venta', 'Fecha', 'Cliente', 'Producto', 'Cantidad'];
 
   if (formato === 'excel') {
     const rows: (string | number)[][] = rowsBase.map(r => [`#${r.venta}`, fechaBO(r.fecha), r.cliente, r.producto, r.cantidad]);
     exportToExcel({
-      filename: `reporte_salida_stock_${hoyISO()}`, sheetName: 'Salida Stock', headers, rows,
+      filename: `reporte_salida_stock${sufijo(rango)}`, sheetName: 'Salida Stock', headers, rows,
       totalRow: ['', '', '', 'TOTAL UNIDADES VENDIDAS', total],
     });
   } else {
     const rows = rowsBase.map(r => [`#${r.venta}`, fechaBO(r.fecha), r.cliente, r.producto, `-${r.cantidad}`]);
-    triggerPDF('Reporte de Salida de Stock',
-      [{ label: 'Total líneas', value: String(rowsBase.length) }],
+    triggerPDF('Reporte de Salida de Stock', metaPeriodo(rango, rowsBase.length),
       headers, rows, 'TOTAL UNIDADES VENDIDAS', `-${total}`);
   }
 }
 
-async function reporteVentas(formato: 'excel' | 'pdf') {
-  const ventas = await ventasAPI.getAll();
-  if (ventas.length === 0) throw new Error('No hay ventas registradas.');
+async function reporteVentas(formato: 'excel' | 'pdf', rango?: Rango) {
+  const ventas = (await ventasAPI.getAll()).filter(v => enRango(v.fecha, rango));
+  if (ventas.length === 0) throw new Error('No hay ventas en el periodo indicado.');
   const total = ventas.reduce((s, v) => s + parseFloat(String(v.total ?? 0)), 0);
   const headers = ['# Venta', 'Fecha', 'Cliente', 'Estado', 'Total (Bs)'];
   const estadoLabel = (s: string) => (s === 'completed' ? 'Completada' : s === 'pending' ? 'Pendiente' : s);
@@ -187,7 +325,7 @@ async function reporteVentas(formato: 'excel' | 'pdf') {
       estadoLabel(v.status), Number(parseFloat(String(v.total ?? 0)).toFixed(2)),
     ]);
     exportToExcel({
-      filename: `reporte_ventas_${hoyISO()}`, sheetName: 'Ventas', headers, rows,
+      filename: `reporte_ventas${sufijo(rango)}`, sheetName: 'Ventas', headers, rows,
       totalRow: ['', '', '', 'TOTAL (Bs)', Number(total.toFixed(2))],
     });
   } else {
@@ -195,20 +333,19 @@ async function reporteVentas(formato: 'excel' | 'pdf') {
       `#${v.id}`, fechaBO(v.fecha), v.cliente_name || 'Consumidor Final',
       estadoLabel(v.status), `Bs ${parseFloat(String(v.total ?? 0)).toFixed(2)}`,
     ]);
-    triggerPDF('Reporte de Ventas',
-      [{ label: 'Total ventas', value: String(ventas.length) }],
+    triggerPDF('Reporte de Ventas', metaPeriodo(rango, ventas.length),
       headers, rows, 'TOTAL VENDIDO', `Bs ${total.toFixed(2)}`);
   }
 }
 
-async function reporteCompras(formato: 'excel' | 'pdf') {
-  const compras = await comprasAPI.getAll();
+async function reporteCompras(formato: 'excel' | 'pdf', rango?: Rango) {
+  const compras = (await comprasAPI.getAll()).filter(c => enRango(c.fecha_compra, rango));
   const rowsBase: { compra: number; proveedor: string; fecha: string; producto: string; cantidad: number; costo: number }[] = [];
   compras.forEach(c => (c.detalles ?? []).forEach(d => rowsBase.push({
     compra: c.id, proveedor: c.proveedor_nombre, fecha: c.fecha_compra,
     producto: d.producto_nombre, cantidad: d.cantidad, costo: Number(d.costo_unitario),
   })));
-  if (rowsBase.length === 0) throw new Error('No hay compras a proveedores registradas.');
+  if (rowsBase.length === 0) throw new Error('No hay compras a proveedores en el periodo indicado.');
   const total = rowsBase.reduce((s, r) => s + r.cantidad * r.costo, 0);
   const headers = ['# Compra', 'Proveedor', 'Fecha', 'Producto', 'Cantidad', 'Costo Unit. (Bs)', 'Subtotal (Bs)'];
 
@@ -218,7 +355,7 @@ async function reporteCompras(formato: 'excel' | 'pdf') {
       Number(r.costo.toFixed(2)), Number((r.cantidad * r.costo).toFixed(2)),
     ]);
     exportToExcel({
-      filename: `reporte_compras_${hoyISO()}`, sheetName: 'Compras', headers, rows,
+      filename: `reporte_compras${sufijo(rango)}`, sheetName: 'Compras', headers, rows,
       totalRow: ['', '', '', '', '', 'TOTAL GENERAL', Number(total.toFixed(2))],
     });
   } else {
@@ -226,18 +363,141 @@ async function reporteCompras(formato: 'excel' | 'pdf') {
       `#${r.compra}`, r.proveedor, fechaBO(r.fecha), r.producto, String(r.cantidad),
       `Bs ${r.costo.toFixed(2)}`, `Bs ${(r.cantidad * r.costo).toFixed(2)}`,
     ]);
-    triggerPDF('Reporte de Compras a Proveedores',
-      [{ label: 'Total líneas', value: String(rowsBase.length) }],
+    triggerPDF('Reporte de Compras a Proveedores', metaPeriodo(rango, rowsBase.length),
       headers, rows, 'TOTAL GENERAL', `Bs ${total.toFixed(2)}`);
   }
 }
 
-export async function generarReporte(reporte: VozReporte, formato: 'excel' | 'pdf'): Promise<void> {
-  switch (reporte) {
-    case 'almacen':  return reporteAlmacen(formato);
-    case 'entradas': return reporteEntradas(formato);
-    case 'salidas':  return reporteSalidas(formato);
-    case 'ventas':   return reporteVentas(formato);
-    case 'compras':  return reporteCompras(formato);
+// ── Rankings (Etapa 2) ────────────────────────────────────────────────────────
+
+async function topVendidos(formato: 'excel' | 'pdf', rango?: Rango) {
+  const ventas = (await ventasAPI.getAll()).filter(v => enRango(v.fecha, rango));
+  const map = new Map<string, { cant: number; ingreso: number }>();
+  ventas.forEach(v => (v.detalles ?? []).forEach(d => {
+    const k = d.producto_name || `Producto #${d.producto}`;
+    const e = map.get(k) || { cant: 0, ingreso: 0 };
+    e.cant += d.cantidad; e.ingreso += Number(d.subtotal ?? 0);
+    map.set(k, e);
+  }));
+  const arr = [...map.entries()].sort((a, b) => b[1].cant - a[1].cant);
+  if (arr.length === 0) throw new Error('No hay ventas en el periodo para armar el ranking.');
+  const totalU = arr.reduce((s, [, e]) => s + e.cant, 0);
+  const headers = ['#', 'Producto', 'Unidades vendidas', 'Ingreso (Bs)'];
+
+  if (formato === 'excel') {
+    const rows: (string | number)[][] = arr.map(([k, e], i) => [i + 1, k, e.cant, Number(e.ingreso.toFixed(2))]);
+    exportToExcel({
+      filename: `top_productos_vendidos${sufijo(rango)}`, sheetName: 'Más vendidos', headers, rows,
+      totalRow: ['', '', 'TOTAL UNIDADES', totalU],
+    });
+  } else {
+    const rows = arr.map(([k, e], i) => [String(i + 1), k, String(e.cant), `Bs ${e.ingreso.toFixed(2)}`]);
+    triggerPDF('Productos más vendidos', metaPeriodo(rango, arr.length),
+      headers, rows, 'TOTAL UNIDADES VENDIDAS', String(totalU));
   }
+}
+
+async function topComprados(formato: 'excel' | 'pdf', rango?: Rango) {
+  const compras = (await comprasAPI.getAll()).filter(c => enRango(c.fecha_compra, rango));
+  const map = new Map<string, { cant: number; costo: number }>();
+  compras.forEach(c => (c.detalles ?? []).forEach(d => {
+    const k = d.producto_nombre || `Producto #${d.producto}`;
+    const e = map.get(k) || { cant: 0, costo: 0 };
+    e.cant += d.cantidad; e.costo += d.cantidad * Number(d.costo_unitario);
+    map.set(k, e);
+  }));
+  const arr = [...map.entries()].sort((a, b) => b[1].cant - a[1].cant);
+  if (arr.length === 0) throw new Error('No hay compras en el periodo para armar el ranking.');
+  const totalU = arr.reduce((s, [, e]) => s + e.cant, 0);
+  const headers = ['#', 'Producto', 'Unidades compradas', 'Costo (Bs)'];
+
+  if (formato === 'excel') {
+    const rows: (string | number)[][] = arr.map(([k, e], i) => [i + 1, k, e.cant, Number(e.costo.toFixed(2))]);
+    exportToExcel({
+      filename: `top_productos_comprados${sufijo(rango)}`, sheetName: 'Más comprados', headers, rows,
+      totalRow: ['', '', 'TOTAL UNIDADES', totalU],
+    });
+  } else {
+    const rows = arr.map(([k, e], i) => [String(i + 1), k, String(e.cant), `Bs ${e.costo.toFixed(2)}`]);
+    triggerPDF('Productos más comprados', metaPeriodo(rango, arr.length),
+      headers, rows, 'TOTAL UNIDADES COMPRADAS', String(totalU));
+  }
+}
+
+async function topClientes(formato: 'excel' | 'pdf', rango?: Rango) {
+  const ventas = (await ventasAPI.getAll()).filter(v => enRango(v.fecha, rango));
+  const map = new Map<string, { n: number; total: number }>();
+  ventas.forEach(v => {
+    const k = v.cliente_name || 'Consumidor Final';
+    const e = map.get(k) || { n: 0, total: 0 };
+    e.n += 1; e.total += Number(v.total ?? 0);
+    map.set(k, e);
+  });
+  const arr = [...map.entries()].sort((a, b) => (b[1].n - a[1].n) || (b[1].total - a[1].total));
+  if (arr.length === 0) throw new Error('No hay ventas en el periodo para armar el ranking.');
+  const totalGastado = arr.reduce((s, [, e]) => s + e.total, 0);
+  const headers = ['#', 'Cliente', '# Compras', 'Total gastado (Bs)'];
+
+  if (formato === 'excel') {
+    const rows: (string | number)[][] = arr.map(([k, e], i) => [i + 1, k, e.n, Number(e.total.toFixed(2))]);
+    exportToExcel({
+      filename: `top_clientes${sufijo(rango)}`, sheetName: 'Clientes frecuentes', headers, rows,
+      totalRow: ['', '', 'TOTAL (Bs)', Number(totalGastado.toFixed(2))],
+    });
+  } else {
+    const rows = arr.map(([k, e], i) => [String(i + 1), k, String(e.n), `Bs ${e.total.toFixed(2)}`]);
+    triggerPDF('Clientes más frecuentes', metaPeriodo(rango, arr.length),
+      headers, rows, 'TOTAL GASTADO', `Bs ${totalGastado.toFixed(2)}`);
+  }
+}
+
+async function topProveedores(formato: 'excel' | 'pdf', rango?: Rango) {
+  const compras = (await comprasAPI.getAll()).filter(c => enRango(c.fecha_compra, rango));
+  const map = new Map<string, { n: number; monto: number }>();
+  compras.forEach(c => {
+    const k = c.proveedor_nombre || 'Proveedor';
+    const e = map.get(k) || { n: 0, monto: 0 };
+    e.n += 1; e.monto += Number(c.monto_total ?? 0);
+    map.set(k, e);
+  });
+  const arr = [...map.entries()].sort((a, b) => (b[1].monto - a[1].monto) || (b[1].n - a[1].n));
+  if (arr.length === 0) throw new Error('No hay compras en el periodo para armar el ranking.');
+  const totalMonto = arr.reduce((s, [, e]) => s + e.monto, 0);
+  const headers = ['#', 'Proveedor', '# Compras', 'Monto total (Bs)'];
+
+  if (formato === 'excel') {
+    const rows: (string | number)[][] = arr.map(([k, e], i) => [i + 1, k, e.n, Number(e.monto.toFixed(2))]);
+    exportToExcel({
+      filename: `top_proveedores${sufijo(rango)}`, sheetName: 'Proveedores top', headers, rows,
+      totalRow: ['', '', 'TOTAL (Bs)', Number(totalMonto.toFixed(2))],
+    });
+  } else {
+    const rows = arr.map(([k, e], i) => [String(i + 1), k, String(e.n), `Bs ${e.monto.toFixed(2)}`]);
+    triggerPDF('Proveedores con más compras', metaPeriodo(rango, arr.length),
+      headers, rows, 'MONTO TOTAL COMPRADO', `Bs ${totalMonto.toFixed(2)}`);
+  }
+}
+
+// ── 4. Despachador ─────────────────────────────────────────────────────────────
+function generarUno(reporte: VozReporte, formato: 'excel' | 'pdf', rango?: Rango): Promise<void> {
+  switch (reporte) {
+    case 'almacen':         return reporteAlmacen(formato);
+    case 'entradas':        return reporteEntradas(formato, rango);
+    case 'salidas':         return reporteSalidas(formato, rango);
+    case 'ventas':          return reporteVentas(formato, rango);
+    case 'compras':         return reporteCompras(formato, rango);
+    case 'top_vendidos':    return topVendidos(formato, rango);
+    case 'top_comprados':   return topComprados(formato, rango);
+    case 'top_clientes':    return topClientes(formato, rango);
+    case 'top_proveedores': return topProveedores(formato, rango);
+  }
+}
+
+export async function generarReporte(reporte: VozReporte, formato: VozFormato, rango?: Rango): Promise<void> {
+  if (formato === 'ambos') {
+    await generarUno(reporte, 'excel', rango);
+    await generarUno(reporte, 'pdf', rango);
+    return;
+  }
+  return generarUno(reporte, formato, rango);
 }

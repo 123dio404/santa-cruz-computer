@@ -649,10 +649,15 @@ export const resenasAPI = {
 };
 
 // ============ VOZ (interpretación de comandos con Gemini) ============
-export type VozReporte = 'almacen' | 'entradas' | 'salidas' | 'ventas' | 'compras';
+export type VozReporte =
+  | 'almacen' | 'entradas' | 'salidas' | 'ventas' | 'compras'
+  | 'top_vendidos' | 'top_comprados' | 'top_clientes' | 'top_proveedores';
+export type VozFormato = 'excel' | 'pdf' | 'ambos';
 export interface VozIntencion {
   reporte: VozReporte | null;
-  formato: 'excel' | 'pdf';
+  formato: VozFormato;
+  desde?: string | null;   // AAAA-MM-DD (inicio del periodo) o null
+  hasta?: string | null;   // AAAA-MM-DD (fin del periodo) o null
 }
 export const vozAPI = {
   // Respaldo: si las reglas del frontend no entienden el comando, Gemini lo interpreta
