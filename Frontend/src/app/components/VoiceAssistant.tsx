@@ -15,7 +15,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { Mic, X, Loader2 } from 'lucide-react';
 import { vozAPI } from '../services/api';
-import { parseIntent, generarReporte, REPORTE_LABEL } from '../utils/vozReportes';
+import type { VozIntencion } from '../services/api';
+import { parseIntent, requiereIA, generarReporte, REPORTE_LABEL } from '../utils/vozReportes';
 
 type Estado = 'idle' | 'escuchando' | 'procesando' | 'ok' | 'error';
 
@@ -23,6 +24,15 @@ type Estado = 'idle' | 'escuchando' | 'procesando' | 'ok' | 'error';
 const SpeechRecognitionCtor =
   (typeof window !== 'undefined' &&
     ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) || null;
+
+// "2026-05-01" → "01/05/2026"; arma una frase legible del periodo.
+const isoBO = (iso: string) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+function rangoTexto(desde?: string | null, hasta?: string | null): string {
+  if (desde && hasta) return desde === hasta ? `el ${isoBO(desde)}` : `del ${isoBO(desde)} al ${isoBO(hasta)}`;
+  if (desde) return `desde ${isoBO(desde)}`;
+  if (hasta) return `hasta ${isoBO(hasta)}`;
+  return '';
+}
 
 function hablar(texto: string) {
   try {
@@ -48,29 +58,39 @@ export function VoiceAssistant() {
     setEstado('procesando');
     setMensaje('Interpretando el comando...');
     try {
-      // 1) Reglas locales
-      let intencion = parseIntent(texto);
-      // 2) Respaldo con Gemini si las reglas no entienden
-      if (!intencion || !intencion.reporte) {
+      // 1) Reglas locales (reporte + formato + periodo)
+      let intencion: VozIntencion | null = parseIntent(texto);
+      // 2) Respaldo con Gemini si no hay reporte o quedaron fechas/rankings sin resolver
+      if (!intencion || !intencion.reporte || requiereIA(texto, intencion)) {
         try {
           const g = await vozAPI.interpretar(texto);
-          if (g.reporte) intencion = { reporte: g.reporte, formato: g.formato };
-        } catch { /* si Gemini falla, seguimos sin intención */ }
+          if (g.reporte) {
+            intencion = {
+              reporte: g.reporte,
+              formato: g.formato || intencion?.formato || 'excel',
+              desde: g.desde ?? intencion?.desde ?? null,
+              hasta: g.hasta ?? intencion?.hasta ?? null,
+            };
+          }
+        } catch { /* si Gemini falla, seguimos con lo que dieron las reglas */ }
       }
       if (!intencion || !intencion.reporte) {
         setEstado('error');
-        const msg = 'No entendí qué reporte quieres. Intenta: "inventario en excel" o "ventas en pdf".';
+        const msg = 'No entendí qué reporte quieres. Intenta: "inventario en excel" o "ventas de mayo en pdf".';
         setMensaje(msg);
         hablar('No entendí qué reporte quieres descargar.');
         return;
       }
-      const { reporte, formato } = intencion;
+      const { reporte, formato, desde, hasta } = intencion;
+      const rango = (desde || hasta) ? { desde, hasta } : undefined;
       const label = REPORTE_LABEL[reporte];
-      setMensaje(`Descargando: ${label} en ${formato.toUpperCase()}`);
-      hablar(`Descargando reporte de ${label} en ${formato}`);
-      await generarReporte(reporte, formato);
+      const formatoTxt = formato === 'ambos' ? 'Excel y PDF' : formato.toUpperCase();
+      const periodoTxt = rangoTexto(desde, hasta);
+      setMensaje(`Descargando: ${label} (${formatoTxt})${periodoTxt ? ` · ${periodoTxt}` : ''}`);
+      hablar(`Descargando reporte de ${label}${periodoTxt ? `, ${periodoTxt},` : ''} en ${formato === 'ambos' ? 'excel y pdf' : formato}`);
+      await generarReporte(reporte, formato, rango);
       setEstado('ok');
-      setMensaje(`✓ ${label} — ${formato.toUpperCase()}`);
+      setMensaje(`✓ ${label} — ${formatoTxt}${periodoTxt ? ` · ${periodoTxt}` : ''}`);
     } catch (err: any) {
       setEstado('error');
       setMensaje(err?.message || 'No se pudo generar el reporte.');
@@ -158,9 +178,11 @@ export function VoiceAssistant() {
             ) : (
               <>
                 <p className="text-xs text-gray-500">
-                  Ejemplos: <span className="italic">"inventario en excel"</span>,{' '}
-                  <span className="italic">"ventas en pdf"</span>,{' '}
-                  <span className="italic">"compras a proveedores"</span>.
+                  Ejemplos: <span className="italic">"ventas de mayo en pdf"</span>,{' '}
+                  <span className="italic">"inventario en excel y pdf"</span>,{' '}
+                  <span className="italic">"producto más vendido este mes"</span>,{' '}
+                  <span className="italic">"a qué proveedor compré más"</span>,{' '}
+                  <span className="italic">"compras del 1 al 15 de junio"</span>.
                 </p>
 
                 {/* Transcript / estado */}
