@@ -1,0 +1,2694 @@
+# Base de datos completa — Santa Cruz Computer
+
+> Sistema de ventas e inventario. Motor: **PostgreSQL 17**. Esquema: `public`.
+> Este documento reúne **todo el SQL de la base de datos** en un solo lugar.
+
+## Contenido
+
+1. **Esquema + datos base** — exportación completa con `pg_dump` (estructura de las 22 tablas, tipos `ENUM`, secuencias, llaves foráneas, índices y datos). Corresponde al dump `Santacruzcomputerfinal.sql`.
+2. **Scripts incrementales** — cambios aplicados después del dump (en local y en Railway) que dejan la BD al día:
+   - `001_descuento_vip.sql` — columnas de descuento VIP.
+   - `002_garantia.sql` — garantías por producto (columna `meses_garantia` + tabla `garantia`).
+   - `003_resena.sql` — reseñas/opiniones de la tienda (tabla `resena`).
+
+> ⚠️ Para recrear la base de datos **actual** ejecuta primero el bloque 1 (esquema + datos) y luego, en orden, los 3 scripts incrementales del bloque 2.
+
+---
+
+## 1. Esquema + datos base (dump completo)
+
+```sql
+--
+-- PostgreSQL database dump
+--
+
+\restrict 0DDvqQUsgGRHTlgJgAfOvVaplRLwrQMrnhXsndgEiUbIbc9h5bh0MtGh4Qbm8Iy
+
+-- Dumped from database version 17.6
+-- Dumped by pg_dump version 17.6
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: public; Type: SCHEMA; Schema: -; Owner: postgres
+--
+
+-- *not* creating schema, since initdb creates it
+
+
+ALTER SCHEMA public OWNER TO postgres;
+
+--
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: postgres
+--
+
+COMMENT ON SCHEMA public IS '';
+
+
+--
+-- Name: estado_entrega; Type: TYPE; Schema: public; Owner: postgres
+--
+
+CREATE TYPE public.estado_entrega AS ENUM (
+    'pendiente',
+    'entregado'
+);
+
+
+ALTER TYPE public.estado_entrega OWNER TO postgres;
+
+--
+-- Name: estado_siat; Type: TYPE; Schema: public; Owner: postgres
+--
+
+CREATE TYPE public.estado_siat AS ENUM (
+    'PENDIENTE',
+    'ACEPTADO',
+    'RECHAZADO',
+    'ANULADO'
+);
+
+
+ALTER TYPE public.estado_siat OWNER TO postgres;
+
+--
+-- Name: estado_venta; Type: TYPE; Schema: public; Owner: postgres
+--
+
+CREATE TYPE public.estado_venta AS ENUM (
+    'pending',
+    'completed'
+);
+
+
+ALTER TYPE public.estado_venta OWNER TO postgres;
+
+--
+-- Name: metodo_pago_enum; Type: TYPE; Schema: public; Owner: postgres
+--
+
+CREATE TYPE public.metodo_pago_enum AS ENUM (
+    'qr',
+    'transferencia',
+    'efectivo',
+    'tarjeta'
+);
+
+
+ALTER TYPE public.metodo_pago_enum OWNER TO postgres;
+
+--
+-- Name: trg_actualizar_estado_venta(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.trg_actualizar_estado_venta() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_total DECIMAL(10,2);
+    v_pagado DECIMAL(10,2);
+    v_idventa INT;
+    v_pedido_online BOOLEAN;
+BEGIN
+    -- Obtenemos el ID de la venta afectada
+    v_idventa := COALESCE(NEW.IdVenta, OLD.IdVenta);
+
+    -- Obtenemos datos actuales de la venta
+    SELECT monto_total, pedido_online
+    INTO v_total, v_pedido_online
+    FROM Venta
+    WHERE IdVenta = v_idventa;
+
+    -- LÓGICA DE NEGOCIO:
+    -- Si es pedido online, NO actualizamos el estado automáticamente.
+    -- Esto obliga a que el vendedor valide el pago y el stock antes de pasar a 'completed'.
+    IF v_pedido_online THEN
+        RETURN NULL; 
+    END IF;
+
+    -- Si es venta física (tienda), procedemos con la automatización normal
+    SELECT COALESCE(SUM(monto), 0)
+    INTO v_pagado
+    FROM PagoVenta
+    WHERE IdVenta = v_idventa;
+
+    IF v_pagado >= v_total AND v_total > 0 THEN
+        UPDATE Venta SET estado = 'completed' WHERE IdVenta = v_idventa;
+    ELSE
+        UPDATE Venta SET estado = 'pending' WHERE IdVenta = v_idventa;
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+
+ALTER FUNCTION public.trg_actualizar_estado_venta() OWNER TO postgres;
+
+--
+-- Name: trg_actualizar_total_compra(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.trg_actualizar_total_compra() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+
+UPDATE Compra
+SET monto_total = (
+    SELECT COALESCE(
+        SUM(cantidad * costo_unitario),
+        0
+    )
+    FROM DetalleCompra
+    WHERE IdCompra = COALESCE(NEW.IdCompra, OLD.IdCompra)
+)
+WHERE IdCompra = COALESCE(NEW.IdCompra, OLD.IdCompra);
+
+RETURN NULL;
+
+END;
+$$;
+
+
+ALTER FUNCTION public.trg_actualizar_total_compra() OWNER TO postgres;
+
+--
+-- Name: trg_actualizar_total_venta(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.trg_actualizar_total_venta() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+
+UPDATE Venta
+SET monto_total = (
+    SELECT COALESCE(
+        SUM(subtotal),
+        0
+    )
+    FROM DetalleVenta
+    WHERE IdVenta = COALESCE(NEW.IdVenta, OLD.IdVenta)
+)
+WHERE IdVenta = COALESCE(NEW.IdVenta, OLD.IdVenta);
+
+RETURN NULL;
+
+END;
+$$;
+
+
+ALTER FUNCTION public.trg_actualizar_total_venta() OWNER TO postgres;
+
+--
+-- Name: trg_gestionar_stock_venta(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.trg_gestionar_stock_venta() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+
+IF TG_OP = 'INSERT' THEN
+
+    UPDATE Producto
+    SET stock_fisico = stock_fisico - NEW.cantidad
+    WHERE IdProducto = NEW.IdProducto;
+
+END IF;
+
+IF TG_OP = 'UPDATE' THEN
+
+    UPDATE Producto
+    SET stock_fisico =
+        stock_fisico + OLD.cantidad - NEW.cantidad
+    WHERE IdProducto = NEW.IdProducto;
+
+END IF;
+
+IF TG_OP = 'DELETE' THEN
+
+    UPDATE Producto
+    SET stock_fisico = stock_fisico + OLD.cantidad
+    WHERE IdProducto = OLD.IdProducto;
+
+END IF;
+
+RETURN NULL;
+
+END;
+$$;
+
+
+ALTER FUNCTION public.trg_gestionar_stock_venta() OWNER TO postgres;
+
+--
+-- Name: trg_sumar_stock_compra(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.trg_sumar_stock_compra() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+
+UPDATE Producto
+SET stock_fisico = stock_fisico + NEW.cantidad
+WHERE IdProducto = NEW.IdProducto;
+
+RETURN NEW;
+
+END;
+$$;
+
+
+ALTER FUNCTION public.trg_sumar_stock_compra() OWNER TO postgres;
+
+--
+-- Name: trg_validar_stock(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.trg_validar_stock() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+v_stock INT;
+BEGIN
+
+SELECT stock_fisico
+INTO v_stock
+FROM Producto
+WHERE IdProducto = NEW.IdProducto;
+
+IF v_stock < NEW.cantidad THEN
+    RAISE EXCEPTION
+    'Stock insuficiente. Disponible: %',
+    v_stock;
+END IF;
+
+RETURN NEW;
+
+END;
+$$;
+
+
+ALTER FUNCTION public.trg_validar_stock() OWNER TO postgres;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: auth_group; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.auth_group (
+    id integer NOT NULL,
+    name character varying(150) NOT NULL
+);
+
+
+ALTER TABLE public.auth_group OWNER TO postgres;
+
+--
+-- Name: auth_group_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.auth_group ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.auth_group_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: auth_group_permissions; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.auth_group_permissions (
+    id bigint NOT NULL,
+    group_id integer NOT NULL,
+    permission_id integer NOT NULL
+);
+
+
+ALTER TABLE public.auth_group_permissions OWNER TO postgres;
+
+--
+-- Name: auth_group_permissions_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.auth_group_permissions ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.auth_group_permissions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: auth_permission; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.auth_permission (
+    id integer NOT NULL,
+    name character varying(255) NOT NULL,
+    content_type_id integer NOT NULL,
+    codename character varying(100) NOT NULL
+);
+
+
+ALTER TABLE public.auth_permission OWNER TO postgres;
+
+--
+-- Name: auth_permission_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.auth_permission ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.auth_permission_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: auth_user; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.auth_user (
+    id integer NOT NULL,
+    password character varying(128) NOT NULL,
+    last_login timestamp with time zone,
+    is_superuser boolean NOT NULL,
+    username character varying(150) NOT NULL,
+    first_name character varying(150) NOT NULL,
+    last_name character varying(150) NOT NULL,
+    email character varying(254) NOT NULL,
+    is_staff boolean NOT NULL,
+    is_active boolean NOT NULL,
+    date_joined timestamp with time zone NOT NULL
+);
+
+
+ALTER TABLE public.auth_user OWNER TO postgres;
+
+--
+-- Name: auth_user_groups; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.auth_user_groups (
+    id bigint NOT NULL,
+    user_id integer NOT NULL,
+    group_id integer NOT NULL
+);
+
+
+ALTER TABLE public.auth_user_groups OWNER TO postgres;
+
+--
+-- Name: auth_user_groups_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.auth_user_groups ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.auth_user_groups_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: auth_user_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.auth_user ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.auth_user_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: auth_user_user_permissions; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.auth_user_user_permissions (
+    id bigint NOT NULL,
+    user_id integer NOT NULL,
+    permission_id integer NOT NULL
+);
+
+
+ALTER TABLE public.auth_user_user_permissions OWNER TO postgres;
+
+--
+-- Name: auth_user_user_permissions_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.auth_user_user_permissions ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.auth_user_user_permissions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bitacora; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.bitacora (
+    idbitacora integer NOT NULL,
+    idusuario integer,
+    usuario_nombre character varying(100) DEFAULT ''::character varying NOT NULL,
+    usuario_rol character varying(20) DEFAULT ''::character varying NOT NULL,
+    accion character varying(30) NOT NULL,
+    modulo character varying(50) NOT NULL,
+    descripcion text NOT NULL,
+    ip_address character varying(45),
+    fecha timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+ALTER TABLE public.bitacora OWNER TO postgres;
+
+--
+-- Name: bitacora_idbitacora_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.bitacora_idbitacora_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.bitacora_idbitacora_seq OWNER TO postgres;
+
+--
+-- Name: bitacora_idbitacora_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.bitacora_idbitacora_seq OWNED BY public.bitacora.idbitacora;
+
+
+--
+-- Name: categoria; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.categoria (
+    idcategoria integer NOT NULL,
+    nombre character varying(100) NOT NULL
+);
+
+
+ALTER TABLE public.categoria OWNER TO postgres;
+
+--
+-- Name: categoria_idcategoria_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.categoria_idcategoria_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.categoria_idcategoria_seq OWNER TO postgres;
+
+--
+-- Name: categoria_idcategoria_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.categoria_idcategoria_seq OWNED BY public.categoria.idcategoria;
+
+
+--
+-- Name: cliente; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.cliente (
+    idcliente integer NOT NULL,
+    nombre character varying(150) NOT NULL,
+    apellido character varying(150) NOT NULL,
+    usuario_login character varying(50),
+    correo character varying(100),
+    sexo character varying(20),
+    ciudad character varying(100),
+    telefono character varying(20),
+    fecha_nacimiento date,
+    nit_ci character varying(20),
+    razon_social character varying(150),
+    password character varying(255)
+);
+
+
+ALTER TABLE public.cliente OWNER TO postgres;
+
+--
+-- Name: cliente_idcliente_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.cliente_idcliente_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.cliente_idcliente_seq OWNER TO postgres;
+
+--
+-- Name: cliente_idcliente_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.cliente_idcliente_seq OWNED BY public.cliente.idcliente;
+
+
+--
+-- Name: compra; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.compra (
+    idcompra integer NOT NULL,
+    idproveedor integer,
+    fecha_compra timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    monto_total numeric(10,2) DEFAULT 0 NOT NULL
+);
+
+
+ALTER TABLE public.compra OWNER TO postgres;
+
+--
+-- Name: compra_idcompra_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.compra_idcompra_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.compra_idcompra_seq OWNER TO postgres;
+
+--
+-- Name: compra_idcompra_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.compra_idcompra_seq OWNED BY public.compra.idcompra;
+
+
+--
+-- Name: detallecompra; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.detallecompra (
+    iddetallecompra integer NOT NULL,
+    idcompra integer,
+    idproducto integer,
+    cantidad integer NOT NULL,
+    costo_unitario numeric(10,2) NOT NULL,
+    CONSTRAINT detallecompra_cantidad_check CHECK ((cantidad > 0)),
+    CONSTRAINT detallecompra_costo_unitario_check CHECK ((costo_unitario >= (0)::numeric))
+);
+
+
+ALTER TABLE public.detallecompra OWNER TO postgres;
+
+--
+-- Name: detallecompra_iddetallecompra_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.detallecompra_iddetallecompra_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.detallecompra_iddetallecompra_seq OWNER TO postgres;
+
+--
+-- Name: detallecompra_iddetallecompra_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.detallecompra_iddetallecompra_seq OWNED BY public.detallecompra.iddetallecompra;
+
+
+--
+-- Name: detalleventa; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.detalleventa (
+    iddetalle integer NOT NULL,
+    idventa integer,
+    idproducto integer,
+    cantidad integer NOT NULL,
+    precio_unitario numeric(10,2) NOT NULL,
+    subtotal numeric(10,2) GENERATED ALWAYS AS (((cantidad)::numeric * precio_unitario)) STORED,
+    CONSTRAINT detalleventa_cantidad_check CHECK ((cantidad > 0)),
+    CONSTRAINT detalleventa_precio_unitario_check CHECK ((precio_unitario >= (0)::numeric))
+);
+
+
+ALTER TABLE public.detalleventa OWNER TO postgres;
+
+--
+-- Name: detalleventa_iddetalle_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.detalleventa_iddetalle_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.detalleventa_iddetalle_seq OWNER TO postgres;
+
+--
+-- Name: detalleventa_iddetalle_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.detalleventa_iddetalle_seq OWNED BY public.detalleventa.iddetalle;
+
+
+--
+-- Name: django_admin_log; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.django_admin_log (
+    id integer NOT NULL,
+    action_time timestamp with time zone NOT NULL,
+    object_id text,
+    object_repr character varying(200) NOT NULL,
+    action_flag smallint NOT NULL,
+    change_message text NOT NULL,
+    content_type_id integer,
+    user_id integer NOT NULL,
+    CONSTRAINT django_admin_log_action_flag_check CHECK ((action_flag >= 0))
+);
+
+
+ALTER TABLE public.django_admin_log OWNER TO postgres;
+
+--
+-- Name: django_admin_log_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.django_admin_log ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.django_admin_log_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: django_content_type; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.django_content_type (
+    id integer NOT NULL,
+    app_label character varying(100) NOT NULL,
+    model character varying(100) NOT NULL
+);
+
+
+ALTER TABLE public.django_content_type OWNER TO postgres;
+
+--
+-- Name: django_content_type_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.django_content_type ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.django_content_type_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: django_migrations; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.django_migrations (
+    id bigint NOT NULL,
+    app character varying(255) NOT NULL,
+    name character varying(255) NOT NULL,
+    applied timestamp with time zone NOT NULL
+);
+
+
+ALTER TABLE public.django_migrations OWNER TO postgres;
+
+--
+-- Name: django_migrations_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.django_migrations ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.django_migrations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: django_session; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.django_session (
+    session_key character varying(40) NOT NULL,
+    session_data text NOT NULL,
+    expire_date timestamp with time zone NOT NULL
+);
+
+
+ALTER TABLE public.django_session OWNER TO postgres;
+
+--
+-- Name: factura; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.factura (
+    idfactura integer NOT NULL,
+    idventa integer,
+    nro_factura bigint NOT NULL,
+    cuf character varying(100) NOT NULL,
+    cufd character varying(100) NOT NULL,
+    estado_siat public.estado_siat DEFAULT 'PENDIENTE'::public.estado_siat,
+    fecha_emision timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+ALTER TABLE public.factura OWNER TO postgres;
+
+--
+-- Name: factura_idfactura_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.factura_idfactura_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.factura_idfactura_seq OWNER TO postgres;
+
+--
+-- Name: factura_idfactura_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.factura_idfactura_seq OWNED BY public.factura.idfactura;
+
+
+--
+-- Name: pagoventa; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.pagoventa (
+    idpagoventa integer NOT NULL,
+    idventa integer,
+    monto numeric(10,2) NOT NULL,
+    metodo public.metodo_pago_enum NOT NULL,
+    fecha timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT pagoventa_monto_check CHECK ((monto > (0)::numeric))
+);
+
+
+ALTER TABLE public.pagoventa OWNER TO postgres;
+
+--
+-- Name: pagoventa_idpagoventa_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.pagoventa_idpagoventa_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.pagoventa_idpagoventa_seq OWNER TO postgres;
+
+--
+-- Name: pagoventa_idpagoventa_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.pagoventa_idpagoventa_seq OWNED BY public.pagoventa.idpagoventa;
+
+
+--
+-- Name: producto; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.producto (
+    idproducto integer NOT NULL,
+    idcategoria integer,
+    nombre character varying(150) NOT NULL,
+    marca character varying(50),
+    modelo character varying(50),
+    imagen_url text,
+    precio_compra numeric(10,2),
+    precio_actual numeric(10,2) NOT NULL,
+    stock_fisico integer DEFAULT 0,
+    stock_minimo integer DEFAULT 0,
+    descripcion text,
+    CONSTRAINT producto_precio_actual_check CHECK ((precio_actual > (0)::numeric)),
+    CONSTRAINT producto_precio_compra_check CHECK ((precio_compra >= (0)::numeric)),
+    CONSTRAINT producto_stock_fisico_check CHECK ((stock_fisico >= 0)),
+    CONSTRAINT producto_stock_minimo_check CHECK ((stock_minimo >= 0))
+);
+
+
+ALTER TABLE public.producto OWNER TO postgres;
+
+--
+-- Name: producto_idproducto_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.producto_idproducto_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.producto_idproducto_seq OWNER TO postgres;
+
+--
+-- Name: producto_idproducto_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.producto_idproducto_seq OWNED BY public.producto.idproducto;
+
+
+--
+-- Name: proveedor; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.proveedor (
+    idproveedor integer NOT NULL,
+    nombre_empresa character varying(150) NOT NULL,
+    nit character varying(20) NOT NULL,
+    razon_social character varying(150),
+    contacto_nombre character varying(100),
+    telefono character varying(20),
+    correo character varying(100),
+    direccion text,
+    ciudad character varying(50),
+    activo boolean DEFAULT true NOT NULL,
+    fecha_registro timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+ALTER TABLE public.proveedor OWNER TO postgres;
+
+--
+-- Name: proveedor_idproveedor_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.proveedor_idproveedor_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.proveedor_idproveedor_seq OWNER TO postgres;
+
+--
+-- Name: proveedor_idproveedor_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.proveedor_idproveedor_seq OWNED BY public.proveedor.idproveedor;
+
+
+--
+-- Name: usuario; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.usuario (
+    idusuario integer NOT NULL,
+    nombre_completo character varying(150) NOT NULL,
+    username character varying(50) NOT NULL,
+    password_hash text NOT NULL,
+    rol character varying(30) NOT NULL,
+    activo boolean DEFAULT true,
+    email character varying(100),
+    telefono character varying(20),
+    ciudad character varying(100),
+    fecha_nacimiento date,
+    CONSTRAINT usuario_rol_check CHECK (((rol)::text = ANY ((ARRAY['admin'::character varying, 'vendedor'::character varying])::text[])))
+);
+
+
+ALTER TABLE public.usuario OWNER TO postgres;
+
+--
+-- Name: usuario_idusuario_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.usuario_idusuario_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.usuario_idusuario_seq OWNER TO postgres;
+
+--
+-- Name: usuario_idusuario_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.usuario_idusuario_seq OWNED BY public.usuario.idusuario;
+
+
+--
+-- Name: venta; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.venta (
+    idventa integer NOT NULL,
+    idcliente integer,
+    idusuario integer,
+    fecha_venta timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    monto_total numeric(10,2) DEFAULT 0 NOT NULL,
+    estado public.estado_venta DEFAULT 'pending'::public.estado_venta NOT NULL,
+    estado_entrega public.estado_entrega DEFAULT 'pendiente'::public.estado_entrega NOT NULL,
+    pedido_online boolean DEFAULT false NOT NULL,
+    CONSTRAINT chk_entrega_pago CHECK ((NOT ((estado = 'pending'::public.estado_venta) AND (estado_entrega = 'entregado'::public.estado_entrega))))
+);
+
+
+ALTER TABLE public.venta OWNER TO postgres;
+
+--
+-- Name: venta_idventa_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.venta_idventa_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.venta_idventa_seq OWNER TO postgres;
+
+--
+-- Name: venta_idventa_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.venta_idventa_seq OWNED BY public.venta.idventa;
+
+
+--
+-- Name: bitacora idbitacora; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.bitacora ALTER COLUMN idbitacora SET DEFAULT nextval('public.bitacora_idbitacora_seq'::regclass);
+
+
+--
+-- Name: categoria idcategoria; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.categoria ALTER COLUMN idcategoria SET DEFAULT nextval('public.categoria_idcategoria_seq'::regclass);
+
+
+--
+-- Name: cliente idcliente; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cliente ALTER COLUMN idcliente SET DEFAULT nextval('public.cliente_idcliente_seq'::regclass);
+
+
+--
+-- Name: compra idcompra; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.compra ALTER COLUMN idcompra SET DEFAULT nextval('public.compra_idcompra_seq'::regclass);
+
+
+--
+-- Name: detallecompra iddetallecompra; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detallecompra ALTER COLUMN iddetallecompra SET DEFAULT nextval('public.detallecompra_iddetallecompra_seq'::regclass);
+
+
+--
+-- Name: detalleventa iddetalle; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detalleventa ALTER COLUMN iddetalle SET DEFAULT nextval('public.detalleventa_iddetalle_seq'::regclass);
+
+
+--
+-- Name: factura idfactura; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.factura ALTER COLUMN idfactura SET DEFAULT nextval('public.factura_idfactura_seq'::regclass);
+
+
+--
+-- Name: pagoventa idpagoventa; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.pagoventa ALTER COLUMN idpagoventa SET DEFAULT nextval('public.pagoventa_idpagoventa_seq'::regclass);
+
+
+--
+-- Name: producto idproducto; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.producto ALTER COLUMN idproducto SET DEFAULT nextval('public.producto_idproducto_seq'::regclass);
+
+
+--
+-- Name: proveedor idproveedor; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.proveedor ALTER COLUMN idproveedor SET DEFAULT nextval('public.proveedor_idproveedor_seq'::regclass);
+
+
+--
+-- Name: usuario idusuario; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.usuario ALTER COLUMN idusuario SET DEFAULT nextval('public.usuario_idusuario_seq'::regclass);
+
+
+--
+-- Name: venta idventa; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.venta ALTER COLUMN idventa SET DEFAULT nextval('public.venta_idventa_seq'::regclass);
+
+
+--
+-- Data for Name: auth_group; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.auth_group (id, name) FROM stdin;
+\.
+
+
+--
+-- Data for Name: auth_group_permissions; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.auth_group_permissions (id, group_id, permission_id) FROM stdin;
+\.
+
+
+--
+-- Data for Name: auth_permission; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.auth_permission (id, name, content_type_id, codename) FROM stdin;
+1	Can add log entry	1	add_logentry
+2	Can change log entry	1	change_logentry
+3	Can delete log entry	1	delete_logentry
+4	Can view log entry	1	view_logentry
+5	Can add permission	2	add_permission
+6	Can change permission	2	change_permission
+7	Can delete permission	2	delete_permission
+8	Can view permission	2	view_permission
+9	Can add group	3	add_group
+10	Can change group	3	change_group
+11	Can delete group	3	delete_group
+12	Can view group	3	view_group
+13	Can add user	4	add_user
+14	Can change user	4	change_user
+15	Can delete user	4	delete_user
+16	Can view user	4	view_user
+17	Can add content type	5	add_contenttype
+18	Can change content type	5	change_contenttype
+19	Can delete content type	5	delete_contenttype
+20	Can view content type	5	view_contenttype
+21	Can add session	6	add_session
+22	Can change session	6	change_session
+23	Can delete session	6	delete_session
+24	Can view session	6	view_session
+25	Can add Usuario	7	add_usuario
+26	Can change Usuario	7	change_usuario
+27	Can delete Usuario	7	delete_usuario
+28	Can view Usuario	7	view_usuario
+29	Can add Cliente	8	add_cliente
+30	Can change Cliente	8	change_cliente
+31	Can delete Cliente	8	delete_cliente
+32	Can view Cliente	8	view_cliente
+33	Can add otp recovery	9	add_otprecovery
+34	Can change otp recovery	9	change_otprecovery
+35	Can delete otp recovery	9	delete_otprecovery
+36	Can view otp recovery	9	view_otprecovery
+37	Can add Categoría	10	add_categoria
+38	Can change Categoría	10	change_categoria
+39	Can delete Categoría	10	delete_categoria
+40	Can view Categoría	10	view_categoria
+41	Can add Producto	11	add_producto
+42	Can change Producto	11	change_producto
+43	Can delete Producto	11	delete_producto
+44	Can view Producto	11	view_producto
+45	Can add Proveedor	12	add_proveedor
+46	Can change Proveedor	12	change_proveedor
+47	Can delete Proveedor	12	delete_proveedor
+48	Can view Proveedor	12	view_proveedor
+49	Can add Compra	13	add_compra
+50	Can change Compra	13	change_compra
+51	Can delete Compra	13	delete_compra
+52	Can view Compra	13	view_compra
+53	Can add Detalle de Compra	14	add_detallecompra
+54	Can change Detalle de Compra	14	change_detallecompra
+55	Can delete Detalle de Compra	14	delete_detallecompra
+56	Can view Detalle de Compra	14	view_detallecompra
+57	Can add Venta	15	add_venta
+58	Can change Venta	15	change_venta
+59	Can delete Venta	15	delete_venta
+60	Can view Venta	15	view_venta
+61	Can add Detalle de Venta	16	add_detalleventa
+62	Can change Detalle de Venta	16	change_detalleventa
+63	Can delete Detalle de Venta	16	delete_detalleventa
+64	Can view Detalle de Venta	16	view_detalleventa
+65	Can add Pago de Venta	17	add_pagoventa
+66	Can change Pago de Venta	17	change_pagoventa
+67	Can delete Pago de Venta	17	delete_pagoventa
+68	Can view Pago de Venta	17	view_pagoventa
+69	Can add Factura	18	add_factura
+70	Can change Factura	18	change_factura
+71	Can delete Factura	18	delete_factura
+72	Can view Factura	18	view_factura
+73	Can add Registro de Bitácora	19	add_bitacora
+74	Can change Registro de Bitácora	19	change_bitacora
+75	Can delete Registro de Bitácora	19	delete_bitacora
+76	Can view Registro de Bitácora	19	view_bitacora
+\.
+
+
+--
+-- Data for Name: auth_user; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.auth_user (id, password, last_login, is_superuser, username, first_name, last_name, email, is_staff, is_active, date_joined) FROM stdin;
+1	pbkdf2_sha256$600000$uaCwN3OmedWY9xeYmPHYbw$WioBuF37CqLZKFuTANeKnoApAahm8g8+B83Jyc78OW0=	2026-05-10 13:46:22.995035-04	t	Joseca			huasi456@gmail.com	t	t	2026-05-10 07:36:30.630933-04
+\.
+
+
+--
+-- Data for Name: auth_user_groups; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.auth_user_groups (id, user_id, group_id) FROM stdin;
+\.
+
+
+--
+-- Data for Name: auth_user_user_permissions; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.auth_user_user_permissions (id, user_id, permission_id) FROM stdin;
+\.
+
+
+--
+-- Data for Name: bitacora; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.bitacora (idbitacora, idusuario, usuario_nombre, usuario_rol, accion, modulo, descripcion, ip_address, fecha) FROM stdin;
+1	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-09 19:30:27.62659-04
+2	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-09 19:30:37.043605-04
+3	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Samsung 990 PRO SSD 1TB PCIe 4.0 M.2" (ID: 7)	127.0.0.1	2026-05-10 01:24:13.245222-04
+4	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Samsung 990 PRO SSD 1TB PCIe 4.0 M.2" (ID: 7)	127.0.0.1	2026-05-10 01:24:38.581383-04
+5	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Corsair M75 AIR" (ID: 6)	127.0.0.1	2026-05-10 01:26:41.010576-04
+6	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Corsair M75 AIR 2.4 GHz" (Corsair)	127.0.0.1	2026-05-10 01:38:19.080736-04
+7	1	Joseca	admin	CREATE	Producto	Se creó el producto "ASUS ROG Gladius III" (stock: 0, precio: 700.00)	127.0.0.1	2026-05-10 01:44:21.477957-04
+8	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 01:44:51.34051-04
+11	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 01:46:07.418581-04
+12	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "ASUS ROG Gladius III" (Asus)	127.0.0.1	2026-05-10 01:46:33.292461-04
+13	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "ASUS ROG Gladius III" (Asus)	127.0.0.1	2026-05-10 01:53:53.591622-04
+14	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 01:53:58.386156-04
+17	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 01:54:41.87533-04
+18	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Samsung 990 PRO SSD 1TB PCIe 4.0 M.2" (Samsung)	127.0.0.1	2026-05-10 01:55:06.863389-04
+19	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Corsair M75 AIR 2.4 GHz" (Corsair)	127.0.0.1	2026-05-10 01:55:46.534077-04
+20	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Logitech G305 Lightspeed Wireless" (Logitech)	127.0.0.1	2026-05-10 01:56:02.950901-04
+21	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 01:56:04.491638-04
+24	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 02:00:39.33543-04
+25	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Logitech G305 Lightspeed Wireless" (Logitech)	127.0.0.1	2026-05-10 02:00:53.865595-04
+26	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 02:00:56.73681-04
+29	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 02:01:15.941518-04
+30	1	Joseca	admin	CREATE	Producto	Se creó el producto "Razer BlackWidow V4 X" (stock: 0, precio: 700.00)	127.0.0.1	2026-05-10 02:02:56.459485-04
+31	1	Joseca	admin	CREATE	Producto	Se creó el producto "Corsair K70 Core RGB" (stock: 0, precio: 650.00)	127.0.0.1	2026-05-10 02:04:08.195708-04
+32	1	Joseca	admin	CREATE	Producto	Se creó el producto "Redragon K617 HE" (stock: 0, precio: 300.00)	127.0.0.1	2026-05-10 02:07:24.367075-04
+33	1	Joseca	admin	CREATE	Producto	Se creó el producto "ASUS TUF Gaming VG27AQ3A" (stock: 0, precio: 1849.99)	127.0.0.1	2026-05-10 02:09:10.832164-04
+34	1	Joseca	admin	CREATE	Producto	Se creó el producto "LG 27U411A-B 27" (stock: 0, precio: 800.00)	127.0.0.1	2026-05-10 02:10:26.151276-04
+35	1	Joseca	admin	CREATE	Producto	Se creó el producto "Acer KB242Y" (stock: 0, precio: 850.00)	127.0.0.1	2026-05-10 02:12:37.367648-04
+36	1	Joseca	admin	CREATE	Producto	Se creó el producto "MSI MAG A750GL PCIE5" (stock: 0, precio: 900.00)	127.0.0.1	2026-05-10 02:14:16.361419-04
+37	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "ASUS TUF Gaming VG27AQ3A" (Asus)	127.0.0.1	2026-05-10 02:14:37.671063-04
+38	1	Joseca	admin	CREATE	Producto	Se creó el producto "Corsair RM750e" (stock: 0, precio: 720.00)	127.0.0.1	2026-05-10 02:16:10.293006-04
+39	1	Joseca	admin	CREATE	Producto	Se creó el producto "Western Digital (WD) BLUE Desktop 1TB" (stock: 0, precio: 650.00)	127.0.0.1	2026-05-10 02:18:04.044003-04
+40	1	Joseca	admin	CREATE	Producto	Se creó el producto "Seagate SkyHawk 1TB" (stock: 0, precio: 380.00)	127.0.0.1	2026-05-10 02:20:31.110576-04
+41	1	Joseca	admin	CREATE	Producto	Se creó el producto "Crucial BX500 1TB" (stock: 0, precio: 1200.00)	127.0.0.1	2026-05-10 02:22:18.637025-04
+42	1	Joseca	admin	CREATE	Producto	Se creó el producto "Western Digital 1TB" (stock: 0, precio: 1250.00)	127.0.0.1	2026-05-10 02:24:33.819692-04
+43	1	Joseca	admin	CREATE	Producto	Se creó el producto "Kingston FURY Beast 8GB DDR4" (stock: 0, precio: 850.00)	127.0.0.1	2026-05-10 02:28:22.042575-04
+44	1	Joseca	admin	CREATE	Producto	Se creó el producto "Corsair Vengeance DDR5 32 GB(2 x 16 GB)" (stock: 0, precio: 3250.00)	127.0.0.1	2026-05-10 02:30:47.252597-04
+45	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 02:30:53.268601-04
+46	2	Ovando	vendedor	LOGIN	Usuario	Ovando (vendedor) inició sesión en el sistema	127.0.0.1	2026-05-10 02:30:58.392283-04
+47	2	Ovando	employee	LOGOUT	Usuario	Ovando cerró sesión en el sistema	127.0.0.1	2026-05-10 02:31:02.615778-04
+50	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 02:32:03.678004-04
+51	1	Joseca	admin	CREATE	Producto	Se creó el producto "TEAMGROUP T-Force Delta RGB DDR5 Ram 32 GB (2 x 16 GB)" (stock: 0, precio: 4000.00)	127.0.0.1	2026-05-10 02:33:58.301031-04
+52	1	Joseca	admin	CREATE	Producto	Se creó el producto "MSI PRO B550M-VC" (stock: 0, precio: 2300.00)	127.0.0.1	2026-05-10 02:35:14.814003-04
+53	1	Joseca	admin	CREATE	Producto	Se creó el producto "GIGABYTE X870 AORUS Elite WIFI7" (stock: 0, precio: 2000.00)	127.0.0.1	2026-05-10 02:36:46.986296-04
+54	1	Joseca	admin	CREATE	Producto	Se creó el producto "ASUS ROG Strix B650-A Gaming WiFi AMD" (stock: 0, precio: 1550.00)	127.0.0.1	2026-05-10 02:38:15.667724-04
+55	1	Joseca	admin	CREATE	Producto	Se creó el producto "ASUS Dual GeForce RTX™ 5060 8GB GDDR7 OC Edition" (stock: 0, precio: 3150.00)	127.0.0.1	2026-05-10 02:41:13.187135-04
+56	1	Joseca	admin	CREATE	Producto	Se creó el producto "EVGA GeForce RTX 3070 FTW3 Ultra Gaming 8GB GDDR6" (stock: 0, precio: 2800.00)	127.0.0.1	2026-05-10 02:42:53.321127-04
+57	1	Joseca	admin	CREATE	Producto	Se creó el producto "Intel Core Ultra 9 285K" (stock: 0, precio: 5200.00)	127.0.0.1	2026-05-10 02:44:48.828555-04
+58	1	Joseca	admin	CREATE	Producto	Se creó el producto "Intel Core i5-14400F" (stock: 0, precio: 2350.00)	127.0.0.1	2026-05-10 02:45:59.218201-04
+59	1	Joseca	admin	CREATE	Producto	Se creó el producto "Intel Core i3-12100F" (stock: 0, precio: 1450.00)	127.0.0.1	2026-05-10 02:48:55.050117-04
+60	1	Joseca	admin	CREATE	Producto	Se creó el producto "AMD RYZEN 7 9800X3D" (stock: 0, precio: 3800.00)	127.0.0.1	2026-05-10 02:50:38.663039-04
+61	1	Joseca	admin	CREATE	Producto	Se creó el producto "Amd Ryzen 5 9600X" (stock: 0, precio: 1650.00)	127.0.0.1	2026-05-10 02:52:01.316076-04
+62	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "ASUS Dual GeForce RTX™ 5060 8GB GDDR7 OC Edition" (Asus)	127.0.0.1	2026-05-10 02:52:42.615204-04
+63	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 03:00:52.861589-04
+64	1	Joseca	admin	CREATE	Producto	Se creó el producto "Amd Ryzen 9 9900X" (stock: 0, precio: 3750.00)	127.0.0.1	2026-05-10 03:03:06.320838-04
+65	1	Joseca	admin	CREATE	Producto	Se creó el producto "ASUS TUF Gaming F16 (2025)" (stock: 0, precio: 9500.00)	127.0.0.1	2026-05-10 03:05:45.211904-04
+66	1	Joseca	admin	CREATE	Producto	Se creó el producto "Acer Nitro V" (stock: 0, precio: 9800.00)	127.0.0.1	2026-05-10 03:06:55.643538-04
+67	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 03:09:40.658855-04
+70	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 03:15:48.678955-04
+71	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 03:16:18.375226-04
+72	4	Guido123	cliente	LOGIN	Cliente	Guido123 (cliente) inició sesión en el sistema	127.0.0.1	2026-05-10 03:16:23.22011-04
+73	4	Guido123	cliente	VENTA	Venta	Se registró la venta #17 por 1020.00 Bs (cliente: Guido123)	127.0.0.1	2026-05-10 03:40:45.201302-04
+74	4	Guido123	client	LOGOUT	Usuario	Guido123 cerró sesión en el sistema	127.0.0.1	2026-05-10 03:40:54.390807-04
+75	4	Guido123	client	LOGOUT	Usuario	Guido123 cerró sesión en el sistema	127.0.0.1	2026-05-10 03:40:54.396836-04
+76	4	Guido123	client	LOGOUT	Usuario	Guido123 cerró sesión en el sistema	127.0.0.1	2026-05-10 03:40:54.40706-04
+77	4	Guido123	client	LOGOUT	Usuario	Guido123 cerró sesión en el sistema	127.0.0.1	2026-05-10 03:40:54.426442-04
+78	4	Guido123	client	LOGOUT	Usuario	Guido123 cerró sesión en el sistema	127.0.0.1	2026-05-10 03:40:54.439174-04
+79	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 03:41:01.509508-04
+80	1	Joseca	admin	VENTA	Venta	Se confirmó la entrega de la venta #17 (estado → completada)	127.0.0.1	2026-05-10 03:41:24.286255-04
+81	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 03:42:03.663986-04
+82	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 03:42:03.67013-04
+83	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 03:42:03.677634-04
+84	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 03:42:03.691521-04
+85	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 03:42:03.692515-04
+88	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 03:45:24.656933-04
+89	1	Joseca	admin	COMPRA	Compra	Se registró la compra #6 por 52600.00 Bs	127.0.0.1	2026-05-10 04:20:06.371629-04
+90	1	Joseca	admin	COMPRA	Compra	Se registró la compra #7 por 16150.00 Bs	127.0.0.1	2026-05-10 04:23:07.280288-04
+91	1	Joseca	admin	COMPRA	Compra	Se registró la compra #8 por 9250.00 Bs	127.0.0.1	2026-05-10 04:24:02.931834-04
+92	1	Joseca	admin	COMPRA	Compra	Se registró la compra #9 por 78350.00 Bs	127.0.0.1	2026-05-10 04:25:15.839401-04
+93	1	Joseca	admin	COMPRA	Compra	Se registró la compra #10 por 109000.00 Bs	127.0.0.1	2026-05-10 04:27:28.203377-04
+94	1	Joseca	admin	COMPRA	Compra	Se registró la compra #11 por 6000.00 Bs	127.0.0.1	2026-05-10 04:28:02.9594-04
+95	1	Joseca	admin	COMPRA	Compra	Se registró la compra #12 por 2500.00 Bs	127.0.0.1	2026-05-10 04:28:59.556798-04
+96	1	Joseca	admin	COMPRA	Compra	Se registró la compra #13 por 42500.00 Bs	127.0.0.1	2026-05-10 04:29:19.512151-04
+97	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 04:29:52.182092-04
+100	2	Ovando	vendedor	LOGIN	Usuario	Ovando (vendedor) inició sesión en el sistema	127.0.0.1	2026-05-10 04:31:00.74813-04
+101	2	Ovando	employee	LOGOUT	Usuario	Ovando cerró sesión en el sistema	127.0.0.1	2026-05-10 04:31:12.610992-04
+102	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 04:31:17.540526-04
+103	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 04:33:02.768594-04
+106	2	Ovando	vendedor	LOGIN	Usuario	Ovando (vendedor) inició sesión en el sistema	127.0.0.1	2026-05-10 04:33:37.090045-04
+107	2	Ovando	employee	LOGOUT	Usuario	Ovando cerró sesión en el sistema	127.0.0.1	2026-05-10 04:34:07.995718-04
+108	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 04:34:12.993326-04
+109	1	Joseca	admin	CREATE	Producto	Se creó el producto "CORSAIR Carcasa ATX 4000D RS ARGB Frame" (stock: 0, precio: 1200.00)	127.0.0.1	2026-05-10 04:47:49.815029-04
+110	1	Joseca	admin	COMPRA	Compra	Se registró la compra #14 por 3000.00 Bs	127.0.0.1	2026-05-10 04:48:17.141299-04
+111	1	Joseca	admin	VENTA	Venta	Se registró la venta #18 por 1400.00 Bs (cliente: Nelson123)	127.0.0.1	2026-05-10 05:00:40.417265-04
+112	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 05:06:32.259671-04
+115	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 05:08:47.729397-04
+116	1	Joseca	admin	VENTA	Venta	Se registró la venta #1 por 1000.00 Bs (cliente: Nelson123)	127.0.0.1	2026-05-10 05:17:34.973445-04
+117	1	Joseca	admin	COMPRA	Compra	Se registró la compra #15 por 2500.00 Bs	127.0.0.1	2026-05-10 05:23:02.701071-04
+118	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 05:24:23.366154-04
+121	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 05:37:51.64234-04
+122	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 05:50:59.066901-04
+125	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 05:51:26.237824-04
+126	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 05:51:52.647456-04
+129	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 05:52:14.877201-04
+130	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 05:52:46.93923-04
+133	2	Ovando	vendedor	LOGIN	Usuario	Ovando (vendedor) inició sesión en el sistema	127.0.0.1	2026-05-10 05:53:02.553184-04
+134	2	Ovando	employee	LOGOUT	Usuario	Ovando cerró sesión en el sistema	127.0.0.1	2026-05-10 05:53:25.652085-04
+135	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 05:53:30.042558-04
+136	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:01:18.394575-04
+139	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:01:29.498602-04
+140	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:02:04.366166-04
+141	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:03:03.276642-04
+142	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:03:09.698009-04
+145	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:03:29.08041-04
+146	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:04:08.174077-04
+149	4	Guido123	cliente	LOGIN	Cliente	Guido123 (cliente) inició sesión en el sistema	127.0.0.1	2026-05-10 06:04:24.687545-04
+150	4	Guido123	client	LOGOUT	Usuario	Guido123 cerró sesión en el sistema	127.0.0.1	2026-05-10 06:04:26.843771-04
+151	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:04:31.37724-04
+152	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:05:29.527174-04
+153	\N	Anónimo		CREATE	Cliente	Nuevo cliente registrado: "Pandora"	127.0.0.1	2026-05-10 06:06:44.490579-04
+155	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:06:56.492637-04
+156	1	Joseca	admin	UPDATE	Cliente	Se actualizó el perfil del cliente "Pandora"	127.0.0.1	2026-05-10 06:07:28.466449-04
+157	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:07:37.62124-04
+158	5	Pandora2026	cliente	LOGIN	Cliente	Pandora2026 (cliente) inició sesión en el sistema	127.0.0.1	2026-05-10 06:07:56.554493-04
+159	5	Pandora2026	client	LOGOUT	Usuario	Pandora2026 cerró sesión en el sistema	127.0.0.1	2026-05-10 06:07:58.555271-04
+160	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:08:12.313622-04
+161	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:08:40.470919-04
+162	2	Ovando	vendedor	LOGIN	Usuario	Ovando (vendedor) inició sesión en el sistema	127.0.0.1	2026-05-10 06:08:45.7461-04
+163	2	Ovando	employee	LOGOUT	Usuario	Ovando cerró sesión en el sistema	127.0.0.1	2026-05-10 06:08:48.658775-04
+164	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:08:52.437333-04
+165	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:15:46.042387-04
+168	1	Joseca	Administrador	LOGIN	Usuario	Joseca (Administrador) inició sesión en el sistema	127.0.0.1	2026-05-10 06:15:58.096691-04
+169	1	Joseca	client	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:16:06.156829-04
+170	1	Joseca	Administrador	LOGIN	Usuario	Joseca (Administrador) inició sesión en el sistema	127.0.0.1	2026-05-10 06:16:10.510851-04
+171	1	Joseca	client	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:16:22.585668-04
+172	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:18:14.476928-04
+173	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:18:35.964698-04
+176	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:18:48.73102-04
+177	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:20:59.760238-04
+180	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:21:12.248965-04
+181	\N	Joseca	admin	DELETE	Cliente	Se eliminó el cliente "Nelson"	127.0.0.1	2026-05-10 06:21:25.215903-04
+182	1	Joseca	admin	VENTA	Venta	Se registró la venta #1 por 700.00 Bs (cliente: Pandora2026)	127.0.0.1	2026-05-10 06:24:57.989673-04
+183	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Seagate SkyHawk 1TB" (Seagate)	127.0.0.1	2026-05-10 06:53:11.003621-04
+184	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "ASUS TUF Gaming VG27AQ3A" (Asus)	127.0.0.1	2026-05-10 06:53:19.302591-04
+185	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Logitech G305 Lightspeed Wireless" (Logitech)	127.0.0.1	2026-05-10 06:53:26.514748-04
+186	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "ASUS ROG Gladius III" (Asus)	127.0.0.1	2026-05-10 06:53:34.40224-04
+187	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Samsung 990 PRO SSD 1TB PCIe 4.0 M.2" (Samsung)	127.0.0.1	2026-05-10 06:53:43.360991-04
+188	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Acer KB242Y" (Acer)	127.0.0.1	2026-05-10 06:54:00.947829-04
+189	1	Joseca	admin	UPDATE	Producto	Se modificó el producto "Kingston FURY Beast 8GB DDR4" (Kingston)	127.0.0.1	2026-05-10 06:54:09.088007-04
+190	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 06:54:44.551268-04
+191	5	Pandora2026	cliente	LOGIN	Cliente	Pandora2026 (cliente) inició sesión en el sistema	127.0.0.1	2026-05-10 06:55:04.374158-04
+192	5	Pandora2026	client	LOGOUT	Usuario	Pandora2026 cerró sesión en el sistema	127.0.0.1	2026-05-10 06:55:20.875917-04
+193	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 06:55:25.052124-04
+194	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 07:43:12.848658-04
+195	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 08:24:45.052846-04
+196	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 09:43:57.724558-04
+197	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 09:44:01.30345-04
+198	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 09:45:55.395022-04
+199	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 09:46:00.125102-04
+200	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 10:00:24.80151-04
+201	4	Guido123	cliente	LOGIN	Cliente	Guido123 (cliente) inició sesión en el sistema	127.0.0.1	2026-05-10 10:00:36.616473-04
+202	\N	Guido123	cliente	UPDATE	Cliente	Cliente ID 4 cambió su contraseña	127.0.0.1	2026-05-10 10:02:13.516526-04
+203	4	Guido123	client	LOGOUT	Usuario	Guido123 cerró sesión en el sistema	127.0.0.1	2026-05-10 10:03:34.268064-04
+204	4	Guido123	cliente	LOGIN	Cliente	Guido123 (cliente) inició sesión en el sistema	127.0.0.1	2026-05-10 10:03:49.178608-04
+205	\N	Guido123	cliente	UPDATE	Cliente	Cliente ID 4 cambió su contraseña	127.0.0.1	2026-05-10 10:04:23.683781-04
+206	4	Guido123	client	LOGOUT	Usuario	Guido123 cerró sesión en el sistema	127.0.0.1	2026-05-10 10:04:50.681631-04
+207	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 10:32:15.424062-04
+208	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 10:34:33.248275-04
+209	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 10:35:30.01323-04
+210	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 10:36:23.629354-04
+211	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 10:40:34.086827-04
+212	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 10:40:40.791609-04
+213	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 10:47:01.644767-04
+214	2	Ovando	vendedor	LOGIN	Usuario	Ovando (vendedor) inició sesión en el sistema	127.0.0.1	2026-05-10 10:53:32.454254-04
+215	2	Ovando	vendedor	LOGIN	Usuario	Ovando (vendedor) inició sesión en el sistema	127.0.0.1	2026-05-10 10:53:34.079804-04
+216	2	Ovando	employee	LOGOUT	Usuario	Ovando cerró sesión en el sistema	127.0.0.1	2026-05-10 10:53:43.174911-04
+217	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 10:53:48.208043-04
+218	\N	Anónimo		UPDATE	Usuario	Se modificó el usuario "Dio Ovando" (ID: 2)	127.0.0.1	2026-05-10 10:57:34.222577-04
+219	\N	Joseca	admin	UPDATE	Cliente	Se actualizó el perfil del cliente "Guido"	127.0.0.1	2026-05-10 10:57:54.424562-04
+220	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 10:58:01.263192-04
+221	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 11:18:16.335759-04
+222	\N	Anónimo		UPDATE	Usuario	Se modificó el usuario "Dio Ovando" (ID: 2)	127.0.0.1	2026-05-10 11:18:27.165196-04
+223	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 11:18:30.187699-04
+224	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 11:39:38.580004-04
+225	\N	Joseca	admin	UPDATE	Cliente	Se actualizó el perfil del cliente "Pandora"	127.0.0.1	2026-05-10 11:41:58.914622-04
+226	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 11:42:45.134913-04
+227	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 11:42:58.277084-04
+228	\N	Anónimo		UPDATE	Usuario	Se modificó el usuario "Julio Cesar Villarroel Dueñas" (ID: 4)	127.0.0.1	2026-05-10 11:43:27.342024-04
+229	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 11:43:33.146578-04
+230	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 11:45:50.920803-04
+231	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 11:45:56.256125-04
+232	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 11:48:23.258098-04
+233	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 11:52:47.40251-04
+234	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 12:11:12.502413-04
+235	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 12:11:22.628711-04
+236	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 12:14:41.685932-04
+237	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 12:14:53.964816-04
+238	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 13:29:41.832613-04
+239	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 13:31:40.635867-04
+240	\N	Anónimo		CREATE	Cliente	Nuevo cliente registrado: "Perez"	127.0.0.1	2026-05-10 13:32:59.007378-04
+241	\N	Anónimo		VENTA	Venta	Se registró la venta #2 por 14450.00 Bs (cliente: Perez1)	127.0.0.1	2026-05-10 13:33:34.473015-04
+243	2	Ovando	vendedor	LOGIN	Usuario	Ovando (vendedor) inició sesión en el sistema	127.0.0.1	2026-05-10 13:33:58.077423-04
+244	2	Ovando	vendedor	VENTA	Venta	Se confirmó la entrega de la venta #2 (estado → completada)	127.0.0.1	2026-05-10 13:34:42.49759-04
+245	2	Ovando	employee	LOGOUT	Usuario	Ovando cerró sesión en el sistema	127.0.0.1	2026-05-10 13:35:24.247343-04
+248	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 13:35:55.369515-04
+249	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 13:52:56.989393-04
+250	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 13:55:19.818838-04
+251	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 13:58:25.639737-04
+254	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 13:59:21.40176-04
+255	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 14:00:48.131272-04
+259	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 14:01:22.076832-04
+260	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 14:04:43.569092-04
+264	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 14:05:27.866782-04
+265	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 14:09:41.824004-04
+270	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 14:13:41.257622-04
+271	1	Joseca	admin	LOGOUT	Usuario	Joseca cerró sesión en el sistema	127.0.0.1	2026-05-10 14:14:02.96951-04
+280	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 14:36:14.758245-04
+281	1	Joseca	admin	VENTA	Venta	Se confirmó la entrega de la venta #8 (estado → completada)	127.0.0.1	2026-05-10 14:36:30.738157-04
+282	1	Joseca	admin	VENTA	Venta	Se confirmó la entrega de la venta #9 (estado → completada)	127.0.0.1	2026-05-10 14:36:32.523317-04
+283	1	Joseca	admin	COMPRA	Compra	Se registró la compra #16 por 80000.00 Bs	127.0.0.1	2026-05-10 14:39:55.644909-04
+284	1	Joseca	admin	COMPRA	Compra	Se registró la compra #17 por 66000.00 Bs	127.0.0.1	2026-05-10 14:40:37.268093-04
+285	1	Joseca	admin	DELETE	Producto	Se eliminó el producto "CORSAIR Carcasa ATX 4000D RS ARGB Frame" (ID: 37)	127.0.0.1	2026-05-10 14:41:57.398648-04
+286	1	Joseca	admin	DELETE	Producto	Se eliminó el producto "CORSAIR Carcasa ATX 4000D RS ARGB Frame" (ID: 37)	127.0.0.1	2026-05-10 14:42:39.639452-04
+288	1	Joseca	admin	LOGIN	Usuario	Joseca (admin) inició sesión en el sistema	127.0.0.1	2026-05-10 15:10:37.293676-04
+289	1	Joseca	admin	DELETE	Producto	Se eliminó el producto "CORSAIR Carcasa ATX 4000D RS ARGB Frame" (ID: None)	127.0.0.1	2026-05-10 15:10:47.512522-04
+290	1	Joseca	admin	CREATE	Producto	Se creó el producto "CORSAIR ATX 4000D" (stock: 0, precio: 1000.00)	127.0.0.1	2026-05-10 15:13:30.246547-04
+291	1	Joseca	admin	COMPRA	Compra	Se registró la compra #1 por 9000.00 Bs	127.0.0.1	2026-05-10 15:14:20.046312-04
+292	1	Joseca	admin	COMPRA	Compra	Se registró la compra #2 por 25000.00 Bs	127.0.0.1	2026-05-10 15:16:31.285036-04
+293	1	Joseca	admin	COMPRA	Compra	Se registró la compra #3 por 235200.00 Bs	127.0.0.1	2026-05-10 15:18:21.708353-04
+294	1	Joseca	admin	COMPRA	Compra	Se registró la compra #4 por 83400.00 Bs	127.0.0.1	2026-05-10 15:19:10.13852-04
+295	1	Joseca	admin	COMPRA	Compra	Se registró la compra #5 por 66900.00 Bs	127.0.0.1	2026-05-10 15:20:20.420935-04
+296	1	Joseca	admin	COMPRA	Compra	Se registró la compra #6 por 31200.00 Bs	127.0.0.1	2026-05-10 15:22:00.178913-04
+\.
+
+
+--
+-- Data for Name: categoria; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.categoria (idcategoria, nombre) FROM stdin;
+1	Laptops
+2	Procesadores
+3	Tarjetas gráficas
+4	Tarjetas madre
+5	Memoria RAM
+6	Discos SSD
+7	Discos HDD
+8	Fuentes de poder
+9	Gabinetes
+10	Refrigeración
+11	Monitores
+12	Teclados
+13	Mouse
+14	Audífonos / Headsets
+\.
+
+
+--
+-- Data for Name: cliente; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.cliente (idcliente, nombre, apellido, usuario_login, correo, sexo, ciudad, telefono, fecha_nacimiento, nit_ci, razon_social, password) FROM stdin;
+4	Guido	Rios	Guido123	GuidoRios@gmail.com	masculino	Santa cruz de la sierra	7861616	2000-06-08	962813164	Unifranz	pbkdf2_sha256$600000$v2pzBIJ9zyJXHsTGJNOyBv$NyM5L9OpPUTYh4ljaPafdBpqkz5x8GVdabxs+0I7qAQ=
+5	Pandora	Domiguez	Pandora2026	villarroeldsharion@gmail.com	femenino	Santa cruz de la sierra	78035692	2002-02-02	6339333	Telchi	pbkdf2_sha256$600000$aWyxdAQOxODpVce6eXcixQ$uFuPbqkCknsako8i8x3mmcqXCqNTTU2neIFDni2AsxU=
+6	Perez	domingo	Perez1	perez@gmail.com	masculino	Santa cruz de la sierra	7946323	2000-02-10	13131313	Telchi	pbkdf2_sha256$600000$87t7b9IAGFmLi8h4cTdi8O$+CribjDEzm+aSHrSKJ9rsSQHZPmuSdqvDZ6TBc1XNxM=
+\.
+
+
+--
+-- Data for Name: compra; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.compra (idcompra, idproveedor, fecha_compra, monto_total) FROM stdin;
+1	3	2026-05-10 19:14:20.029636	9000.00
+2	5	2026-05-10 19:16:31.273628	25000.00
+3	5	2026-05-10 19:18:21.694612	235200.00
+4	6	2026-05-10 19:19:10.115905	83400.00
+5	2	2026-05-10 19:20:20.398938	66900.00
+6	4	2026-05-10 19:22:00.16597	31200.00
+\.
+
+
+--
+-- Data for Name: detallecompra; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.detallecompra (iddetallecompra, idcompra, idproducto, cantidad, costo_unitario) FROM stdin;
+1	1	38	15	600.00
+2	2	16	10	500.00
+3	2	10	10	400.00
+4	2	6	10	500.00
+5	2	9	10	400.00
+6	2	11	10	150.00
+7	2	13	10	550.00
+8	3	36	11	8500.00
+9	3	14	11	500.00
+10	3	34	11	3200.00
+11	3	33	10	1200.00
+12	3	32	6	3000.00
+13	3	31	10	1100.00
+14	3	30	10	2000.00
+15	3	29	10	4000.00
+16	4	28	10	2300.00
+17	4	25	10	1600.00
+18	4	24	10	1600.00
+19	4	15	10	600.00
+20	4	23	7	3200.00
+21	5	27	11	2500.00
+22	5	35	2	8000.00
+23	5	12	6	1200.00
+24	5	26	11	1200.00
+25	5	8	6	500.00
+26	6	22	7	2500.00
+27	6	21	8	500.00
+28	6	20	5	850.00
+29	6	19	5	900.00
+30	6	18	1	250.00
+31	6	13	1	550.00
+32	6	11	1	150.00
+\.
+
+
+--
+-- Data for Name: detalleventa; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.detalleventa (iddetalle, idventa, idproducto, cantidad, precio_unitario) FROM stdin;
+\.
+
+
+--
+-- Data for Name: django_admin_log; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.django_admin_log (id, action_time, object_id, object_repr, action_flag, change_message, content_type_id, user_id) FROM stdin;
+\.
+
+
+--
+-- Data for Name: django_content_type; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.django_content_type (id, app_label, model) FROM stdin;
+1	admin	logentry
+2	auth	permission
+3	auth	group
+4	auth	user
+5	contenttypes	contenttype
+6	sessions	session
+7	users	usuario
+8	users	cliente
+9	users	otprecovery
+10	products	categoria
+11	products	producto
+12	products	proveedor
+13	products	compra
+14	products	detallecompra
+15	orders	venta
+16	orders	detalleventa
+17	orders	pagoventa
+18	orders	factura
+19	audit	bitacora
+\.
+
+
+--
+-- Data for Name: django_migrations; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.django_migrations (id, app, name, applied) FROM stdin;
+1	contenttypes	0001_initial	2026-05-10 07:34:48.051981-04
+2	auth	0001_initial	2026-05-10 07:34:48.164046-04
+3	admin	0001_initial	2026-05-10 07:34:48.185009-04
+4	admin	0002_logentry_remove_auto_add	2026-05-10 07:34:48.189092-04
+5	admin	0003_logentry_add_action_flag_choices	2026-05-10 07:34:48.193193-04
+6	contenttypes	0002_remove_content_type_name	2026-05-10 07:34:48.206874-04
+7	auth	0002_alter_permission_name_max_length	2026-05-10 07:34:48.211889-04
+8	auth	0003_alter_user_email_max_length	2026-05-10 07:34:48.216436-04
+9	auth	0004_alter_user_username_opts	2026-05-10 07:34:48.220754-04
+10	auth	0005_alter_user_last_login_null	2026-05-10 07:34:48.225782-04
+11	auth	0006_require_contenttypes_0002	2026-05-10 07:34:48.22726-04
+12	auth	0007_alter_validators_add_error_messages	2026-05-10 07:34:48.231978-04
+13	auth	0008_alter_user_username_max_length	2026-05-10 07:34:48.245041-04
+14	auth	0009_alter_user_last_name_max_length	2026-05-10 07:34:48.250253-04
+15	auth	0010_alter_group_name_max_length	2026-05-10 07:34:48.256009-04
+16	auth	0011_update_proxy_permissions	2026-05-10 07:34:48.265666-04
+17	auth	0012_alter_user_first_name_max_length	2026-05-10 07:34:48.270694-04
+18	sessions	0001_initial	2026-05-10 07:34:48.287698-04
+\.
+
+
+--
+-- Data for Name: django_session; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.django_session (session_key, session_data, expire_date) FROM stdin;
+nh4la8kcv0m7g1kj072uosg8pd59mq6r	.eJxVjDsOwyAQBe9CHSHDml_K9D4DWmAJTiKQjF1FuXtsyUXSzsx7b-ZxW4vfOi1-TuzKBLv8soDxSfUQ6YH13nhsdV3mwI-En7bzqSV63c7276BgL_sapXFodcqI0YECFVxOWY2OLAUZzI4yStIyEypBRkUEa0AMw2gJNLDPF__KOA4:1wM8EQ:kpbpvPFI89sL-x1tflz0JSuGT-w1kq9kYPiJtr1pZhg	2026-05-24 13:46:22.996907-04
+\.
+
+
+--
+-- Data for Name: factura; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.factura (idfactura, idventa, nro_factura, cuf, cufd, estado_siat, fecha_emision) FROM stdin;
+\.
+
+
+--
+-- Data for Name: pagoventa; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.pagoventa (idpagoventa, idventa, monto, metodo, fecha) FROM stdin;
+\.
+
+
+--
+-- Data for Name: producto; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.producto (idproducto, idcategoria, nombre, marca, modelo, imagen_url, precio_compra, precio_actual, stock_fisico, stock_minimo, descripcion) FROM stdin;
+20	6	Western Digital 1TB	Western Digital	1TB WD Blue	productos/Western_Digital_1TB.jpg	850.00	1250.00	15	3	1TB WD Blue SA510 SATA Disco duro SSD interno de estado sólido – SATA III 6 Gb/s, 2.5"/7mm, hasta 560 MB/s
+19	6	Crucial BX500 1TB	Crucial	BX500 1TB	productos/Crucial_BX500_1TB.jpg	900.00	1200.00	15	4	1TB 3D NAND SATA SSD interno de 2.5 pulgadas, hasta 540MB/s - CT1000BX500SSD1, unidad de estado sólido
+24	4	MSI PRO B550M-VC	MSI	PRO B550M-VC	productos/MSI_PRO_B550M-VC.jpg	1600.00	2300.00	15	2	WiFi ProSeries Placa base (AMD Ryzen 5000 Series, AM4, DDR4, PCIe 4.0, SATA 6Gb/s, M.2, USB 3.2 Gen 2, HDMI/DP, Wi-Fi 6E, Bluetooth 5.2, mATX)
+16	8	Corsair RM750e	Corsair	RM750e	productos/CORSAIR_RM750e.jpg	500.00	720.00	15	3	ATX 3.1 PCIe 5.1 Ready Fuente de alimentación completamente modular de 750 W – Cable 12V-2x6 incluido, Eficiencia Cybenetics Gold, condensadores con clasificación de temperatura de 105
+14	11	Acer KB242Y	Acer	KB242Y	productos/Acer_KB242Y.jpg	500.00	850.00	15	2	Monitor IPS de marco cero Full HD (1920 x 1080) de 23.8 pulgadas | Inclinación | Actualización de hasta 120 Hz | 1 ms (VRB) | sRGB 99% | Puertos HDMI y VGA |
+29	2	Intel Core Ultra 9 285K	Intel	Core Ultra 9 285K	productos/Intel_Core_Ultra_9_285K.jpg	4000.00	5200.00	15	3	Ultra 9 285K Tetracosa-core [24 núcleos] Procesador 3.70 GHz, 24 núcleos (8 núcleos P más 16 núcleos E) y 24 hilos
+28	3	EVGA GeForce RTX 3070 FTW3 Ultra Gaming 8GB GDDR6	EVGA	RTX 3070 8GB GDDR6	productos/EVGA_GeForce_RTX_3070_FTW3_Ultra_Gaming.jpg	2300.00	2800.00	15	3	RTX 3070 FTW3 Ultra Gaming, 08G-P5-3767-KL, 8GB GDDR6, tecnología iCX3, LED ARGB, placa trasera de metal, LHR
+10	12	Corsair K70 Core RGB	Corsair	K70 Core RGB	productos/Corsair_K70_Core_RGB.jpg	400.00	650.00	15	3	Teclado mecánico con cable para juegos con reposa muñeca – Interruptores lineales MLX Rojos pre-lubricados, SOCD, teclas ABS Double-Shot, amortiguación de sonido
+27	3	ASUS Dual GeForce RTX™ 5060 8GB GDDR7 OC Edition	Asus	RTX™ 5060 8GB Dual	productos/ASUS_Dual_GeForce_RTX_5060_8GB_GDDR7_OC_Edition.jpg	2500.00	3150.00	15	2	RTX™ 5060 8GB GDDR7 OC Edition (PCIe 5.0, 8GB GDDR7, DLSS 4, HDMI 2.1b, DisplayPort 2.1b, diseño de 2.5 ranuras, diseño de ventilador Axial-tech, tecnología 0dB y más)
+26	4	ASUS ROG Strix B650-A Gaming WiFi AMD	Asus	ROG Strix B650-A	productos/ASUS_ROG_Strix_B650-A_Gaming_WiFi_AMD_B650.jpg	1200.00	1550.00	15	3	WiFi AMD B650 AM5 Ryzen™ Desktop 9000 8000 y 7000 ATX placa base, 12 + 2 etapas de potencia, DDR5, ranura M.2 3x, PCIe® 4.0, LAN 2.5G, WiFi 6E, USB 3.2 Gen 2x2 Tipo-C ®, Aura Sync
+22	5	Corsair Vengeance DDR5 32 GB(2 x 16 GB)	Corsair	Vengeance DDR5 32 GB	productos/CORSAIR_Vengeance_DDR5_32_GB.jpg	2500.00	3250.00	15	3	DDR5 32 GB (2 x 16 GB) DDR5 6000 MHz CL36 AMD Expo Intel XMP iCUE Memoria de computadora compatible
+17	7	Western Digital (WD) BLUE Desktop 1TB	Western Digital	BLUE Desktop 1TB	productos/Western_Digital_WD_BLUE_Desktop_1TB.jpg	500.00	650.00	20	4	1 terabyte) unidad de disco duro de 3.5 pulgadas, 5400 ~ 7200 RPM, SATA3 (6.0 GB/s), caché de 64 MB, ideal para aplicaciones PC/Mac/CCTV/NAS/DVR/Raid y SATA
+21	5	Kingston FURY Beast 8GB DDR4	Kingston	FURY Beast 8GB DDR4	productos/Kingston_FURY_Beast_8GB.jpg	500.00	850.00	16	2	Memoria de escritorio de 8 GB 3200 MHz DDR4 CL16 KF432C16BB/8
+25	4	GIGABYTE X870 AORUS Elite WIFI7	GIGABYTE	X870 AORUS Elite WIFI7	productos/GIGABYTE_X870_AORUS.jpg	1600.00	2000.00	15	3	WIFI7 ICE AMD AM5 LGA 1718 Placa base, ATX, DDR5, 4X M.2, PCIe 5.0, USB4, WIFI7, LAN de 2.5GbE, EZ-Latch
+6	13	Corsair M75 AIR 2.4 GHz	Corsair	M75 AIR	productos/CORSAIR_M75_AIR_WIRELESS.jpg	500.00	700.00	25	2	Mouse inalámbrico ultra ligero para juegos - 2.4 GHz y Bluetooth - 26,000 DPI - Batería de hasta 100 horas
+18	7	Seagate SkyHawk 1TB	Seagate	SkyHawk 1TB	productos/Seagate_SkyHawk.jpg	250.00	380.00	15	2	Disco duro de vigilancia de 1TB - SATA 6Gb/s 64MB Cache, disco interno de 3.5 pulgadas
+15	8	MSI MAG A750GL PCIE5	MSI	MAG A750GL PCIE5	productos/MSI_MAG_A750GL_PCIE5.jpg	600.00	900.00	15	3	fuente de alimentación compacta totalmente modular para juegos de 750 W, 80+ Gold, ATX 3.1 y PCIe 5.1 listo, cable nativo de 12 V-2 x 6 de doble color
+9	12	Razer BlackWidow V4 X	Razer	BlackWidow V4 X	productos/Razer_BlackWidow_V4_X.jpg	400.00	700.00	15	3	Teclado mecánico para juegos: interruptores amarillos lineales y silenciosos - 6 teclas macro - Chroma RGB - Teclas ABS Doubleshot - Teclas de rodillo y medios
+23	5	TEAMGROUP T-Force Delta RGB DDR5 Ram 32 GB (2 x 16 GB)	TEAMGROUP	T-Force DDR5 Ram 32 GB	productos/TEAMGROUP_T-Force_Delta_RGB_DDR5_Ram_32_GB.jpg	3200.00	4000.00	15	1	\N
+5	13	Logitech G305 Lightspeed Wireless	Logitech	G305 Lightspeed Wireless	productos/Logitech_G305.jpg	200.00	320.00	18	2	Mouse inalámbrico para juegos, sensor Hero 12K, 12,000 DPI, ligero, 6 botones programables, duración de batería de 250 horas
+7	6	Samsung 990 PRO SSD 1TB PCIe 4.0 M.2	Samsung	990 PRO SSD 1TB	productos/samsung-980-pro-m2-1tb-pci-express-40-v-nand-mlc-nvme.jpg	1000.00	2000.00	19	2	M.2 2280 Disco duro interno de estado sólido, velocidades de lectura secuencial de hasta 7,450 MB/s para computación de alta gama
+11	12	Redragon K617 HE	Redragon	K617 HE	productos/Redragon_K617_HE.jpg	150.00	300.00	15	2	eclado Gaming de Activación Rápida, 60% 61 Teclas Teclado Mecánico Cableado con Activación Hiper-Rápida, Interruptor Magnético de Efecto Hall Dedicado
+38	\N	CORSAIR ATX 4000D	Corsair	ATX 4000D	productos/CORSAIR_Carcasa_para_PC_ATX_de_torre_media_modular_4000D_RS_ARGB_Frame_Soh6iRc.jpg	600.00	1000.00	15	2	Torre media modular 4000D RS ARGB Frame - Alto flujo de aire, 3 ventiladores RS ARGB preinstalados, sistema de montaje de ventilador InfiniRail™, ASUS BTF, MSI Project
+36	1	Acer Nitro V	Acer	Nitro V	productos/Acer_Nitro_V.jpg	8500.00	9800.00	15	3	Procesador Intel Core i9-13900H | GPU NVIDIA GeForce RTX 5060 para portátil | Pantalla IPS FHD de 15.6" a 165Hz | 16 GB DDR4 | SSD Gen 4 de 1 TB | Wi-Fi 6 | Teclado
+34	2	Amd Ryzen 9 9900X	Amd	Ryzen 9 9900X	productos/Amd_Ryzen_9_9900X.jpg	3200.00	3750.00	15	3	12 núcleos y 24 hilos de procesamiento, basado en la arquitectura AMD "Zen 5", compatible con DDR5-5600, Max Boost de 5.6 GHz
+33	2	Amd Ryzen 5 9600X	Amd	Ryzen 5 9600X	productos/Amd_Ryzen_5_9600X.jpg	1200.00	1650.00	15	3	6 núcleos y 12 hilos de procesamiento, basado en la arquitectura AMD "Zen 5", Max Boost de 5.4 GHz, desbloqueado para overclocking, 38 MB de caché, compatible con DDR5-5600
+32	2	AMD RYZEN 7 9800X3D	Amd	RYZEN 7 9800X3D	productos/AMD_RYZEN_7_9800X3D.jpg	3000.00	3800.00	15	3	8 núcleos y 16 hilos, ofreciendo un aumento de IPC de +~16% y gran eficiencia energética,El procesador de juegos más rápido del mundo, construido con la tecnología AMD 'Zen5' y la V-Cache 3D de próxima generación
+31	2	Intel Core i3-12100F	Intel	Core i3-12100F	productos/Intel_Core_i3-12100F.jpg	1100.00	1450.00	15	3	i3-12100F de 12ª generación, con soporte PCIe Gen 5.0 y 4.0, compatibilidad con DDR5 y DDR4, 4 núcleos (4P-0E), frecuencia Turbo de hasta 4.3 GHz
+30	2	Intel Core i5-14400F	Intel	Core i5-14400F	productos/Intel_Core_i5-14400F.jpg	2000.00	2350.00	15	3	Core i5-14400F Procesador de escritorio 10 núcleos (6 núcleos P + 4 núcleos E) hasta 4.7 GHz, 0 núcleos (6 núcleos P más 4 núcleos E) y 16 hilos
+35	1	ASUS TUF Gaming F16 (2025)	Asus	TUF Gaming F16 (2025)	productos/ASUS_TUF_Gaming_F16_2025.jpg	8000.00	9500.00	15	3	aptop para juegos, pantalla FHD+ 165Hz 16:10 de 16 pulgadas, procesador Intel Core i5 13450HX, NVIDIA® GeForce RTX™ 5050, DDR5 de 16 GB, SSD PCIe Gen4 de 512 GB, Wi-Fi 6E
+12	11	ASUS TUF Gaming VG27AQ3A	Asus	TUF Gaming VG27AQ3A	productos/ASUS_TUF_Gaming_VG27AQ3A.jpg	1200.00	1850.00	15	2	Monitor de 27 pulgadas, resolución 1440P HDR, QHD (2560 x 1440), 180Hz, 1ms, IPS rápido, 130% sRGB, Extreme Low Motion Blur Sync, altavoces, FreeSync Premium
+8	13	ASUS ROG Gladius III	Asus	ROG Gladius III	productos/Asus_Rog_Gladius_3.jpg	500.00	700.00	15	2	Mouse inalámbrico para juegos Aimpoint, ergonómico para diestros, 2.79 oz, conectividad trimodo, 36K DPI, batería de hasta 119 horas
+13	11	LG 27U411A-B 27	LG	27U411A-B 27	productos/LG_27U411A-B_27.jpg	550.00	800.00	15	2	Full HD (1920 x 1080) Monitor IPS para computadora, 120Hz, HDR10, Modo Lector, Seguro contra parpadeos, HDMI, Base delgada, Negro
+\.
+
+
+--
+-- Data for Name: proveedor; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.proveedor (idproveedor, nombre_empresa, nit, razon_social, contacto_nombre, telefono, correo, direccion, ciudad, activo, fecha_registro) FROM stdin;
+2	Asus	2532131355	Asus Company	Roberto Eguez	78035921	Roberto@gmail.com	Av. Pirai 2 anillo, calle espejo N° 22	Beni	t	2026-05-09 01:57:59.298108-04
+3	TecnoImport Bolivia	10234567	TecnoImport Bolivia S.R.L.	Carlos Mendoza	72145678	ventas@tecnoimport.com	Av. Cristo Redentor #2450	Santa Cruz	t	2026-05-10 03:48:20.05205-04
+4	Digital Hardware Center	20456789	Digital Hardware Center Ltda.	Mariana López	75588991	contacto@digitalhardware.bo	Calle Comercio #1180	La Paz	t	2026-05-10 03:49:10.424973-04
+5	Infinity Tech Store	73455621	Infinity Tech Store Ltda.	Andrea Méndez	74561230	contacto@infinitytech.bo	Calle Aroma #845	Cochabamba	t	2026-05-10 03:50:07.453948-04
+6	CyberZone Bolivia	95678234	CyberZone Bolivia S.R.L.	Valeria Ortiz	71122334	soporte@cyberzone.bo	Calle Junín #455	Sucre	t	2026-05-10 03:59:35.87646-04
+\.
+
+
+--
+-- Data for Name: usuario; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.usuario (idusuario, nombre_completo, username, password_hash, rol, activo, email, telefono, ciudad, fecha_nacimiento) FROM stdin;
+1	Jose carlos Villarroel Dueñas	Joseca	pbkdf2_sha256$600000$H0SivwO2DrKMaPjyzVrTzr$g4/BbdR0/IfbVPpBZBUD+bJ/DiL/DOyYjvufTB4P6Qg=	admin	t	huasi456@gmail.com	78035692	Santa cruz de la Sierra	1996-05-15
+5	Julieta Villarroel	Juli123	pbkdf2_sha256$600000$5PzT94khmKFDHAEruqvuGa$dF6GCG0y3CLJT5nFWhLnmEc9u4tZFyxTQffSvnMOyG4=	vendedor	t	Julietavillarroel@gmail.com	67711777	Beni	2003-02-22
+2	Dio Ovando	Ovando	pbkdf2_sha256$600000$I5bwgmjucTRhVvSyc00iVG$nTu8ciM0nOPlizJMvBz1DLFf18ckl3DM5IXlQMC3L10=	vendedor	t	katyvillarroel1617@gmail.com	69054688	Potosi	2000-12-01
+4	Julio Cesar Villarroel Dueñas	Cesar123	pbkdf2_sha256$600000$LBhs8fFw1oSJpAaS754VEb$o7YI0mhd61ddv/0+HFVr8BU5N8h1Wscg4xJ6yqOz7UE=	vendedor	t	juliocesarvillarroed@gmail.com	69060614	Santa cruz de la sierra	2000-06-28
+\.
+
+
+--
+-- Data for Name: venta; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.venta (idventa, idcliente, idusuario, fecha_venta, monto_total, estado, estado_entrega, pedido_online) FROM stdin;
+\.
+
+
+--
+-- Name: auth_group_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.auth_group_id_seq', 1, false);
+
+
+--
+-- Name: auth_group_permissions_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.auth_group_permissions_id_seq', 1, false);
+
+
+--
+-- Name: auth_permission_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.auth_permission_id_seq', 76, true);
+
+
+--
+-- Name: auth_user_groups_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.auth_user_groups_id_seq', 1, false);
+
+
+--
+-- Name: auth_user_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.auth_user_id_seq', 1, true);
+
+
+--
+-- Name: auth_user_user_permissions_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.auth_user_user_permissions_id_seq', 1, false);
+
+
+--
+-- Name: bitacora_idbitacora_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.bitacora_idbitacora_seq', 296, true);
+
+
+--
+-- Name: categoria_idcategoria_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.categoria_idcategoria_seq', 14, true);
+
+
+--
+-- Name: cliente_idcliente_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.cliente_idcliente_seq', 6, true);
+
+
+--
+-- Name: compra_idcompra_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.compra_idcompra_seq', 6, true);
+
+
+--
+-- Name: detallecompra_iddetallecompra_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.detallecompra_iddetallecompra_seq', 32, true);
+
+
+--
+-- Name: detalleventa_iddetalle_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.detalleventa_iddetalle_seq', 1, false);
+
+
+--
+-- Name: django_admin_log_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.django_admin_log_id_seq', 1, false);
+
+
+--
+-- Name: django_content_type_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.django_content_type_id_seq', 19, true);
+
+
+--
+-- Name: django_migrations_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.django_migrations_id_seq', 18, true);
+
+
+--
+-- Name: factura_idfactura_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.factura_idfactura_seq', 1, false);
+
+
+--
+-- Name: pagoventa_idpagoventa_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.pagoventa_idpagoventa_seq', 1, false);
+
+
+--
+-- Name: producto_idproducto_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.producto_idproducto_seq', 38, true);
+
+
+--
+-- Name: proveedor_idproveedor_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.proveedor_idproveedor_seq', 6, true);
+
+
+--
+-- Name: usuario_idusuario_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.usuario_idusuario_seq', 5, true);
+
+
+--
+-- Name: venta_idventa_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.venta_idventa_seq', 1, false);
+
+
+--
+-- Name: auth_group auth_group_name_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group
+    ADD CONSTRAINT auth_group_name_key UNIQUE (name);
+
+
+--
+-- Name: auth_group_permissions auth_group_permissions_group_id_permission_id_0cd325b0_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group_permissions
+    ADD CONSTRAINT auth_group_permissions_group_id_permission_id_0cd325b0_uniq UNIQUE (group_id, permission_id);
+
+
+--
+-- Name: auth_group_permissions auth_group_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group_permissions
+    ADD CONSTRAINT auth_group_permissions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_group auth_group_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group
+    ADD CONSTRAINT auth_group_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_permission auth_permission_content_type_id_codename_01ab375a_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_permission
+    ADD CONSTRAINT auth_permission_content_type_id_codename_01ab375a_uniq UNIQUE (content_type_id, codename);
+
+
+--
+-- Name: auth_permission auth_permission_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_permission
+    ADD CONSTRAINT auth_permission_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_user_groups auth_user_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_groups
+    ADD CONSTRAINT auth_user_groups_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_user_groups auth_user_groups_user_id_group_id_94350c0c_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_groups
+    ADD CONSTRAINT auth_user_groups_user_id_group_id_94350c0c_uniq UNIQUE (user_id, group_id);
+
+
+--
+-- Name: auth_user auth_user_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user
+    ADD CONSTRAINT auth_user_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_user_user_permissions auth_user_user_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_user_permissions
+    ADD CONSTRAINT auth_user_user_permissions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_user_user_permissions auth_user_user_permissions_user_id_permission_id_14a6b632_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_user_permissions
+    ADD CONSTRAINT auth_user_user_permissions_user_id_permission_id_14a6b632_uniq UNIQUE (user_id, permission_id);
+
+
+--
+-- Name: auth_user auth_user_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user
+    ADD CONSTRAINT auth_user_username_key UNIQUE (username);
+
+
+--
+-- Name: bitacora bitacora_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.bitacora
+    ADD CONSTRAINT bitacora_pkey PRIMARY KEY (idbitacora);
+
+
+--
+-- Name: categoria categoria_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.categoria
+    ADD CONSTRAINT categoria_pkey PRIMARY KEY (idcategoria);
+
+
+--
+-- Name: cliente cliente_correo_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cliente
+    ADD CONSTRAINT cliente_correo_key UNIQUE (correo);
+
+
+--
+-- Name: cliente cliente_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cliente
+    ADD CONSTRAINT cliente_pkey PRIMARY KEY (idcliente);
+
+
+--
+-- Name: cliente cliente_usuario_login_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cliente
+    ADD CONSTRAINT cliente_usuario_login_key UNIQUE (usuario_login);
+
+
+--
+-- Name: compra compra_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.compra
+    ADD CONSTRAINT compra_pkey PRIMARY KEY (idcompra);
+
+
+--
+-- Name: detallecompra detallecompra_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detallecompra
+    ADD CONSTRAINT detallecompra_pkey PRIMARY KEY (iddetallecompra);
+
+
+--
+-- Name: detalleventa detalleventa_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detalleventa
+    ADD CONSTRAINT detalleventa_pkey PRIMARY KEY (iddetalle);
+
+
+--
+-- Name: django_admin_log django_admin_log_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_admin_log
+    ADD CONSTRAINT django_admin_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: django_content_type django_content_type_app_label_model_76bd3d3b_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_content_type
+    ADD CONSTRAINT django_content_type_app_label_model_76bd3d3b_uniq UNIQUE (app_label, model);
+
+
+--
+-- Name: django_content_type django_content_type_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_content_type
+    ADD CONSTRAINT django_content_type_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: django_migrations django_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_migrations
+    ADD CONSTRAINT django_migrations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: django_session django_session_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_session
+    ADD CONSTRAINT django_session_pkey PRIMARY KEY (session_key);
+
+
+--
+-- Name: factura factura_idventa_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.factura
+    ADD CONSTRAINT factura_idventa_key UNIQUE (idventa);
+
+
+--
+-- Name: factura factura_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.factura
+    ADD CONSTRAINT factura_pkey PRIMARY KEY (idfactura);
+
+
+--
+-- Name: pagoventa pagoventa_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.pagoventa
+    ADD CONSTRAINT pagoventa_pkey PRIMARY KEY (idpagoventa);
+
+
+--
+-- Name: producto producto_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.producto
+    ADD CONSTRAINT producto_pkey PRIMARY KEY (idproducto);
+
+
+--
+-- Name: proveedor proveedor_nit_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.proveedor
+    ADD CONSTRAINT proveedor_nit_key UNIQUE (nit);
+
+
+--
+-- Name: proveedor proveedor_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.proveedor
+    ADD CONSTRAINT proveedor_pkey PRIMARY KEY (idproveedor);
+
+
+--
+-- Name: usuario usuario_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.usuario
+    ADD CONSTRAINT usuario_pkey PRIMARY KEY (idusuario);
+
+
+--
+-- Name: usuario usuario_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.usuario
+    ADD CONSTRAINT usuario_username_key UNIQUE (username);
+
+
+--
+-- Name: venta venta_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.venta
+    ADD CONSTRAINT venta_pkey PRIMARY KEY (idventa);
+
+
+--
+-- Name: auth_group_name_a6ea08ec_like; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_group_name_a6ea08ec_like ON public.auth_group USING btree (name varchar_pattern_ops);
+
+
+--
+-- Name: auth_group_permissions_group_id_b120cbf9; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_group_permissions_group_id_b120cbf9 ON public.auth_group_permissions USING btree (group_id);
+
+
+--
+-- Name: auth_group_permissions_permission_id_84c5c92e; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_group_permissions_permission_id_84c5c92e ON public.auth_group_permissions USING btree (permission_id);
+
+
+--
+-- Name: auth_permission_content_type_id_2f476e4b; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_permission_content_type_id_2f476e4b ON public.auth_permission USING btree (content_type_id);
+
+
+--
+-- Name: auth_user_groups_group_id_97559544; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_groups_group_id_97559544 ON public.auth_user_groups USING btree (group_id);
+
+
+--
+-- Name: auth_user_groups_user_id_6a12ed8b; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_groups_user_id_6a12ed8b ON public.auth_user_groups USING btree (user_id);
+
+
+--
+-- Name: auth_user_user_permissions_permission_id_1fbb5f2c; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_user_permissions_permission_id_1fbb5f2c ON public.auth_user_user_permissions USING btree (permission_id);
+
+
+--
+-- Name: auth_user_user_permissions_user_id_a95ead1b; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_user_permissions_user_id_a95ead1b ON public.auth_user_user_permissions USING btree (user_id);
+
+
+--
+-- Name: auth_user_username_6821ab7c_like; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_username_6821ab7c_like ON public.auth_user USING btree (username varchar_pattern_ops);
+
+
+--
+-- Name: django_admin_log_content_type_id_c4bce8eb; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX django_admin_log_content_type_id_c4bce8eb ON public.django_admin_log USING btree (content_type_id);
+
+
+--
+-- Name: django_admin_log_user_id_c564eba6; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX django_admin_log_user_id_c564eba6 ON public.django_admin_log USING btree (user_id);
+
+
+--
+-- Name: django_session_expire_date_a5c62663; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX django_session_expire_date_a5c62663 ON public.django_session USING btree (expire_date);
+
+
+--
+-- Name: django_session_session_key_c0390e0f_like; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX django_session_session_key_c0390e0f_like ON public.django_session USING btree (session_key varchar_pattern_ops);
+
+
+--
+-- Name: idx_bitacora_fecha; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_bitacora_fecha ON public.bitacora USING btree (fecha DESC);
+
+
+--
+-- Name: idx_detallecompra_compra; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_detallecompra_compra ON public.detallecompra USING btree (idcompra);
+
+
+--
+-- Name: idx_detallecompra_producto; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_detallecompra_producto ON public.detallecompra USING btree (idproducto);
+
+
+--
+-- Name: idx_detalleventa_producto; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_detalleventa_producto ON public.detalleventa USING btree (idproducto);
+
+
+--
+-- Name: idx_detalleventa_venta; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_detalleventa_venta ON public.detalleventa USING btree (idventa);
+
+
+--
+-- Name: idx_pagoventa_venta; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_pagoventa_venta ON public.pagoventa USING btree (idventa);
+
+
+--
+-- Name: idx_producto_categoria; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_producto_categoria ON public.producto USING btree (idcategoria);
+
+
+--
+-- Name: detallecompra trigger_compra_stock; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_compra_stock AFTER INSERT ON public.detallecompra FOR EACH ROW EXECUTE FUNCTION public.trg_sumar_stock_compra();
+
+
+--
+-- Name: pagoventa trigger_estado_venta; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_estado_venta AFTER INSERT OR DELETE OR UPDATE ON public.pagoventa FOR EACH ROW EXECUTE FUNCTION public.trg_actualizar_estado_venta();
+
+
+--
+-- Name: detalleventa trigger_stock_venta; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_stock_venta AFTER INSERT OR DELETE OR UPDATE ON public.detalleventa FOR EACH ROW EXECUTE FUNCTION public.trg_gestionar_stock_venta();
+
+
+--
+-- Name: detallecompra trigger_total_compra; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_total_compra AFTER INSERT OR DELETE OR UPDATE ON public.detallecompra FOR EACH ROW EXECUTE FUNCTION public.trg_actualizar_total_compra();
+
+
+--
+-- Name: detalleventa trigger_total_venta; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_total_venta AFTER INSERT OR DELETE OR UPDATE ON public.detalleventa FOR EACH ROW EXECUTE FUNCTION public.trg_actualizar_total_venta();
+
+
+--
+-- Name: detalleventa trigger_validar_stock; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_validar_stock BEFORE INSERT OR UPDATE ON public.detalleventa FOR EACH ROW EXECUTE FUNCTION public.trg_validar_stock();
+
+
+--
+-- Name: auth_group_permissions auth_group_permissio_permission_id_84c5c92e_fk_auth_perm; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group_permissions
+    ADD CONSTRAINT auth_group_permissio_permission_id_84c5c92e_fk_auth_perm FOREIGN KEY (permission_id) REFERENCES public.auth_permission(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: auth_group_permissions auth_group_permissions_group_id_b120cbf9_fk_auth_group_id; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group_permissions
+    ADD CONSTRAINT auth_group_permissions_group_id_b120cbf9_fk_auth_group_id FOREIGN KEY (group_id) REFERENCES public.auth_group(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: auth_permission auth_permission_content_type_id_2f476e4b_fk_django_co; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_permission
+    ADD CONSTRAINT auth_permission_content_type_id_2f476e4b_fk_django_co FOREIGN KEY (content_type_id) REFERENCES public.django_content_type(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: auth_user_groups auth_user_groups_group_id_97559544_fk_auth_group_id; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_groups
+    ADD CONSTRAINT auth_user_groups_group_id_97559544_fk_auth_group_id FOREIGN KEY (group_id) REFERENCES public.auth_group(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: auth_user_groups auth_user_groups_user_id_6a12ed8b_fk_auth_user_id; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_groups
+    ADD CONSTRAINT auth_user_groups_user_id_6a12ed8b_fk_auth_user_id FOREIGN KEY (user_id) REFERENCES public.auth_user(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: auth_user_user_permissions auth_user_user_permi_permission_id_1fbb5f2c_fk_auth_perm; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_user_permissions
+    ADD CONSTRAINT auth_user_user_permi_permission_id_1fbb5f2c_fk_auth_perm FOREIGN KEY (permission_id) REFERENCES public.auth_permission(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: auth_user_user_permissions auth_user_user_permissions_user_id_a95ead1b_fk_auth_user_id; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_user_permissions
+    ADD CONSTRAINT auth_user_user_permissions_user_id_a95ead1b_fk_auth_user_id FOREIGN KEY (user_id) REFERENCES public.auth_user(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: bitacora bitacora_idusuario_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.bitacora
+    ADD CONSTRAINT bitacora_idusuario_fkey FOREIGN KEY (idusuario) REFERENCES public.usuario(idusuario) ON DELETE SET NULL;
+
+
+--
+-- Name: detallecompra detallecompra_idcompra_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detallecompra
+    ADD CONSTRAINT detallecompra_idcompra_fkey FOREIGN KEY (idcompra) REFERENCES public.compra(idcompra) ON DELETE CASCADE;
+
+
+--
+-- Name: detallecompra detallecompra_idproducto_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detallecompra
+    ADD CONSTRAINT detallecompra_idproducto_fkey FOREIGN KEY (idproducto) REFERENCES public.producto(idproducto);
+
+
+--
+-- Name: detalleventa detalleventa_idproducto_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detalleventa
+    ADD CONSTRAINT detalleventa_idproducto_fkey FOREIGN KEY (idproducto) REFERENCES public.producto(idproducto);
+
+
+--
+-- Name: detalleventa detalleventa_idventa_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detalleventa
+    ADD CONSTRAINT detalleventa_idventa_fkey FOREIGN KEY (idventa) REFERENCES public.venta(idventa) ON DELETE CASCADE;
+
+
+--
+-- Name: django_admin_log django_admin_log_content_type_id_c4bce8eb_fk_django_co; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_admin_log
+    ADD CONSTRAINT django_admin_log_content_type_id_c4bce8eb_fk_django_co FOREIGN KEY (content_type_id) REFERENCES public.django_content_type(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: django_admin_log django_admin_log_user_id_c564eba6_fk_auth_user_id; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_admin_log
+    ADD CONSTRAINT django_admin_log_user_id_c564eba6_fk_auth_user_id FOREIGN KEY (user_id) REFERENCES public.auth_user(id) DEFERRABLE INITIALLY DEFERRED;
+
+
+--
+-- Name: factura factura_idventa_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.factura
+    ADD CONSTRAINT factura_idventa_fkey FOREIGN KEY (idventa) REFERENCES public.venta(idventa);
+
+
+--
+-- Name: pagoventa pagoventa_idventa_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.pagoventa
+    ADD CONSTRAINT pagoventa_idventa_fkey FOREIGN KEY (idventa) REFERENCES public.venta(idventa) ON DELETE CASCADE;
+
+
+--
+-- Name: producto producto_idcategoria_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.producto
+    ADD CONSTRAINT producto_idcategoria_fkey FOREIGN KEY (idcategoria) REFERENCES public.categoria(idcategoria) ON DELETE SET NULL;
+
+
+--
+-- Name: venta venta_idusuario_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.venta
+    ADD CONSTRAINT venta_idusuario_fkey FOREIGN KEY (idusuario) REFERENCES public.usuario(idusuario);
+
+
+--
+-- Name: SCHEMA public; Type: ACL; Schema: -; Owner: postgres
+--
+
+REVOKE USAGE ON SCHEMA public FROM PUBLIC;
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict 0DDvqQUsgGRHTlgJgAfOvVaplRLwrQMrnhXsndgEiUbIbc9h5bh0MtGh4Qbm8Iy
+
+```
+
+---
+
+## 2. Scripts incrementales (aplicados después del dump)
+
+### 2.1 — `001_descuento_vip.sql`
+
+```sql
+-- ============================================================================
+-- 001_descuento_vip.sql — Descuento VIP para clientes fieles
+--
+-- Reglas:
+--   1. Por cada 10000 Bs acumulados en compras, el cliente gana 200 Bs de descuento.
+--   2. El descuento se aplica en la SIGUIENTE compra (no en la que cruza el umbral).
+--   3. Se aplica en bloques de 200 Bs, tantos como caben en la compra.
+--   4. El acumulado suma el monto ANTES del descuento (rewardea la lealtad real).
+--   5. Compra >= bloque exacto: cliente puede pagar 0 (regla relajada).
+--
+-- Aplicar este script en la base de datos de Railway (una sola vez):
+--   - Railway Dashboard -> Postgres -> Data -> Query -> pegar y ejecutar
+-- ============================================================================
+
+-- 1) Agregar columnas a la tabla cliente
+ALTER TABLE cliente
+  ADD COLUMN IF NOT EXISTS total_acumulado DECIMAL(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS descuento_disponible DECIMAL(10,2) NOT NULL DEFAULT 0;
+
+-- 2) Agregar columna a la tabla venta
+ALTER TABLE venta
+  ADD COLUMN IF NOT EXISTS descuento_aplicado DECIMAL(10,2) NOT NULL DEFAULT 0;
+
+-- 3) Retroactivo: poblar total_acumulado con la suma historica de ventas de cada cliente
+UPDATE cliente c
+SET total_acumulado = COALESCE((
+    SELECT SUM(v.monto_total)
+    FROM venta v
+    WHERE v.idcliente = c.idcliente
+), 0);
+
+-- 4) Retroactivo: otorgar 200 Bs por cada 10000 Bs acumulados (clientes fieles)
+UPDATE cliente
+SET descuento_disponible = FLOOR(total_acumulado / 10000) * 200;
+
+-- 5) Verificacion (opcional): ver clientes VIP
+-- SELECT idcliente, nombre, apellido, total_acumulado, descuento_disponible
+-- FROM cliente
+-- WHERE total_acumulado >= 10000
+-- ORDER BY total_acumulado DESC;
+```
+
+### 2.2 — `002_garantia.sql`
+
+```sql
+-- ============================================================================
+-- 002_garantia.sql — Gestión de Garantías de productos vendidos
+--
+-- Reglas del negocio:
+--   1. Cada producto tiene una duración de garantía en MESES (producto.meses_garantia).
+--      Ej: disco duro 3, audífonos 6, laptop 12. Valor 0 = sin garantía.
+--   2. La garantía empieza a contar el día de la VENTA (fecha_inicio = fecha_venta)
+--      y vence en fecha_inicio + meses (fecha_fin).
+--   3. Se genera 1 garantía por cada ítem (detalleventa) de la venta cuyo
+--      producto tenga meses_garantia > 0.
+--   4. Estados:
+--        activa     → vigente o vencida (se calcula por fecha al leer)
+--        reclamada  → el cliente reportó un problema (en revisión)
+--        aprobada   → el reclamo procede (se cubre)
+--        rechazada  → no procede (manipulación / mal uso) → NO se puede re-reclamar
+--   5. "Vencida" NO se guarda: se calcula con fecha_fin < hoy. Así no hace falta
+--      ninguna tarea programada que actualice estados.
+--
+-- Aplicar este script UNA SOLA VEZ en local y en Railway:
+--   Railway Dashboard -> Postgres -> Data -> Query -> pegar y ejecutar.
+-- ============================================================================
+
+-- 1) Duración de garantía por producto (en meses). 0 = sin garantía.
+ALTER TABLE producto
+  ADD COLUMN IF NOT EXISTS meses_garantia INTEGER NOT NULL DEFAULT 0;
+
+-- 2) Tabla de garantías
+CREATE TABLE IF NOT EXISTS garantia (
+    idgarantia       SERIAL PRIMARY KEY,
+    idventa          INTEGER NOT NULL REFERENCES venta(idventa) ON DELETE CASCADE,
+    iddetalle        INTEGER NOT NULL UNIQUE REFERENCES detalleventa(iddetalle) ON DELETE CASCADE,
+    idproducto       INTEGER NOT NULL REFERENCES producto(idproducto),
+    idcliente        INTEGER REFERENCES cliente(idcliente),
+    cantidad         INTEGER NOT NULL DEFAULT 1,
+    meses            INTEGER NOT NULL DEFAULT 0,
+    fecha_inicio     DATE NOT NULL,
+    fecha_fin        DATE NOT NULL,
+    estado           VARCHAR(20) NOT NULL DEFAULT 'activa',
+    motivo_reclamo   TEXT,
+    fecha_reclamo    TIMESTAMP,
+    resolucion       TEXT,
+    fecha_resolucion TIMESTAMP
+);
+
+-- Índices para las consultas más frecuentes (por cliente y por estado)
+CREATE INDEX IF NOT EXISTS idx_garantia_cliente ON garantia(idcliente);
+CREATE INDEX IF NOT EXISTS idx_garantia_estado  ON garantia(estado);
+CREATE INDEX IF NOT EXISTS idx_garantia_venta    ON garantia(idventa);
+
+-- 3) (OPCIONAL) Garantías retroactivas de ventas ya existentes.
+--    NO ejecutes esto todavía: primero pon los meses a cada producto y luego
+--    usa el botón "Generar garantías de ventas anteriores" en la app
+--    (hace exactamente este INSERT, contando desde la fecha real de cada venta).
+--    Se deja aquí como referencia / alternativa manual:
+--
+-- INSERT INTO garantia (idventa, iddetalle, idproducto, idcliente, cantidad,
+--                       meses, fecha_inicio, fecha_fin, estado)
+-- SELECT v.idventa, d.iddetalle, d.idproducto, v.idcliente, d.cantidad,
+--        p.meses_garantia,
+--        v.fecha_venta::date,
+--        (v.fecha_venta::date + (p.meses_garantia || ' months')::interval)::date,
+--        'activa'
+-- FROM detalleventa d
+-- JOIN venta v    ON v.idventa = d.idventa
+-- JOIN producto p ON p.idproducto = d.idproducto
+-- WHERE p.meses_garantia > 0
+--   AND NOT EXISTS (SELECT 1 FROM garantia g WHERE g.iddetalle = d.iddetalle);
+
+-- 4) Verificación (opcional):
+-- SELECT g.idgarantia, g.idventa, p.nombre, g.fecha_inicio, g.fecha_fin, g.estado
+-- FROM garantia g JOIN producto p ON p.idproducto = g.idproducto
+-- ORDER BY g.idgarantia DESC;
+```
+
+### 2.3 — `003_resena.sql`
+
+```sql
+-- ============================================================================
+-- 003_resena.sql — Reseñas de la tienda (opiniones de clientes)
+--
+-- Reglas del negocio:
+--   1. La reseña es por VENTA completa (el pedido entero), no por producto.
+--      Califica la experiencia: atención + calidad del/los producto(s).
+--   2. Solo el cliente dueño de una venta COMPLETADA puede reseñarla.
+--   3. 1 reseña por venta (UNIQUE idventa). Una vez enviada NO se edita ni se
+--      borra por el cliente (queda fija).
+--   4. puntuacion 1..5 obligatoria; comentario opcional.
+--   5. Moderación: el admin puede OCULTAR una reseña (estado='oculto'); las
+--      ocultas no se muestran en la Tienda ni cuentan en el promedio, pero el
+--      registro se conserva (reversible con 'visible').
+--
+-- Aplicar este script UNA SOLA VEZ en local y en Railway:
+--   Railway Dashboard -> Postgres -> Data -> Query -> pegar y ejecutar.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS resena (
+    idresena    SERIAL PRIMARY KEY,
+    idventa     INTEGER NOT NULL UNIQUE REFERENCES venta(idventa) ON DELETE CASCADE,
+    idcliente   INTEGER NOT NULL REFERENCES cliente(idcliente) ON DELETE CASCADE,
+    puntuacion  SMALLINT NOT NULL CHECK (puntuacion BETWEEN 1 AND 5),
+    comentario  TEXT,
+    estado      VARCHAR(20) NOT NULL DEFAULT 'visible',  -- visible | oculto
+    fecha       TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_resena_estado  ON resena(estado);
+CREATE INDEX IF NOT EXISTS idx_resena_cliente ON resena(idcliente);
+
+-- Verificación (opcional):
+-- SELECT r.idresena, r.idventa, c.nombre, r.puntuacion, r.estado, r.fecha
+-- FROM resena r JOIN cliente c ON c.idcliente = r.idcliente
+-- ORDER BY r.idresena DESC;
+```
