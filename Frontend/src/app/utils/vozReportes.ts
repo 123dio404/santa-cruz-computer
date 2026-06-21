@@ -14,19 +14,22 @@
  * Funciona desde cualquier pantalla porque trae sus propios datos.
  */
 import { productosAPI, ventasAPI, comprasAPI } from '../services/api';
-import type { VozReporte, VozFormato, VozIntencion } from '../services/api';
+import type { VozReporte, VozFormato, VozIntencion, ApiCliente, ApiProveedor } from '../services/api';
 import { exportToExcel } from './exportExcel';
 
 export const REPORTE_LABEL: Record<VozReporte, string> = {
-  almacen:         'Almacén (stock)',
-  entradas:        'Entradas de stock',
-  salidas:         'Salidas de stock',
-  ventas:          'Ventas',
-  compras:         'Compras a proveedores',
-  top_vendidos:    'Productos más vendidos',
-  top_comprados:   'Productos más comprados',
-  top_clientes:    'Clientes más frecuentes',
-  top_proveedores: 'Proveedores con más compras',
+  almacen:           'Almacén (stock)',
+  entradas:          'Entradas de stock',
+  salidas:           'Salidas de stock',
+  ventas:            'Ventas',
+  compras:           'Compras a proveedores',
+  top_vendidos:      'Productos más vendidos',
+  top_comprados:     'Productos más comprados',
+  top_clientes:      'Clientes más frecuentes',
+  top_proveedores:   'Proveedores con más compras',
+  factura:           'Factura por número',
+  facturas_cliente:  'Facturas de un cliente',
+  compras_proveedor: 'Compras a un proveedor',
 };
 
 export type Rango = { desde?: string | null; hasta?: string | null };
@@ -84,6 +87,18 @@ function parseFechas(t: string): Rango | null {
     }
   }
 
+  // Día específico con mes nombrado ("10 de mayo [de 2026]", "el 3 de junio")
+  // Va ANTES del mes completo para que el día gane sobre el mes entero.
+  if ((m = t.match(/\b(\d{1,2})\s+de\s+([a-z]+)(?:\s+(?:de(?:l)?\s+)?(20\d{2}))?/))) {
+    const mi = idxMes(m[2]);
+    if (mi > 0) {
+      const yy = m[3] ? parseInt(m[3], 10) : Y;
+      const d = Math.min(Math.max(1, +m[1]), ultimoDia(yy, mi));
+      const iso = isoOf(yy, mi, d);
+      return { desde: iso, hasta: iso };
+    }
+  }
+
   // Mes nombrado ("mayo", "mayo de 2025") → mes completo
   for (let i = 0; i < MESES.length; i++) {
     if (new RegExp(`\\b${MESES[i]}\\b`).test(t) || (i === 8 && /\bsetiembre\b/.test(t))) {
@@ -105,6 +120,18 @@ function parseFechas(t: string): Rango | null {
   return null;
 }
 
+// Recorta lo que sigue a "cliente "/"proveedor " hasta toparse con una palabra de
+// formato o de fecha; lo que queda es el nombre dictado. Texto ya normalizado.
+const CORTE_NOMBRE = /\b(excel|pdf|ambos|los dos|hoy|ayer|esta semana|este mes|este ano|ultim\w+|del \d|en (?:excel|pdf|ambos|formato)|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|20\d{2}|por favor|porfa|gracias)\b/;
+function extraerNombre(t: string, clave: RegExp): string {
+  const m = t.match(clave);
+  if (!m) return '';
+  let resto = t.slice((m.index ?? 0) + m[0].length).trim();
+  const corte = resto.search(CORTE_NOMBRE);
+  if (corte >= 0) resto = resto.slice(0, corte);
+  return resto.replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 // ── 2. Reglas locales (reporte + formato + periodo) ───────────────────────────
 export function parseIntent(textoRaw: string): VozIntencion | null {
   const t = norm(textoRaw);
@@ -114,7 +141,35 @@ export function parseIntent(textoRaw: string): VozIntencion | null {
   if (/(ambos|los dos|excel y pdf|pdf y excel|en excel y|y en pdf)/.test(t)) formato = 'ambos';
   else if (/\bpdf\b/.test(t)) formato = 'pdf';
 
-  const tieneRanking = /(mas|mayor|top|frecuente|mejor)/.test(t);
+  // Límites de palabra para que un nombre con "mas" (p. ej. "Tomás") no se
+  // confunda con el ranking "el que más compró".
+  const tieneRanking = /\b(mas|mayor|top|frecuente|mejor)\b/.test(t);
+
+  // ── Etapa 3 (más específicos que ventas/compras genéricos) ───────────────────
+  // Factura por número: "factura 21", "factura numero 21", "la factura n° 7".
+  let mn: RegExpMatchArray | null;
+  if (/\bfactura/.test(t) && !/\bcliente\b/.test(t) &&
+      (mn = t.match(/factura\s+(?:nro\.?\s+|numero\s+|n[°º]\s*|#\s*)?(\d{1,7})\b/))) {
+    return { reporte: 'factura', formato, numero_venta: parseInt(mn[1], 10),
+             desde: null, hasta: null };
+  }
+  // Facturas/historial de un cliente concreto (no ranking).
+  if (!tieneRanking && /\bcliente[a]?\b/.test(t) &&
+      /(factura|venta|ventas|historial|compr|pedido)/.test(t)) {
+    const nombre = extraerNombre(t, /\b(?:al |del |de la |de |el |la )?cliente[a]? /);
+    const r = parseFechas(t);
+    return { reporte: 'facturas_cliente', formato, cliente_nombre: nombre || null,
+             desde: r?.desde ?? null, hasta: r?.hasta ?? null };
+  }
+  // Compras a un proveedor concreto (no ranking y con un nombre detrás de "proveedor").
+  if (!tieneRanking && /\bproveedor\b/.test(t)) {
+    const nombre = extraerNombre(t, /\b(?:al |del |de la |de |el |la )?proveedor /);
+    if (nombre) {
+      const r = parseFechas(t);
+      return { reporte: 'compras_proveedor', formato, proveedor_nombre: nombre,
+               desde: r?.desde ?? null, hasta: r?.hasta ?? null };
+    }
+  }
   let reporte: VozReporte | null = null;
 
   // Rankings primero (más específicos que los listados normales).
@@ -141,6 +196,11 @@ export function parseIntent(textoRaw: string): VozIntencion | null {
 const HINT_TEMPORAL = /(mes|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|semana|dia|dias|hoy|ayer|ano|trimestre|del \d)/;
 const HINT_RANKING = /(mas|mayor|top|frecuente|menos|mejor)/;
 export function requiereIA(textoRaw: string, intencion: VozIntencion | null): boolean {
+  // Número de factura ya queda resuelto por reglas → no hace falta Gemini.
+  if (intencion?.reporte === 'factura') return false;
+  // Nombre dictado no resuelto localmente → pedir a Gemini que lo extraiga.
+  if (intencion?.reporte === 'facturas_cliente' && !intencion.cliente_nombre) return true;
+  if (intencion?.reporte === 'compras_proveedor' && !intencion.proveedor_nombre) return true;
   const t = norm(textoRaw);
   const tieneRango = !!(intencion && (intencion.desde || intencion.hasta));
   const esRanking = !!(intencion?.reporte && intencion.reporte.startsWith('top_'));
@@ -182,6 +242,9 @@ function metaPeriodo(rango: Rango | undefined, count: number): { label: string; 
 
 const sufijo = (r?: Rango) =>
   (r && (r.desde || r.hasta)) ? `_${r.desde || 'inicio'}_a_${r.hasta || 'fin'}` : `_${hoyISO()}`;
+
+// Nombre apto para archivo: "Juan Pérez" → "juan_perez".
+const slug = (s: string) => norm(s).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'x';
 
 // ── Helper PDF (misma estética que los reportes existentes, vía window.print) ──
 function triggerPDF(
@@ -478,6 +541,119 @@ async function topProveedores(formato: 'excel' | 'pdf', rango?: Rango) {
   }
 }
 
+// ── Etapa 3: facturas por cliente y compras por proveedor ─────────────────────
+
+// Coincidencias de nombre (tolerante a la voz). Devuelve 0, 1 o varios para que
+// el asistente muestre una lista de desambiguación cuando haga falta.
+export function buscarClientes(nombre: string, clientes: ApiCliente[]): ApiCliente[] {
+  const q = norm(nombre).trim();
+  if (!q) return [];
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return clientes
+    .map(c => {
+      const nom = norm(`${c.nombre} ${c.apellido}`).trim();
+      const full = `${nom} ${norm(c.usuario_login ?? '')}`;
+      const score = nom === q ? 100 : full.includes(q) ? 80 : tokens.every(tk => full.includes(tk)) ? 60 : 0;
+      return { c, score };
+    })
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.c);
+}
+
+export function buscarProveedores(nombre: string, provs: ApiProveedor[]): ApiProveedor[] {
+  const q = norm(nombre).trim();
+  if (!q) return [];
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return provs
+    .map(p => {
+      const emp = norm(p.nombre_empresa).trim();
+      const full = `${emp} ${norm(p.razon_social ?? '')} ${norm(p.contacto_nombre ?? '')}`;
+      const score = emp === q ? 100 : full.includes(q) ? 80 : tokens.every(tk => full.includes(tk)) ? 60 : 0;
+      return { p, score };
+    })
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.p);
+}
+
+async function _facturasCliente(cliente: ApiCliente, formato: 'excel' | 'pdf', rango?: Rango) {
+  const nombre = `${cliente.nombre} ${cliente.apellido}`.trim();
+  const ventas = (await ventasAPI.getByCliente(cliente.id)).filter(v => enRango(v.fecha, rango));
+  if (ventas.length === 0) throw new Error(`No hay facturas de ${nombre} en el periodo indicado.`);
+  const total = ventas.reduce((s, v) => s + parseFloat(String(v.total ?? 0)), 0);
+  const headers = ['# Factura', 'Fecha', 'Estado', 'Total (Bs)'];
+  const estadoLabel = (s: string) => (s === 'completed' ? 'Completada' : s === 'pending' ? 'Pendiente' : s);
+
+  if (formato === 'excel') {
+    const rows: (string | number)[][] = ventas.map(v => [
+      `#${v.id}`, fechaBO(v.fecha), estadoLabel(v.status), Number(parseFloat(String(v.total ?? 0)).toFixed(2)),
+    ]);
+    exportToExcel({
+      filename: `facturas_${slug(nombre)}${sufijo(rango)}`, sheetName: 'Facturas', headers, rows,
+      totalRow: ['', '', 'TOTAL (Bs)', Number(total.toFixed(2))],
+    });
+  } else {
+    const rows = ventas.map(v => [
+      `#${v.id}`, fechaBO(v.fecha), estadoLabel(v.status), `Bs ${parseFloat(String(v.total ?? 0)).toFixed(2)}`,
+    ]);
+    triggerPDF(`Facturas de ${nombre}`,
+      [{ label: 'Cliente', value: nombre }, ...metaPeriodo(rango, ventas.length)],
+      headers, rows, 'TOTAL FACTURADO', `Bs ${total.toFixed(2)}`);
+  }
+}
+
+export async function generarFacturasCliente(cliente: ApiCliente, formato: VozFormato, rango?: Rango): Promise<void> {
+  if (formato === 'ambos') {
+    await _facturasCliente(cliente, 'excel', rango);
+    await _facturasCliente(cliente, 'pdf', rango);
+    return;
+  }
+  return _facturasCliente(cliente, formato, rango);
+}
+
+async function _comprasProveedor(prov: ApiProveedor, formato: 'excel' | 'pdf', rango?: Rango) {
+  const nombre = prov.nombre_empresa;
+  const compras = (await comprasAPI.getAll())
+    .filter(c => c.proveedor === prov.id && enRango(c.fecha_compra, rango));
+  const rowsBase: { compra: number; fecha: string; producto: string; cantidad: number; costo: number }[] = [];
+  compras.forEach(c => (c.detalles ?? []).forEach(d => rowsBase.push({
+    compra: c.id, fecha: c.fecha_compra, producto: d.producto_nombre,
+    cantidad: d.cantidad, costo: Number(d.costo_unitario),
+  })));
+  if (rowsBase.length === 0) throw new Error(`No hay compras al proveedor ${nombre} en el periodo indicado.`);
+  const total = rowsBase.reduce((s, r) => s + r.cantidad * r.costo, 0);
+  const headers = ['# Compra', 'Fecha', 'Producto', 'Cantidad', 'Costo Unit. (Bs)', 'Subtotal (Bs)'];
+
+  if (formato === 'excel') {
+    const rows: (string | number)[][] = rowsBase.map(r => [
+      `#${r.compra}`, fechaBO(r.fecha), r.producto, r.cantidad,
+      Number(r.costo.toFixed(2)), Number((r.cantidad * r.costo).toFixed(2)),
+    ]);
+    exportToExcel({
+      filename: `compras_${slug(nombre)}${sufijo(rango)}`, sheetName: 'Compras', headers, rows,
+      totalRow: ['', '', '', '', 'TOTAL (Bs)', Number(total.toFixed(2))],
+    });
+  } else {
+    const rows = rowsBase.map(r => [
+      `#${r.compra}`, fechaBO(r.fecha), r.producto, String(r.cantidad),
+      `Bs ${r.costo.toFixed(2)}`, `Bs ${(r.cantidad * r.costo).toFixed(2)}`,
+    ]);
+    triggerPDF(`Compras al proveedor ${nombre}`,
+      [{ label: 'Proveedor', value: nombre }, ...metaPeriodo(rango, rowsBase.length)],
+      headers, rows, 'TOTAL COMPRADO', `Bs ${total.toFixed(2)}`);
+  }
+}
+
+export async function generarComprasProveedor(prov: ApiProveedor, formato: VozFormato, rango?: Rango): Promise<void> {
+  if (formato === 'ambos') {
+    await _comprasProveedor(prov, 'excel', rango);
+    await _comprasProveedor(prov, 'pdf', rango);
+    return;
+  }
+  return _comprasProveedor(prov, formato, rango);
+}
+
 // ── 4. Despachador ─────────────────────────────────────────────────────────────
 function generarUno(reporte: VozReporte, formato: 'excel' | 'pdf', rango?: Rango): Promise<void> {
   switch (reporte) {
@@ -490,6 +666,10 @@ function generarUno(reporte: VozReporte, formato: 'excel' | 'pdf', rango?: Rango
     case 'top_comprados':   return topComprados(formato, rango);
     case 'top_clientes':    return topClientes(formato, rango);
     case 'top_proveedores': return topProveedores(formato, rango);
+    default:
+      // 'factura' | 'facturas_cliente' | 'compras_proveedor' se manejan aparte
+      // (necesitan resolver número/cliente/proveedor en el asistente).
+      return Promise.reject(new Error('Este reporte se genera desde el asistente.'));
   }
 }
 
