@@ -651,13 +651,20 @@ export const resenasAPI = {
 // ============ VOZ (interpretación de comandos con Gemini) ============
 export type VozReporte =
   | 'almacen' | 'entradas' | 'salidas' | 'ventas' | 'compras'
-  | 'top_vendidos' | 'top_comprados' | 'top_clientes' | 'top_proveedores';
+  | 'top_vendidos' | 'top_comprados' | 'top_clientes' | 'top_proveedores'
+  // Etapa 3 — facturas/historiales puntuales
+  | 'factura'            // descarga la factura PDF de UNA venta por su número
+  | 'facturas_cliente'   // historial de ventas de un cliente concreto
+  | 'compras_proveedor'; // historial de compras a un proveedor concreto
 export type VozFormato = 'excel' | 'pdf' | 'ambos';
 export interface VozIntencion {
   reporte: VozReporte | null;
   formato: VozFormato;
-  desde?: string | null;   // AAAA-MM-DD (inicio del periodo) o null
-  hasta?: string | null;   // AAAA-MM-DD (fin del periodo) o null
+  desde?: string | null;          // AAAA-MM-DD (inicio del periodo) o null
+  hasta?: string | null;          // AAAA-MM-DD (fin del periodo) o null
+  numero_venta?: number | null;   // para 'factura' (número de la venta)
+  cliente_nombre?: string | null; // para 'facturas_cliente' (nombre dictado)
+  proveedor_nombre?: string | null; // para 'compras_proveedor' (nombre dictado)
 }
 export const vozAPI = {
   // Respaldo: si las reglas del frontend no entienden el comando, Gemini lo interpreta

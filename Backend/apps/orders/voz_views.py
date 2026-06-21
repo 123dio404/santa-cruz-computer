@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 REPORTES_VALIDOS = {
     'almacen', 'entradas', 'salidas', 'ventas', 'compras',
     'top_vendidos', 'top_comprados', 'top_clientes', 'top_proveedores',
+    'factura', 'facturas_cliente', 'compras_proveedor',
 }
 FORMATOS_VALIDOS = {'excel', 'pdf', 'ambos'}
 _FECHA_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
@@ -47,17 +48,30 @@ Del texto del usuario, identifica:
     * "top_comprados"   → el/los producto(s) que MÁS se compró a proveedores
     * "top_clientes"    → el/los cliente(s) que MÁS compró o el más frecuente
     * "top_proveedores" → el/los proveedor(es) al que MÁS se le compró
+    * "factura"            → la factura de UNA venta concreta por su NÚMERO
+                            (ej. "factura número 21", "la factura 7")
+    * "facturas_cliente"   → las facturas/ventas/historial de UN cliente concreto
+                            por su NOMBRE (ej. "facturas del cliente Juan Pérez")
+    * "compras_proveedor"  → las compras/historial a UN proveedor concreto por su
+                            NOMBRE (ej. "compras al proveedor TecnoBol")
 - "formato": "pdf" si menciona pdf; "excel" si menciona excel/hoja de cálculo;
    "ambos" si pide los dos (ej. "excel y pdf", "ambos", "los dos");
    si no menciona ninguno, usa "excel".
 - "desde" y "hasta": rango de fechas en formato AAAA-MM-DD si el usuario menciona
    un periodo (un mes como "mayo" o "mayo de 2025"; un rango "del 1 al 15 de junio";
+   UN DÍA concreto como "el 10 de mayo de 2026" → desde = hasta = ese día;
    "este mes", "hoy", "ayer", "últimos 7 días", "esta semana", "este año", etc.).
    Resuélvelas usando la fecha de hoy. Para un mes completo: desde = primer día y
    hasta = último día de ese mes. Si NO menciona periodo, usa null en ambos.
+- "numero_venta": SOLO si el reporte es "factura"; el número entero de la venta/factura
+   (ej. "factura número 21" → 21). Si no aplica, usa null.
+- "cliente_nombre": SOLO si el reporte es "facturas_cliente"; el nombre del cliente tal
+   como se dictó (ej. "Juan Pérez"). Si no aplica, usa null.
+- "proveedor_nombre": SOLO si el reporte es "compras_proveedor"; el nombre del proveedor
+   tal como se dictó (ej. "TecnoBol"). Si no aplica, usa null.
 
 Responde ÚNICAMENTE un JSON válido con esta forma exacta:
-{"reporte": "<valor o null>", "formato": "<excel|pdf|ambos>", "desde": "<AAAA-MM-DD o null>", "hasta": "<AAAA-MM-DD o null>"}
+{"reporte": "<valor o null>", "formato": "<excel|pdf|ambos>", "desde": "<AAAA-MM-DD o null>", "hasta": "<AAAA-MM-DD o null>", "numero_venta": <entero o null>, "cliente_nombre": "<texto o null>", "proveedor_nombre": "<texto o null>"}
 Si no logras identificar el reporte, usa null en "reporte".
 
 Texto del usuario: "%(texto)s"
@@ -90,6 +104,9 @@ class VozIntencionView(APIView):
         formato = data.get('formato') or 'excel'
         desde = data.get('desde')
         hasta = data.get('hasta')
+        numero_venta = data.get('numero_venta')
+        cliente_nombre = data.get('cliente_nombre')
+        proveedor_nombre = data.get('proveedor_nombre')
         if reporte not in REPORTES_VALIDOS:
             reporte = None
         if formato not in FORMATOS_VALIDOS:
@@ -98,8 +115,18 @@ class VozIntencionView(APIView):
             desde = None
         if not (isinstance(hasta, str) and _FECHA_RE.match(hasta)):
             hasta = None
+        # numero_venta: acepta entero o dígitos en texto; si no, null
+        try:
+            numero_venta = int(numero_venta) if numero_venta not in (None, '') else None
+        except (TypeError, ValueError):
+            numero_venta = None
+        cliente_nombre = cliente_nombre.strip() if isinstance(cliente_nombre, str) and cliente_nombre.strip() else None
+        proveedor_nombre = proveedor_nombre.strip() if isinstance(proveedor_nombre, str) and proveedor_nombre.strip() else None
         return Response({'reporte': reporte, 'formato': formato,
-                         'desde': desde, 'hasta': hasta})
+                         'desde': desde, 'hasta': hasta,
+                         'numero_venta': numero_venta,
+                         'cliente_nombre': cliente_nombre,
+                         'proveedor_nombre': proveedor_nombre})
 
     def _consultar_gemini(self, api_key, texto):
         url = (f'https://generativelanguage.googleapis.com/v1beta/models/'
