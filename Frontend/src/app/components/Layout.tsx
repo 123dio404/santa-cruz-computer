@@ -651,7 +651,7 @@ export function Layout({ children }: LayoutProps) {
                   </div>
                 )}
                 <p className="text-xs text-gray-500 mt-1">
-                  Mínimo 8 caracteres, mayúscula, minúscula, número y carácter especial
+                  Mínimo 8 caracteres, mayúscula, minúscula, número y carácter especial (ej. ! @ # $ % &amp; * ? - _)
                 </p>
               </div>
 

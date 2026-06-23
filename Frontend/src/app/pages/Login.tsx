@@ -633,7 +633,7 @@ export function Login() {
                             </div>
                             <div className={`flex items-center gap-2 ${validation.requirements.hasSpecialChar ? 'text-green-600' : 'text-gray-600'}`}>
                               {validation.requirements.hasSpecialChar ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                              <span>Un carácter especial (!@#$...)</span>
+                              <span>Un carácter especial (ej. ! @ # $ % &amp; * ? - _)</span>
                             </div>
                           </div>
                         </div>
@@ -850,7 +850,7 @@ export function Login() {
                           </div>
                           <div className={`flex items-center gap-2 ${validation.requirements.hasSpecialChar ? 'text-green-600' : 'text-gray-600'}`}>
                             {validation.requirements.hasSpecialChar ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                            <span>Un carácter especial (!@#$...)</span>
+                            <span>Un carácter especial (ej. ! @ # $ % &amp; * ? - _)</span>
                           </div>
                         </div>
                       );

@@ -62,7 +62,7 @@ export const validatePassword = (password: string): PasswordValidation => {
   if (!requirements.hasUpperCase) messages.push('Una letra mayúscula (A-Z)');
   if (!requirements.hasLowerCase) messages.push('Una letra minúscula (a-z)');
   if (!requirements.hasNumber) messages.push('Un número (0-9)');
-  if (!requirements.hasSpecialChar) messages.push('Un carácter especial (!@#$...)');
+  if (!requirements.hasSpecialChar) messages.push('Un carácter especial (ej. ! @ # $ % & * ? - _)');
 
   const message = isValid
     ? '✅ Contraseña válida'
