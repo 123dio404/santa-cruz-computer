@@ -19,6 +19,7 @@ import { useAuth } from '../context/AuthContext';
 import { useAudit } from '../context/AuditContext';
 import { productosAPI, ventasAPI, garantiasAPI, authAPI, clearAuthToken, BACKEND_ROOT_URL, ApiProduct, ApiVenta, ApiGarantia } from '../services/api';
 import { VoiceAssistant } from './VoiceAssistant';
+import { validatePassword } from '../utils/passwordValidation';
 import {
   LayoutDashboard,
   Package,
@@ -135,8 +136,9 @@ export function Layout({ children }: LayoutProps) {
       setCpError('Las contraseñas nuevas no coinciden.');
       return;
     }
-    if (cpNew.length < 8) {
-      setCpError('La nueva contraseña debe tener al menos 8 caracteres.');
+    const pwCheck = validatePassword(cpNew);
+    if (!pwCheck.isValid) {
+      setCpError(pwCheck.message.replace('❌ Falta: ', 'La contraseña debe incluir: '));
       return;
     }
     setCpLoading(true);
@@ -639,6 +641,7 @@ export function Layout({ children }: LayoutProps) {
                       /[A-Z]/.test(cpNew),
                       /[a-z]/.test(cpNew),
                       /[0-9]/.test(cpNew),
+                      /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(cpNew),
                     ].map((ok, i) => (
                       <div
                         key={i}
@@ -648,7 +651,7 @@ export function Layout({ children }: LayoutProps) {
                   </div>
                 )}
                 <p className="text-xs text-gray-500 mt-1">
-                  Mínimo 8 caracteres, mayúscula, minúscula y número
+                  Mínimo 8 caracteres, mayúscula, minúscula, número y carácter especial (ej. ! @ # $ % &amp; * ? - _)
                 </p>
               </div>
 

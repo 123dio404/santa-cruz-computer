@@ -423,8 +423,10 @@ class ChangePasswordView(APIView):
         if not current_password or not new_password:
             return Response({'error': 'Todos los campos son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if len(new_password) < 8:
-            return Response({'error': 'La nueva contraseña debe tener al menos 8 caracteres.'}, status=status.HTTP_400_BAD_REQUEST)
+        from .password_rules import password_error_msg
+        pw_err = password_error_msg(new_password)
+        if pw_err:
+            return Response({'error': pw_err}, status=status.HTTP_400_BAD_REQUEST)
 
         user_id = request.auth.get('user_id')
         role    = request.auth.get('role', '')
@@ -640,8 +642,10 @@ class ResetPasswordView(APIView):
         if not identifier or not code or not new_password:
             return Response({'error': 'Todos los campos son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if len(new_password) < 8:
-            return Response({'error': 'La contraseña debe tener al menos 8 caracteres.'}, status=status.HTTP_400_BAD_REQUEST)
+        from .password_rules import password_error_msg
+        pw_err = password_error_msg(new_password)
+        if pw_err:
+            return Response({'error': pw_err}, status=status.HTTP_400_BAD_REQUEST)
 
         # Verificar OTP en memoria
         otp = _otps.get(identifier)

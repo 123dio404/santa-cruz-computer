@@ -11,6 +11,7 @@ traducción automáticamente en ambas direcciones.
 """
 from rest_framework import serializers
 from .models import Usuario, Cliente
+from .password_rules import password_error_msg
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
@@ -71,6 +72,14 @@ class UsuarioSerializer(serializers.ModelSerializer):
         # Verificar también en la tabla de clientes (unicidad cruzada)
         if Cliente.objects.filter(usuario_login=value).exists():
             raise serializers.ValidationError('Este nombre de usuario ya está registrado como cliente.')
+        return value
+
+    def validate_password(self, value):
+        # Solo valida si se envió una contraseña (en update puede venir vacía/ausente)
+        if value:
+            err = password_error_msg(value)
+            if err:
+                raise serializers.ValidationError(err)
         return value
 
     def validate_email(self, value):
@@ -136,6 +145,13 @@ class ClienteSerializer(serializers.ModelSerializer):
         # Verificar también en la tabla de usuarios (unicidad cruzada)
         if Usuario.objects.filter(username=value).exists():
             raise serializers.ValidationError('Este usuario login ya está registrado como usuario del sistema.')
+        return value
+
+    def validate_password(self, value):
+        if value:
+            err = password_error_msg(value)
+            if err:
+                raise serializers.ValidationError(err)
         return value
 
     def validate_correo(self, value):
