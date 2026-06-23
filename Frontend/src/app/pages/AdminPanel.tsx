@@ -13,6 +13,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usuariosAPI, clientesAPI, API_BASE_URL, ApiUser, ApiCliente } from '../services/api';
 import { RotateCcw, Search, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { validatePassword } from '../utils/passwordValidation';
 
 export function AdminPanel() {
   const { user } = useAuth();
@@ -71,8 +72,9 @@ export function AdminPanel() {
       showMsg('Completa todos los campos', 'error');
       return;
     }
-    if (newPassword.length < 8) {
-      showMsg('La contraseña debe tener al menos 8 caracteres', 'error');
+    const pwCheck = validatePassword(newPassword);
+    if (!pwCheck.isValid) {
+      showMsg(pwCheck.message.replace('❌ Falta: ', 'La contraseña debe incluir: '), 'error');
       return;
     }
     setResetting(true);
@@ -190,7 +192,7 @@ export function AdminPanel() {
                     type={showPassword ? 'text' : 'password'}
                     value={newPassword}
                     onChange={e => setNewPassword(e.target.value)}
-                    placeholder="Nueva contraseña (mínimo 8 caracteres)"
+                    placeholder="8+ car., mayús., minús., número y especial"
                     className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                   />
                   <button
