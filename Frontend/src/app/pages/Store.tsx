@@ -21,6 +21,7 @@ import { useState, useEffect } from 'react';
 import { ShoppingCart, Search, Filter, X, Plus, Minus, Package, Eye, Star, MessageSquare } from 'lucide-react';
 import { productosAPI, resenasAPI, BACKEND_ROOT_URL, ApiProduct, ResenasPublicas } from '../services/api';
 import { StarRating } from '../components/StarRating';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface StoreCartItem {
   productId: number;
@@ -107,6 +108,9 @@ export function Store() {
   const removeFromCart = (productId: number) => saveCart(cartItems.filter(i => i.productId !== productId));
   const cartTotal = cartItems.reduce((s, i) => s + i.price * i.quantity, 0);
   const totalItems = cartItems.reduce((s, i) => s + i.quantity, 0);
+
+  // Cerrar el modal de detalle con Esc
+  useEscapeKey(!!detailProduct, () => setDetailProduct(null));
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">

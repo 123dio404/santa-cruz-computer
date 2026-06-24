@@ -20,6 +20,7 @@ import { useEffect, useState } from 'react';
 import { Trash2, CreditCard, ShoppingBag, X, Crown } from 'lucide-react';
 import { clientesAPI, stripeAPI, BACKEND_ROOT_URL, ApiCliente } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface StoreCartItem {
   productId: number;
@@ -115,6 +116,9 @@ export function Cart() {
   const paymentMethods = [
     { value: 'card' as PaymentMethod, label: 'Tarjeta de Crédito/Débito', icon: CreditCard },
   ];
+
+  // Cerrar el modal de checkout con Esc
+  useEscapeKey(showCheckoutModal, () => setShowCheckoutModal(false));
 
   return (
     <div className="space-y-6">
