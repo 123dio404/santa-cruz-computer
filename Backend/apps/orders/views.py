@@ -45,6 +45,7 @@ from .serializers import (
     DetalleVentaSerializer, PagoVentaSerializer, GarantiaSerializer, ResenaSerializer,
 )
 from apps.audit.utils import log_action, actor_from_request
+from utils import get_client_ip
 
 
 class FacturaPDFView(View):
@@ -435,7 +436,7 @@ class GarantiaViewSet(viewsets.ModelViewSet):
             descripcion=(f'Cliente {nombre} reclamó la garantía #{g.id} '
                          f'({prod}, pedido #{g.venta_id}). Motivo: {motivo}'),
             usuario_id=None, usuario_nombre=nombre, usuario_rol='client',
-            ip_address=request.META.get('REMOTE_ADDR'),
+            ip_address=get_client_ip(request),
         )
         g.refresh_from_db()
         return Response(GarantiaSerializer(g).data)
@@ -564,7 +565,7 @@ class ResenaViewSet(viewsets.ModelViewSet):
             descripcion=(f'Cliente {nombre} calificó la venta #{venta_id} con '
                          f'{puntuacion}★{(" — " + comentario) if comentario else ""}'),
             usuario_id=None, usuario_nombre=nombre, usuario_rol='client',
-            ip_address=request.META.get('REMOTE_ADDR'),
+            ip_address=get_client_ip(request),
         )
         return Response(ResenaSerializer(resena).data, status=status.HTTP_201_CREATED)
 

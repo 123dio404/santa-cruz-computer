@@ -34,16 +34,18 @@ def log_action(*, accion: str, modulo: str, descripcion: str,
 
 def actor_from_request(request) -> dict:
     """Extract actor info from JWT claims attached to the request."""
+    from utils import get_client_ip
+    ip = get_client_ip(request)
     if request.auth:
         return {
             'usuario_id':     request.auth.get('user_id'),
             'usuario_nombre': request.auth.get('username') or request.auth.get('name', ''),
             'usuario_rol':    request.auth.get('role', ''),
-            'ip_address':     request.META.get('REMOTE_ADDR'),
+            'ip_address':     ip,
         }
     return {
         'usuario_id':     None,
         'usuario_nombre': 'Anónimo',
         'usuario_rol':    '',
-        'ip_address':     request.META.get('REMOTE_ADDR'),
+        'ip_address':     ip,
     }

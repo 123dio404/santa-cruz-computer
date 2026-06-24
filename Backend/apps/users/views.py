@@ -46,6 +46,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Usuario, Cliente
 from .serializers import UsuarioSerializer, ClienteSerializer
 from apps.audit.utils import log_action, actor_from_request
+from utils import get_client_ip
 
 # Rastrea intentos fallidos de login: username → {count, locked_until (timestamp)}
 _failed: dict = defaultdict(lambda: {'count': 0, 'locked_until': 0.0})
@@ -181,7 +182,7 @@ class LoginView(APIView):
             accion='LOGIN', modulo='Cliente' if is_cliente else 'Usuario',
             descripcion=f'{db_username} ({db_role}) inició sesión en el sistema',
             usuario_id=db_id, usuario_nombre=db_username, usuario_rol=db_role,
-            ip_address=request.META.get('REMOTE_ADDR'),
+            ip_address=get_client_ip(request),
         )
 
         refresh = RefreshToken()
@@ -217,7 +218,7 @@ class LogoutView(APIView):
                 'usuario_id':     request.data.get('usuario_id'),
                 'usuario_nombre': request.data.get('usuario_nombre', 'Desconocido'),
                 'usuario_rol':    request.data.get('usuario_rol', ''),
-                'ip_address':     request.META.get('REMOTE_ADDR'),
+                'ip_address':     get_client_ip(request),
             }
         nombre = actor.get('usuario_nombre') or 'Desconocido'
         log_action(
@@ -319,13 +320,13 @@ class ClienteViewSet(viewsets.ModelViewSet):
                 'usuario_id':     None,  # cliente table != usuario table, FK would fail
                 'usuario_nombre': req.auth.get('username') or req.auth.get('name', ''),
                 'usuario_rol':    req.auth.get('role', ''),
-                'ip_address':     req.META.get('REMOTE_ADDR'),
+                'ip_address':     get_client_ip(req),
             }
         return {
             'usuario_id':     None,
             'usuario_nombre': 'Anónimo',
             'usuario_rol':    '',
-            'ip_address':     req.META.get('REMOTE_ADDR'),
+            'ip_address':     get_client_ip(req),
         }
 
     def perform_create(self, serializer):
@@ -446,7 +447,7 @@ class ChangePasswordView(APIView):
                 accion='UPDATE', modulo='Cliente',
                 descripcion=f'Cliente ID {user_id} cambió su contraseña',
                 usuario_id=None, usuario_nombre=request.auth.get('username', ''),
-                usuario_rol=role, ip_address=request.META.get('REMOTE_ADDR'),
+                usuario_rol=role, ip_address=get_client_ip(request),
             )
         else:
             with connection.cursor() as c:
@@ -463,7 +464,7 @@ class ChangePasswordView(APIView):
                 accion='UPDATE', modulo='Usuario',
                 descripcion=f'Usuario "{request.auth.get("username", "")}" cambió su contraseña',
                 usuario_id=user_id, usuario_nombre=request.auth.get('username', ''),
-                usuario_rol=role, ip_address=request.META.get('REMOTE_ADDR'),
+                usuario_rol=role, ip_address=get_client_ip(request),
             )
 
         return Response({'message': '¡Contraseña actualizada exitosamente!'})
