@@ -293,7 +293,11 @@ export function Store() {
               <span className="font-semibold text-gray-800">{opiniones.promedio.toFixed(1)}</span>
               ({opiniones.total})
             </span>
-            <button onClick={() => document.getElementById('store-top')?.scrollIntoView({ behavior: 'smooth' })}
+            <button onClick={() => {
+              const main = document.querySelector('main');
+              if (main) main.scrollTo({ top: 0, behavior: 'smooth' });
+              else window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
               className="ml-auto px-3 py-1 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">
               Inicio
             </button>
