@@ -18,6 +18,7 @@
  */
 import { useState, useEffect } from 'react';
 import { Package, Eye, X, FileText, ShieldCheck, Star } from 'lucide-react';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { ventasAPI, garantiasAPI, resenasAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia, ApiResena } from '../services/api';
 import { StarRating } from '../components/StarRating';
 import { useAuth } from '../context/AuthContext';
@@ -153,6 +154,10 @@ export function Orders() {
       setReclamando(false);
     }
   };
+
+  // Cerrar modales con Esc
+  useEscapeKey(!!selectedOrder, () => setSelectedOrder(null));
+  useEscapeKey(!!reclamarTarget, () => setReclamarTarget(null));
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">

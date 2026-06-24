@@ -21,6 +21,7 @@ import { Search, AlertTriangle, Package, Eye, X, TrendingDown, TrendingUp, Wareh
 import { productosAPI, comprasAPI, ventasAPI, BACKEND_ROOT_URL, ApiProduct, ApiCompra, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { exportToExcel } from '../utils/exportExcel';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 type Tab = 'almacen' | 'entrada' | 'salida';
 
@@ -315,6 +316,9 @@ export function Inventory() {
       `-${totalSalida}`,
     );
   };
+
+  // Cerrar el modal de detalle con Esc
+  useEscapeKey(!!detailProduct, () => setDetailProduct(null));
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">

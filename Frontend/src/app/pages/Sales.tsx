@@ -23,6 +23,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Trash2, CreditCard, Banknote, QrCode, ShoppingCart, FileText, Package, Crown } from 'lucide-react';
 import { ventasAPI, productosAPI, clientesAPI, categoriasAPI, ApiProduct, ApiCliente, ApiCategoria } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 interface SaleProduct {
   id: string;
@@ -193,6 +194,10 @@ export function Sales() {
     { value: 'card', label: 'Tarjeta', icon: CreditCard },
     { value: 'qr', label: 'Código QR', icon: QrCode },
   ];
+
+  // Cerrar modales con Esc
+  useEscapeKey(showInvoice, () => setShowInvoice(false));
+  useEscapeKey(showSuccessModal, () => setShowSuccessModal(false));
 
   return (
     <div className="space-y-6">

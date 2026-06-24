@@ -25,6 +25,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Plus, Edit, Trash2, X, Upload, Package, AlertTriangle, Search } from 'lucide-react';
 import { productosAPI, categoriasAPI, BACKEND_ROOT_URL, ApiProduct, ApiCategoria } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 type FormData = {
   name: string;
@@ -181,6 +182,9 @@ export function Products() {
       />
     </div>
   );
+
+  // Cerrar el modal con Esc
+  useEscapeKey(isAdmin && isModalOpen, handleCloseModal);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">

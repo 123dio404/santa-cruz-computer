@@ -28,6 +28,7 @@ import {
   ApiProveedor, ApiCompra, ApiProduct, ApiCategoria,
 } from '../services/api';
 import { exportToExcel } from '../utils/exportExcel';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 type Tab = 'proveedores' | 'nueva-compra' | 'historial';
 
@@ -158,6 +159,9 @@ export function Suppliers() {
   };
 
   const closeModal = () => { setIsModalOpen(false); setEditing(null); };
+
+  // Cerrar el modal con Esc
+  useEscapeKey(isModalOpen, closeModal);
 
   const handleSubmitProv = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -15,6 +15,7 @@
 import { useState, useEffect } from 'react';
 import { ShieldCheck, Search, Check, X, RefreshCw } from 'lucide-react';
 import { garantiasAPI, ApiGarantia } from '../services/api';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 type Filtro = 'reclamos' | 'vigentes' | 'vencidas' | 'resueltas' | 'todas';
 
@@ -141,6 +142,9 @@ export function Warranties() {
     { key: 'resueltas', label: 'Resueltas' },
     { key: 'todas',     label: 'Todas' },
   ];
+
+  // Cerrar el modal de resolución con Esc
+  useEscapeKey(!!target, () => setTarget(null));
 
   return (
     <div className="space-y-6">

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, X, Shield, RefreshCw, Users as UsersIcon, UserCheck, Eye, EyeOff, Crown } from 'lucide-react';
 import { usuariosAPI, clientesAPI, ApiUser, ApiCliente } from '../services/api';
 import { useUsers } from '../context/UsersContext';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 
 /**
  * Users.tsx - Gestión de Usuarios y Clientes (Solo Admin)
@@ -281,6 +282,11 @@ export function Users() {
     setClienteCrearErrors({});
     setShowCrearClientePassword(false);
   };
+
+  // Cerrar modales con Esc
+  useEscapeKey(isModalOpen, handleClose);
+  useEscapeKey(isClienteModalOpen && !!editingCliente, handleCloseClienteModal);
+  useEscapeKey(isCrearClienteModalOpen, handleCloseCrearCliente);
 
   const handleSubmitCrearCliente = async (e: React.FormEvent) => {
     e.preventDefault();
