@@ -116,7 +116,7 @@ export function Store() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div id="store-top" className="flex items-center justify-between scroll-mt-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tienda</h1>
           <p className="text-gray-600">Explora nuestro catálogo de productos</p>
@@ -293,7 +293,7 @@ export function Store() {
               <span className="font-semibold text-gray-800">{opiniones.promedio.toFixed(1)}</span>
               ({opiniones.total})
             </span>
-            <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            <button onClick={() => document.getElementById('store-top')?.scrollIntoView({ behavior: 'smooth' })}
               className="ml-auto px-3 py-1 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">
               Inicio
             </button>
