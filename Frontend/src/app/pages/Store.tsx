@@ -116,7 +116,7 @@ export function Store() {
 
   return (
     <div className="space-y-6">
-      <div id="store-top" className="flex items-center justify-between scroll-mt-6">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tienda</h1>
           <p className="text-gray-600">Explora nuestro catálogo de productos</p>
@@ -293,22 +293,6 @@ export function Store() {
               <span className="font-semibold text-gray-800">{opiniones.promedio.toFixed(1)}</span>
               ({opiniones.total})
             </span>
-            <button onClick={(e) => {
-              // Sube por el DOM buscando el ancestro que realmente tiene scroll
-              let el: HTMLElement | null = e.currentTarget.parentElement;
-              while (el) {
-                const oy = getComputedStyle(el).overflowY;
-                if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
-                  el.scrollTo({ top: 0, behavior: 'smooth' });
-                  return;
-                }
-                el = el.parentElement;
-              }
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-              className="ml-auto px-3 py-1 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">
-              Inicio
-            </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {opiniones.resenas.map(r => (
