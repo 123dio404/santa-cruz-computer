@@ -13,7 +13,7 @@
  * - Botón para generar las garantías de ventas anteriores (retroactivas)
  */
 import { useState, useEffect } from 'react';
-import { ShieldCheck, Search, Check, X, RefreshCw } from 'lucide-react';
+import { ShieldCheck, Search, Check, X } from 'lucide-react';
 import { garantiasAPI, ApiGarantia } from '../services/api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -31,8 +31,6 @@ export function Warranties() {
   const [loading, setLoading] = useState(true);
   const [filtro, setFiltro] = useState<Filtro>('reclamos');
   const [busqueda, setBusqueda] = useState('');
-  const [generando, setGenerando] = useState(false);
-  const [aviso, setAviso] = useState('');
 
   // Modal de resolución (aprobar / rechazar)
   const [target, setTarget] = useState<ApiGarantia | null>(null);
@@ -121,19 +119,6 @@ export function Warranties() {
     }
   };
 
-  const generarRetroactivas = async () => {
-    setGenerando(true);
-    setAviso('');
-    try {
-      const res = await garantiasAPI.generarRetroactivas();
-      setAviso(`Se generaron ${res.creadas} garantía(s) de ventas anteriores.`);
-      cargar();
-    } catch (err: any) {
-      setAviso(err.message || 'No se pudieron generar las garantías.');
-    } finally {
-      setGenerando(false);
-    }
-  };
 
   const filtros: { key: Filtro; label: string }[] = [
     { key: 'reclamos',  label: `Reclamos${reclamosPendientes ? ` (${reclamosPendientes})` : ''}` },
@@ -148,26 +133,12 @@ export function Warranties() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <ShieldCheck className="w-6 h-6 text-blue-600" /> Reclamos de Garantía
-          </h1>
-          <p className="text-gray-600">Gestión de garantías y reclamos de los clientes</p>
-        </div>
-        <button
-          onClick={generarRetroactivas}
-          disabled={generando}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
-        >
-          <RefreshCw className={`w-4 h-4 ${generando ? 'animate-spin' : ''}`} />
-          {generando ? 'Generando...' : 'Generar garantías de ventas anteriores'}
-        </button>
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <ShieldCheck className="w-6 h-6 text-blue-600" /> Reclamos de Garantía
+        </h1>
+        <p className="text-gray-600">Gestión de garantías y reclamos de los clientes</p>
       </div>
-
-      {aviso && (
-        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">{aviso}</div>
-      )}
 
       {/* Filtros + búsqueda */}
       <div className="flex flex-col sm:flex-row gap-3 sm:items-center justify-between">
