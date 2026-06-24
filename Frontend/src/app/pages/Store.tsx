@@ -125,6 +125,10 @@ export function Store() {
               <StarRating value={opiniones.promedio} readOnly size={16} />
               <span className="text-sm font-semibold text-gray-800">{opiniones.promedio.toFixed(1)}</span>
               <span className="text-sm text-gray-500">· {opiniones.total} opinión{opiniones.total === 1 ? '' : 'es'}</span>
+              <button onClick={() => document.getElementById('opiniones')?.scrollIntoView({ behavior: 'smooth' })}
+                className="ml-2 flex items-center gap-1 px-3 py-1 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">
+                <MessageSquare className="w-4 h-4" /> Reseña
+              </button>
             </div>
           )}
         </div>
@@ -280,7 +284,7 @@ export function Store() {
 
       {/* Opiniones de nuestros clientes */}
       {opiniones.total > 0 && (
-        <div className="bg-white rounded-xl p-6 border border-gray-200">
+        <div id="opiniones" className="bg-white rounded-xl p-6 border border-gray-200 scroll-mt-6">
           <div className="flex items-center gap-2 mb-4">
             <MessageSquare className="w-5 h-5 text-blue-600" />
             <h2 className="text-lg font-bold text-gray-900">Opiniones de nuestros clientes</h2>
@@ -289,6 +293,10 @@ export function Store() {
               <span className="font-semibold text-gray-800">{opiniones.promedio.toFixed(1)}</span>
               ({opiniones.total})
             </span>
+            <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+              className="ml-auto px-3 py-1 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">
+              Inicio
+            </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {opiniones.resenas.map(r => (
