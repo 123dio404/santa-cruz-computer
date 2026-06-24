@@ -121,11 +121,11 @@ export function Warranties() {
 
 
   const filtros: { key: Filtro; label: string }[] = [
+    { key: 'todas',     label: 'Todas' },
     { key: 'reclamos',  label: `Reclamos${reclamosPendientes ? ` (${reclamosPendientes})` : ''}` },
     { key: 'vigentes',  label: 'Vigentes' },
     { key: 'vencidas',  label: 'Vencidas' },
     { key: 'resueltas', label: 'Resueltas' },
-    { key: 'todas',     label: 'Todas' },
   ];
 
   // Cerrar el modal de resolución con Esc
