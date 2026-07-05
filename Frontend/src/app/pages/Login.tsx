@@ -22,7 +22,7 @@
  * - Funciona tanto para usuarios (tabla usuario) como clientes (tabla cliente)
  */
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { useAudit } from '../context/AuditContext';
 import { authAPI } from '../services/api';
@@ -38,6 +38,7 @@ export function Login() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { login, register, checkUsernameAvailable } = useAuth();
   const { addEvent } = useAudit();
 
@@ -103,7 +104,13 @@ export function Login() {
       setSuccess('✅ ' + result.message);
       const role = loggedInUser.role;
       const redirectPath = role === 'admin' ? '/dashboard' : role === 'employee' ? '/inventory' : '/store';
-      setTimeout(() => navigate(redirectPath), 800);
+      // Si vino desde un enlace protegido (?next=/...), volver ahí; si no, al inicio por rol.
+      // Solo se acepta una ruta interna (evita redirecciones externas).
+      const nextParam = searchParams.get('next');
+      const destino = nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//')
+        ? nextParam
+        : redirectPath;
+      setTimeout(() => navigate(destino), 800);
     } else {
       setError(result.message);
     }
