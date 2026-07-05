@@ -19,16 +19,19 @@ import { RouterProvider } from 'react-router';
 import { AuthProvider } from './context/AuthContext';
 import { AuditProvider } from './context/AuditContext';
 import { UsersProvider } from './context/UsersContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { router } from './routes';
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AuditProvider>
-        <UsersProvider>
-          <RouterProvider router={router} />
-        </UsersProvider>
-      </AuditProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <AuditProvider>
+          <UsersProvider>
+            <RouterProvider router={router} />
+          </UsersProvider>
+        </AuditProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
