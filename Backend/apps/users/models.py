@@ -91,3 +91,34 @@ class OTPRecovery(models.Model):
     class Meta:
         managed  = False
         db_table = 'otp_recovery'
+
+
+class Notificacion(models.Model):
+    """
+    Notificación dirigida a UN usuario interno (usuario) O a UN cliente (CU21).
+    Siempre aparece en la campana; si canal='ambos' además se envía por correo
+    (Brevo). Tabla creada por SQL manual (managed=False): 004_notificaciones.sql
+    """
+    id        = models.AutoField(primary_key=True, db_column='idnotificacion')
+    usuario   = models.ForeignKey(
+        Usuario, on_delete=models.CASCADE, db_column='idusuario',
+        related_name='notificaciones', null=True, blank=True,
+    )
+    cliente   = models.ForeignKey(
+        Cliente, on_delete=models.CASCADE, db_column='idcliente',
+        related_name='notificaciones', null=True, blank=True,
+    )
+    tipo      = models.CharField(max_length=30)          # venta | reclamo | reclamo_resuelto | bienvenida | resena ...
+    titulo    = models.CharField(max_length=150)
+    mensaje   = models.TextField()
+    enlace    = models.CharField(max_length=200, null=True, blank=True)   # ruta interna, ej. /warranties
+    canal     = models.CharField(max_length=20, default='sistema')        # sistema | ambos (ambos = app + correo)
+    leido     = models.BooleanField(default=False)
+    fecha     = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed             = False
+        db_table            = 'notificacion'
+        verbose_name        = 'Notificación'
+        verbose_name_plural = 'Notificaciones'
+        ordering            = ['-id']

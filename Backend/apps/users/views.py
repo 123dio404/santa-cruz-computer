@@ -43,8 +43,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import Usuario, Cliente
-from .serializers import UsuarioSerializer, ClienteSerializer
+from .models import Usuario, Cliente, Notificacion
+from .serializers import UsuarioSerializer, ClienteSerializer, NotificacionSerializer
 from apps.audit.utils import log_action, actor_from_request
 from utils import get_client_ip
 
@@ -552,6 +552,78 @@ def _send_brevo_email(to_email: str, subject: str, text_content: str, html_conte
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         return resp.status
+
+
+# ── CU21: Notificaciones ────────────────────────────────────────────────────
+def crear_notificacion(*, tipo, titulo, mensaje, usuario_id=None, cliente_id=None,
+                       enlace=None, canal='sistema', email='', html=None):
+    """
+    Crea una notificación (campana) para UN usuario interno O UN cliente.
+    Si canal == 'ambos' y hay email, además la envía por correo (Brevo).
+    NUNCA lanza excepción: si algo falla, se registra y el flujo principal sigue.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        Notificacion.objects.create(
+            usuario_id=usuario_id, cliente_id=cliente_id,
+            tipo=tipo, titulo=titulo, mensaje=mensaje,
+            enlace=enlace, canal=canal,
+        )
+    except Exception as e:
+        logger.error(f'crear_notificacion: no se pudo guardar: {e}')
+        return
+    if canal == 'ambos' and email:
+        try:
+            _send_brevo_email(email, titulo, mensaje, html)
+        except Exception as e:
+            logger.error(f'crear_notificacion: el correo falló: {e}')
+
+
+class NotificacionesView(APIView):
+    """
+    GET /api/v1/users/notificaciones/
+    Devuelve las notificaciones del usuario autenticado (según el JWT) y el
+    contador de no leídas. Cliente -> filtra por idcliente; interno -> idusuario.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        if not request.auth:
+            return Response({'error': 'No autenticado'}, status=status.HTTP_401_UNAUTHORIZED)
+        user_id = request.auth.get('user_id')
+        role    = request.auth.get('role', '')
+
+        qs = Notificacion.objects.all()
+        qs = qs.filter(cliente_id=user_id) if role == 'cliente' else qs.filter(usuario_id=user_id)
+
+        no_leidas = qs.filter(leido=False).count()
+        data = NotificacionSerializer(qs.order_by('-id')[:50], many=True).data
+        return Response({'notificaciones': data, 'no_leidas': no_leidas})
+
+
+class NotificacionLeerView(APIView):
+    """
+    POST /api/v1/users/notificaciones/marcar-leidas/
+    Body: {"id": 5}       -> marca esa notificación como leída
+          {"todas": true} -> marca TODAS las del usuario como leídas
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not request.auth:
+            return Response({'error': 'No autenticado'}, status=status.HTTP_401_UNAUTHORIZED)
+        user_id = request.auth.get('user_id')
+        role    = request.auth.get('role', '')
+
+        qs = Notificacion.objects.all()
+        qs = qs.filter(cliente_id=user_id) if role == 'cliente' else qs.filter(usuario_id=user_id)
+
+        if request.data.get('todas'):
+            actualizadas = qs.filter(leido=False).update(leido=True)
+        else:
+            actualizadas = qs.filter(id=request.data.get('id'), leido=False).update(leido=True)
+        return Response({'actualizadas': actualizadas})
 
 
 class ForgotPasswordView(APIView):

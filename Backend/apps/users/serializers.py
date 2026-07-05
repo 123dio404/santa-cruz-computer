@@ -10,8 +10,15 @@ usa nombres en español (nombre_completo, rol, etc.). Los serializers hacen la
 traducción automáticamente en ambas direcciones.
 """
 from rest_framework import serializers
-from .models import Usuario, Cliente
+from .models import Usuario, Cliente, Notificacion
 from .password_rules import password_error_msg
+
+
+class NotificacionSerializer(serializers.ModelSerializer):
+    """Notificación tal como la consume la campana del frontend (CU21)."""
+    class Meta:
+        model  = Notificacion
+        fields = ['id', 'tipo', 'titulo', 'mensaje', 'enlace', 'canal', 'leido', 'fecha']
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
