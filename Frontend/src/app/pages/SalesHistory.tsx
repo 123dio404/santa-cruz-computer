@@ -299,102 +299,118 @@ export function SalesHistory() {
   const descargarPDF = () => {
     if (ventasReporte.length === 0) return;
 
-    const bloques = ventasReporte.map(v => {
+    const filas = ventasReporte.map(v => {
       const fecha = new Date(v.fecha).toLocaleDateString('es-BO');
-      const hora = new Date(v.fecha).toLocaleTimeString('es-BO');
-      const total = (Number(v.total) || 0).toFixed(2);
       const estado = v.status === 'completed' ? 'Completada'
         : v.status === 'pending' ? 'Pendiente'
         : v.status;
-      const estadoClass = v.status === 'completed' ? 'badge-ok' : 'badge-warn';
+      const estadoClass = v.status === 'completed' ? 'est-ok' : 'est-warn';
+      const cliente = v.cliente_name || 'General';
+      const vendedor = v.vendedor_name || 'Pedido online';
       const detalles = v.detalles ?? [];
+      // Columnas fijas de la venta que se repiten en cada línea de producto
+      const cols = `
+              <td class="center">#${v.id}</td>
+              <td>${cliente}</td>
+              <td>${vendedor}</td>
+              <td class="center">${fecha}</td>
+              <td class="center"><span class="est ${estadoClass}">${estado}</span></td>`;
 
-      const filasDetalle = detalles.length === 0
-        ? `<tr><td colspan="4" class="empty">Sin productos registrados</td></tr>`
-        : detalles.map(d => `
-            <tr>
+      if (detalles.length === 0) {
+        return `<tr>${cols}<td colspan="4" class="empty">Sin productos registrados</td></tr>`;
+      }
+      return detalles.map(d => `
+            <tr>${cols}
               <td>${d.producto_name}</td>
-              <td class="right">${d.cantidad}</td>
-              <td class="right">Bs ${(Number(d.precio_unitario) || 0).toFixed(2)}</td>
-              <td class="right">Bs ${(Number(d.subtotal) || 0).toFixed(2)}</td>
+              <td class="center">${d.cantidad}</td>
+              <td class="right">${(Number(d.precio_unitario) || 0).toFixed(2)}</td>
+              <td class="right">${(Number(d.subtotal) || 0).toFixed(2)}</td>
             </tr>
           `).join('');
-
-      return `
-        <div class="venta">
-          <div class="venta-header">
-            <div>
-              <span class="badge">Venta #${v.id}</span>
-              <strong>${v.cliente_name || 'General'}</strong>
-              <span class="meta-info">${fecha} ${hora}</span>
-              <span class="badge ${estadoClass}">${estado}</span>
-            </div>
-            <div class="venta-total">Bs ${total}</div>
-          </div>
-          <div class="vendedor-info">Vendedor: ${v.vendedor_name || 'Pedido online'}</div>
-          <table class="detalle">
-            <thead>
-              <tr>
-                <th>Producto</th>
-                <th class="right">Cantidad</th>
-                <th class="right">Precio Unit.</th>
-                <th class="right">Subtotal</th>
-              </tr>
-            </thead>
-            <tbody>${filasDetalle}</tbody>
-          </table>
-        </div>
-      `;
     }).join('');
 
     const html = `
       <!DOCTYPE html><html><head><meta charset="utf-8">
       <title>Reporte de Ventas</title>
       <style>
-        * { box-sizing: border-box; }
-        body { font-family: Arial, Helvetica, sans-serif; padding: 24px; color: #111; }
-        h1 { color: #1e40af; margin: 0 0 4px 0; }
-        .subtitle { color: #555; font-size: 13px; margin-bottom: 18px; }
-        .meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #444; margin-bottom: 20px; }
-        .meta div { background: #f3f4f6; padding: 6px 10px; border-radius: 4px; }
+        * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        body { font-family: Arial, Helvetica, sans-serif; padding: 20px; color: #111; }
 
-        .venta { border: 1px solid #d1d5db; border-radius: 6px; margin-bottom: 14px; overflow: hidden; page-break-inside: avoid; }
-        .venta-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #eff6ff; border-bottom: 1px solid #bfdbfe; font-size: 13px; }
-        .venta-header .badge { display: inline-block; background: #1e40af; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-right: 8px; font-weight: bold; }
-        .venta-header .badge-ok { background: #16a34a; }
-        .venta-header .badge-warn { background: #d97706; }
-        .venta-header .meta-info { color: #555; margin: 0 8px; font-size: 12px; }
-        .venta-total { font-weight: bold; color: #1e40af; font-size: 14px; }
-        .vendedor-info { padding: 6px 12px; background: #fafafa; font-size: 11px; color: #6b7280; border-bottom: 1px solid #e5e7eb; }
+        .encabezado { display: flex; justify-content: space-between; align-items: flex-start;
+                      border-bottom: 3px solid #1e40af; padding-bottom: 10px; margin-bottom: 4px; }
+        .encabezado .empresa { display: flex; align-items: center; gap: 12px; }
+        .encabezado .logo { height: 56px; width: auto; object-fit: contain; }
+        .encabezado .nombre { font-size: 18px; font-weight: bold; color: #1e40af; }
+        .encabezado .ciudad { font-size: 12px; color: #555; }
+        .encabezado .emision { font-size: 12px; color: #444; text-align: right; line-height: 1.7; }
 
-        .detalle { width: 100%; border-collapse: collapse; font-size: 11px; }
-        .detalle th { background: #f9fafb; color: #374151; padding: 6px 10px; text-align: left; border-bottom: 1px solid #e5e7eb; font-weight: 600; }
-        .detalle th.right, .detalle td.right { text-align: right; }
-        .detalle td { padding: 6px 10px; border-bottom: 1px solid #f3f4f6; }
-        .detalle tr:last-child td { border-bottom: none; }
-        .empty { color: #9ca3af; font-style: italic; text-align: center; padding: 10px; }
+        .titulo { text-align: center; margin: 10px 0 2px 0; }
+        .titulo h1 { color: #1e40af; font-size: 20px; margin: 0; letter-spacing: 1px; }
+        .titulo .rango { font-size: 12px; color: #555; margin-top: 2px; }
 
-        .total-general { margin-top: 18px; padding: 14px 16px; background: #1e40af; color: white; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
-        .total-general strong { font-size: 16px; }
+        table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 12px; }
+        thead th { background: #1e40af; color: white; padding: 8px 6px; text-align: left; }
+        thead th.center { text-align: center; }
+        thead th.right { text-align: right; }
+        tbody td { padding: 6px; border-bottom: 1px solid #e5e7eb; }
+        tbody td.center { text-align: center; }
+        tbody td.right { text-align: right; }
+        tbody tr:nth-child(even) td { background: #f3f4f6; }
+        .empty { color: #9ca3af; font-style: italic; text-align: center; }
 
-        .footer { margin-top: 20px; padding-top: 10px; border-top: 1px solid #ddd; color: #999; font-size: 10px; text-align: center; }
-        @media print { @page { margin: 1cm; } body { padding: 0; } }
+        .est { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; color: white; }
+        .est-ok { background: #16a34a; }
+        .est-warn { background: #d97706; }
+
+        .total-general { margin-top: 14px; padding: 12px 18px; background: #1e40af; color: white; border-radius: 6px;
+                         display: flex; justify-content: flex-end; gap: 20px; align-items: center; font-size: 15px; }
+        .total-general strong { font-size: 17px; }
+
+        .footer { margin-top: 18px; padding-top: 8px; border-top: 1px solid #ddd; color: #999; font-size: 10px; text-align: center; }
+        @media print { @page { size: A4 landscape; margin: 1cm; } body { padding: 0; } }
       </style></head><body>
-        <h1>Reporte de Ventas</h1>
-        <div class="subtitle">Santa Cruz Computer - Sistema de Inventario</div>
-        <div class="meta">
-          <div><strong>Tipo:</strong> ${tipoReporte}</div>
-          <div><strong>Rango:</strong> ${formatRangoFechas()}</div>
-          <div><strong>Vendedor:</strong> ${vendedorReporteNombre}</div>
-          <div><strong>Total ventas:</strong> ${ventasReporte.length}</div>
-          <div><strong>Generado:</strong> ${new Date().toLocaleString('es-BO')}</div>
+        <div class="encabezado">
+          <div class="empresa">
+            <img class="logo" src="/logo.png" alt="" onerror="this.style.display='none'" />
+            <div>
+              <div class="nombre">SANTA CRUZ - COMPUTER</div>
+              <div class="ciudad">Santa Cruz de la Sierra</div>
+            </div>
+          </div>
+          <div class="emision">
+            <div>Pág: 1</div>
+            <div>Fecha: ${new Date().toLocaleDateString('es-BO')}</div>
+            <div>Hora: ${new Date().toLocaleTimeString('es-BO')}</div>
+          </div>
         </div>
-        ${bloques}
+
+        <div class="titulo">
+          <h1>REPORTE DE VENTAS</h1>
+          <div class="rango">${formatRangoFechas()} &nbsp;·&nbsp; ${tipoReporte} &nbsp;·&nbsp; Vendedor: ${vendedorReporteNombre} &nbsp;·&nbsp; ${ventasReporte.length} ventas</div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th class="center"># Venta</th>
+              <th>Cliente</th>
+              <th>Vendedor</th>
+              <th class="center">Fecha</th>
+              <th class="center">Estado</th>
+              <th>Producto</th>
+              <th class="center">Cantidad</th>
+              <th class="right">Precio Unit. (Bs)</th>
+              <th class="right">Subtotal (Bs)</th>
+            </tr>
+          </thead>
+          <tbody>${filas}</tbody>
+        </table>
+
         <div class="total-general">
-          <span>MONTO TOTAL DEL REPORTE</span>
+          <span>TOTAL GENERAL</span>
           <strong>Bs ${totalGeneralReporte.toFixed(2)}</strong>
         </div>
-        <div class="footer">Documento generado automaticamente desde el sistema</div>
+        <div class="footer">Documento generado automáticamente desde el sistema</div>
       </body></html>
     `;
 
