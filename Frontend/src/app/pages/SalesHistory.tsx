@@ -24,6 +24,8 @@ import { Package, DollarSign, Clock, ChevronDown, ChevronUp, CheckCircle, Bankno
 import { ventasAPI, clientesAPI, API_BASE_URL, ApiCliente, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { exportToExcel } from '../utils/exportExcel';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface VentaDetail {
   id: number;
@@ -295,140 +297,111 @@ export function SalesHistory() {
     });
   };
 
-  // ── Exportar a PDF (jerárquico, vía window.print) ───────────────────────────
-  const descargarPDF = () => {
+  // ── Exportar a PDF (descarga automática + vista previa) vía jsPDF ────────────
+  const descargarPDF = async () => {
     if (ventasReporte.length === 0) return;
 
-    const filas = ventasReporte.map(v => {
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    // Logo opcional: si no carga, el PDF se genera igual sin él
+    const logo = await new Promise<HTMLImageElement | null>((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = '/logo.png';
+    });
+
+    const primerNombre = (s: string) => s.trim().split(/\s+/)[0] || s.trim();
+    const estadoLabel = (st: string) =>
+      st === 'completed' ? 'Completada' : st === 'pending' ? 'Pendiente' : st;
+
+    // Una fila por línea de producto (el # Venta se repite)
+    const body: string[][] = [];
+    ventasReporte.forEach(v => {
       const fecha = new Date(v.fecha).toLocaleDateString('es-BO');
-      const estado = v.status === 'completed' ? 'Completada'
-        : v.status === 'pending' ? 'Pendiente'
-        : v.status;
-      const estadoClass = v.status === 'completed' ? 'est-ok' : 'est-warn';
-      // Solo el primer nombre (sin apellidos) para cliente y vendedor
-      const primerNombre = (s: string) => s.trim().split(/\s+/)[0] || s.trim();
+      const estado = estadoLabel(v.status);
       const cliente = v.cliente_name ? primerNombre(v.cliente_name) : 'General';
       const vendedor = v.vendedor_name ? primerNombre(v.vendedor_name) : 'Online';
       const detalles = v.detalles ?? [];
-      // Columnas fijas de la venta que se repiten en cada línea de producto
-      const cols = `
-              <td class="center">#${v.id}</td>
-              <td class="center">${fecha}</td>
-              <td>${cliente}</td>
-              <td>${vendedor}</td>
-              <td class="center"><span class="est ${estadoClass}">${estado}</span></td>`;
-
       if (detalles.length === 0) {
-        return `<tr>${cols}<td colspan="4" class="empty">Sin productos registrados</td></tr>`;
+        body.push([`#${v.id}`, fecha, cliente, vendedor, estado, '(sin detalle)', '', '', '']);
+      } else {
+        detalles.forEach(d => body.push([
+          `#${v.id}`, fecha, cliente, vendedor, estado,
+          d.producto_name,
+          String(d.cantidad),
+          (Number(d.precio_unitario) || 0).toFixed(2),
+          (Number(d.subtotal) || 0).toFixed(2),
+        ]));
       }
-      return detalles.map(d => `
-            <tr>${cols}
-              <td>${d.producto_name}</td>
-              <td class="center">${d.cantidad}</td>
-              <td class="right">${(Number(d.precio_unitario) || 0).toFixed(2)}</td>
-              <td class="right">${(Number(d.subtotal) || 0).toFixed(2)}</td>
-            </tr>
-          `).join('');
-    }).join('');
+    });
 
-    const html = `
-      <!DOCTYPE html><html><head><meta charset="utf-8">
-      <title>Reporte de Ventas</title>
-      <style>
-        * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        body { font-family: Arial, Helvetica, sans-serif; padding: 20px; color: #111; }
+    const now = new Date();
 
-        .encabezado { display: flex; justify-content: space-between; align-items: flex-start;
-                      border-bottom: 3px solid #1e40af; padding-bottom: 10px; margin-bottom: 4px; }
-        .encabezado .empresa { display: flex; align-items: center; gap: 12px; }
-        .encabezado .logo { height: 56px; width: auto; object-fit: contain; }
-        .encabezado .nombre { font-size: 18px; font-weight: bold; color: #1e40af; }
-        .encabezado .ciudad { font-size: 12px; color: #555; }
-        .encabezado .emision { font-size: 12px; color: #444; text-align: right; line-height: 1.7; }
+    autoTable(doc, {
+      startY: 92,
+      margin: { top: 92, left: 24, right: 24, bottom: 34 },
+      head: [['# Venta', 'Fecha', 'Cliente', 'Vendedor', 'Estado', 'Producto', 'Cant.', 'P. Unit. (Bs)', 'Subtotal (Bs)']],
+      body,
+      foot: [[
+        { content: 'TOTAL GENERAL', colSpan: 8, styles: { halign: 'right' } },
+        { content: `Bs ${totalGeneralReporte.toFixed(2)}`, styles: { halign: 'right' } },
+      ]],
+      showFoot: 'lastPage',
+      styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak', valign: 'middle' },
+      headStyles: { fillColor: [30, 64, 175], textColor: 255 },
+      footStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold', fontSize: 10 },
+      alternateRowStyles: { fillColor: [243, 244, 246] },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 42 },
+        1: { halign: 'center', cellWidth: 58 },
+        2: { cellWidth: 78 },
+        3: { cellWidth: 78 },
+        4: { halign: 'center', cellWidth: 62 },
+        5: { cellWidth: 'auto' },
+        6: { halign: 'center', cellWidth: 38 },
+        7: { halign: 'right', cellWidth: 66 },
+        8: { halign: 'right', cellWidth: 72 },
+      },
+      // Encabezado dibujado en CADA página
+      didDrawPage: () => {
+        if (logo) {
+          try { doc.addImage(logo, 'PNG', 24, 16, 40, 40); } catch { /* logo opcional */ }
+        }
+        const xText = logo ? 72 : 24;
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(30, 64, 175);
+        doc.text('SANTA CRUZ - COMPUTER', xText, 30);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90);
+        doc.text('Santa Cruz de la Sierra', xText, 44);
+        doc.setFontSize(9); doc.setTextColor(70);
+        doc.text(`Fecha: ${now.toLocaleDateString('es-BO')}`, pageWidth - 24, 26, { align: 'right' });
+        doc.text(`Hora: ${now.toLocaleTimeString('es-BO')}`, pageWidth - 24, 40, { align: 'right' });
+        doc.setDrawColor(30, 64, 175); doc.setLineWidth(1.5);
+        doc.line(24, 54, pageWidth - 24, 54);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(30, 64, 175);
+        doc.text('REPORTE DE VENTAS', pageWidth / 2, 72, { align: 'center' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(90);
+        doc.text(
+          `${formatRangoFechas()}  ·  ${tipoReporte}  ·  Vendedor: ${vendedorReporteNombre}  ·  ${ventasReporte.length} ventas`,
+          pageWidth / 2, 84, { align: 'center' },
+        );
+      },
+    });
 
-        .titulo { text-align: center; margin: 10px 0 2px 0; }
-        .titulo h1 { color: #1e40af; font-size: 20px; margin: 0; letter-spacing: 1px; }
-        .titulo .rango { font-size: 12px; color: #555; margin-top: 2px; }
-
-        table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 12px; table-layout: fixed; }
-        th, td { overflow-wrap: break-word; word-break: break-word; }
-        thead th { background: #1e40af; color: white; padding: 8px 6px; text-align: left; }
-        thead th.center { text-align: center; }
-        thead th.right { text-align: right; }
-        tbody td { padding: 6px; border-bottom: 1px solid #e5e7eb; }
-        tbody td.center { text-align: center; }
-        tbody td.right { text-align: right; }
-        tbody tr:nth-child(even) td { background: #f3f4f6; }
-        .empty { color: #9ca3af; font-style: italic; text-align: center; }
-
-        .est { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; color: white; }
-        .est-ok { background: #16a34a; }
-        .est-warn { background: #d97706; }
-
-        .total-general { margin-top: 14px; padding: 12px 18px; background: #1e40af; color: white; border-radius: 6px;
-                         display: flex; justify-content: flex-end; gap: 20px; align-items: center; font-size: 15px; }
-        .total-general strong { font-size: 17px; }
-
-        .footer { margin-top: 18px; padding-top: 8px; border-top: 1px solid #ddd; color: #999; font-size: 10px; text-align: center; }
-        @media print { @page { size: A4 landscape; margin: 1cm; } body { padding: 0; } }
-      </style></head><body>
-        <div class="encabezado">
-          <div class="empresa">
-            <img class="logo" src="/logo.png" alt="" onerror="this.style.display='none'" />
-            <div>
-              <div class="nombre">SANTA CRUZ - COMPUTER</div>
-              <div class="ciudad">Santa Cruz de la Sierra</div>
-            </div>
-          </div>
-          <div class="emision">
-            <div>Pág: 1</div>
-            <div>Fecha: ${new Date().toLocaleDateString('es-BO')}</div>
-            <div>Hora: ${new Date().toLocaleTimeString('es-BO')}</div>
-          </div>
-        </div>
-
-        <div class="titulo">
-          <h1>REPORTE DE VENTAS</h1>
-          <div class="rango">${formatRangoFechas()} &nbsp;·&nbsp; ${tipoReporte} &nbsp;·&nbsp; Vendedor: ${vendedorReporteNombre} &nbsp;·&nbsp; ${ventasReporte.length} ventas</div>
-        </div>
-
-        <table>
-          <colgroup>
-            <col style="width:6%" /><col style="width:9%" /><col style="width:12%" /><col style="width:12%" /><col style="width:10%" /><col style="width:26%" /><col style="width:7%" /><col style="width:9%" /><col style="width:9%" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th class="center"># Venta</th>
-              <th class="center">Fecha</th>
-              <th>Cliente</th>
-              <th>Vendedor</th>
-              <th class="center">Estado</th>
-              <th>Producto</th>
-              <th class="center">Cantidad</th>
-              <th class="right">Precio Unit. (Bs)</th>
-              <th class="right">Subtotal (Bs)</th>
-            </tr>
-          </thead>
-          <tbody>${filas}</tbody>
-        </table>
-
-        <div class="total-general">
-          <span>TOTAL GENERAL</span>
-          <strong>Bs ${totalGeneralReporte.toFixed(2)}</strong>
-        </div>
-        <div class="footer">Documento generado automáticamente desde el sistema</div>
-      </body></html>
-    `;
-
-    const win = window.open('', '_blank', 'width=900,height=700');
-    if (!win) {
-      alert('Permite las ventanas emergentes para descargar el PDF.');
-      return;
+    // Pie con número de página en cada hoja
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(130);
+      doc.text('Documento generado automáticamente desde el sistema', 24, pageHeight - 16);
+      doc.text(`Pág: ${i} de ${totalPages}`, pageWidth - 24, pageHeight - 16, { align: 'right' });
     }
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    setTimeout(() => win.print(), 300);
+
+    const filename = `reporte_ventas_${new Date().toISOString().split('T')[0]}.pdf`;
+    doc.save(filename);                             // descarga automática
+    window.open(doc.output('bloburl'), '_blank');   // vista previa en pestaña
   };
 
   return (
