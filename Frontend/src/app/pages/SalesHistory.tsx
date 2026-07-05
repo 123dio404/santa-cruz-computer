@@ -305,15 +305,17 @@ export function SalesHistory() {
         : v.status === 'pending' ? 'Pendiente'
         : v.status;
       const estadoClass = v.status === 'completed' ? 'est-ok' : 'est-warn';
-      const cliente = v.cliente_name || 'General';
-      const vendedor = v.vendedor_name || 'Pedido online';
+      // Solo el primer nombre (sin apellidos) para cliente y vendedor
+      const primerNombre = (s: string) => s.trim().split(/\s+/)[0] || s.trim();
+      const cliente = v.cliente_name ? primerNombre(v.cliente_name) : 'General';
+      const vendedor = v.vendedor_name ? primerNombre(v.vendedor_name) : 'Online';
       const detalles = v.detalles ?? [];
       // Columnas fijas de la venta que se repiten en cada línea de producto
       const cols = `
               <td class="center">#${v.id}</td>
+              <td class="center">${fecha}</td>
               <td>${cliente}</td>
               <td>${vendedor}</td>
-              <td class="center">${fecha}</td>
               <td class="center"><span class="est ${estadoClass}">${estado}</span></td>`;
 
       if (detalles.length === 0) {
@@ -348,7 +350,8 @@ export function SalesHistory() {
         .titulo h1 { color: #1e40af; font-size: 20px; margin: 0; letter-spacing: 1px; }
         .titulo .rango { font-size: 12px; color: #555; margin-top: 2px; }
 
-        table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 12px; }
+        table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 12px; table-layout: fixed; }
+        th, td { overflow-wrap: break-word; word-break: break-word; }
         thead th { background: #1e40af; color: white; padding: 8px 6px; text-align: left; }
         thead th.center { text-align: center; }
         thead th.right { text-align: right; }
@@ -390,12 +393,15 @@ export function SalesHistory() {
         </div>
 
         <table>
+          <colgroup>
+            <col style="width:6%" /><col style="width:9%" /><col style="width:12%" /><col style="width:12%" /><col style="width:10%" /><col style="width:26%" /><col style="width:7%" /><col style="width:9%" /><col style="width:9%" />
+          </colgroup>
           <thead>
             <tr>
               <th class="center"># Venta</th>
+              <th class="center">Fecha</th>
               <th>Cliente</th>
               <th>Vendedor</th>
-              <th class="center">Fecha</th>
               <th class="center">Estado</th>
               <th>Producto</th>
               <th class="center">Cantidad</th>
