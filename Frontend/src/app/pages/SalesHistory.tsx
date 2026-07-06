@@ -20,9 +20,10 @@
  */
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router';
-import { Package, DollarSign, Clock, ChevronDown, ChevronUp, CheckCircle, Banknote, CreditCard, QrCode, Users, Eye, ArrowLeft, FileText, FileSpreadsheet } from 'lucide-react';
-import { ventasAPI, clientesAPI, API_BASE_URL, ApiCliente, ApiVenta } from '../services/api';
+import { Package, DollarSign, Clock, ChevronDown, ChevronUp, CheckCircle, Banknote, CreditCard, QrCode, Users, Eye, ArrowLeft, FileText, FileSpreadsheet, RotateCcw } from 'lucide-react';
+import { ventasAPI, clientesAPI, devolucionesAPI, API_BASE_URL, ApiCliente, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { exportToExcel } from '../utils/exportExcel';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -87,6 +88,17 @@ export function SalesHistory() {
   const [apiClientes, setApiClientes] = useState<ApiCliente[]>([]);
   const [loadingClientes, setLoadingClientes] = useState(false);
 
+  // Devoluciones (CU23)
+  const [devVenta, setDevVenta]                 = useState<ApiVenta | null>(null);
+  const [devDetalleId, setDevDetalleId]         = useState<number | ''>('');
+  const [devCantidad, setDevCantidad]           = useState(1);
+  const [devMotivo, setDevMotivo]               = useState('');
+  const [devInsp, setDevInsp]                   = useState({ sinDano: false, mismo: false, completo: false });
+  const [devMotivoRechazo, setDevMotivoRechazo] = useState('');
+  const [devLoading, setDevLoading]             = useState(false);
+  const [devMsg, setDevMsg]                     = useState<{ ok: boolean; text: string } | null>(null);
+  useEscapeKey(!!devVenta, () => setDevVenta(null));
+
   useEffect(() => {
     if (user) cargarHistorial();
   }, [user]);
@@ -129,6 +141,38 @@ export function SalesHistory() {
       alert('Error al confirmar la entrega');
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  // ── Devoluciones (CU23) ──────────────────────────────────────────────────────
+  const abrirDevolucion = (v: ApiVenta) => {
+    setDevVenta(v);
+    setDevDetalleId(v.detalles && v.detalles.length === 1 ? v.detalles[0].id : '');
+    setDevCantidad(1);
+    setDevMotivo('');
+    setDevInsp({ sinDano: false, mismo: false, completo: false });
+    setDevMotivoRechazo('');
+    setDevMsg(null);
+  };
+
+  const submitDevolucion = async (aprobar: boolean) => {
+    if (!devDetalleId) { setDevMsg({ ok: false, text: 'Elige el producto a devolver.' }); return; }
+    if (!devMotivo.trim()) { setDevMsg({ ok: false, text: 'Indica el motivo de la devolución.' }); return; }
+    if (!aprobar && !devMotivoRechazo.trim()) { setDevMsg({ ok: false, text: 'Indica el motivo del rechazo.' }); return; }
+    setDevLoading(true);
+    setDevMsg(null);
+    try {
+      await devolucionesAPI.crear({
+        detalle: Number(devDetalleId), cantidad: devCantidad, motivo: devMotivo.trim(),
+        aprobar, motivo_rechazo: aprobar ? undefined : devMotivoRechazo.trim(),
+      });
+      setDevMsg({ ok: true, text: aprobar ? '✅ Devolución aprobada. Stock reingresado.' : 'Devolución rechazada registrada.' });
+      await cargarHistorial();
+      setTimeout(() => setDevVenta(null), 1400);
+    } catch (e) {
+      setDevMsg({ ok: false, text: e instanceof Error ? e.message : 'No se pudo registrar la devolución.' });
+    } finally {
+      setDevLoading(false);
     }
   };
 
@@ -627,15 +671,22 @@ export function SalesHistory() {
                         </div>
                       </button>
 
-                      {/* Botón factura */}
+                      {/* Acciones de la venta */}
                       {v.status === 'completed' && (
-                        <div className="px-4 pb-3 flex border-t border-gray-100 pt-3">
+                        <div className="px-4 pb-3 flex gap-2 flex-wrap border-t border-gray-100 pt-3">
                           <button
                             onClick={() => window.open(`${API_BASE_URL}/orders/ventas/${v.id}/pdf/`, '_blank')}
                             className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
                           >
                             <FileText className="w-4 h-4" />
                             Descargar Factura
+                          </button>
+                          <button
+                            onClick={() => abrirDevolucion(v)}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                            Registrar devolución
                           </button>
                         </div>
                       )}
@@ -972,6 +1023,92 @@ export function SalesHistory() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── MODAL: Registrar devolución (CU23) ── */}
+      {devVenta && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+             onClick={() => setDevVenta(null)}>
+          <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+               onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-amber-600" /> Devolución — Venta #{devVenta.id}
+              </h2>
+              <button onClick={() => setDevVenta(null)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Producto a devolver</label>
+                <select value={devDetalleId}
+                  onChange={e => { setDevDetalleId(e.target.value ? Number(e.target.value) : ''); setDevCantidad(1); }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="">— Elige un producto —</option>
+                  {(devVenta.detalles ?? []).map(d => (
+                    <option key={d.id} value={d.id}>{d.producto_name} (x{d.cantidad})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
+                <input type="number" min={1}
+                  max={devVenta.detalles?.find(d => d.id === devDetalleId)?.cantidad ?? 1}
+                  value={devCantidad}
+                  onChange={e => setDevCantidad(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Motivo de la devolución</label>
+                <textarea value={devMotivo} onChange={e => setDevMotivo(e.target.value)} rows={2}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Ej. Producto defectuoso, no era lo que esperaba..." />
+              </div>
+
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                <p className="text-xs font-semibold text-gray-600 uppercase mb-2">Inspección física</p>
+                <label className="flex items-center gap-2 text-sm mb-1">
+                  <input type="checkbox" checked={devInsp.sinDano} onChange={e => setDevInsp({ ...devInsp, sinDano: e.target.checked })} />
+                  Sin daño ni manipulación
+                </label>
+                <label className="flex items-center gap-2 text-sm mb-1">
+                  <input type="checkbox" checked={devInsp.mismo} onChange={e => setDevInsp({ ...devInsp, mismo: e.target.checked })} />
+                  Es el mismo producto vendido
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={devInsp.completo} onChange={e => setDevInsp({ ...devInsp, completo: e.target.checked })} />
+                  Completo (accesorios / empaque)
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Motivo de rechazo (solo si la rechazas)</label>
+                <input value={devMotivoRechazo} onChange={e => setDevMotivoRechazo(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Ej. Fuera de plazo, dañado por mal uso..." />
+              </div>
+
+              {devMsg && (
+                <div className={`text-sm rounded-lg px-3 py-2 border ${devMsg.ok ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                  {devMsg.text}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 p-4 border-t border-gray-200">
+              <button disabled={devLoading} onClick={() => submitDevolucion(true)}
+                className="flex-1 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50">
+                {devLoading ? 'Guardando...' : 'Aprobar'}
+              </button>
+              <button disabled={devLoading} onClick={() => submitDevolucion(false)}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium disabled:opacity-50">
+                Rechazar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
