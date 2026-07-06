@@ -160,6 +160,11 @@ export function SalesHistory() {
   const submitDevolucion = async (aprobar: boolean) => {
     if (!devDetalleId) { setDevMsg({ ok: false, text: 'Elige el producto a devolver.' }); return; }
     if (!devMotivo.trim()) { setDevMsg({ ok: false, text: 'Indica el motivo de la devolución.' }); return; }
+    // Para APROBAR es obligatorio confirmar la inspección física (responsabilidad del trabajador)
+    if (aprobar && !(devInsp.sinDano && devInsp.mismo && devInsp.completo)) {
+      setDevMsg({ ok: false, text: 'Para APROBAR debes confirmar los 3 puntos de la inspección física.' });
+      return;
+    }
     if (!aprobar && !devMotivoRechazo.trim()) { setDevMsg({ ok: false, text: 'Indica el motivo del rechazo.' }); return; }
     setDevLoading(true);
     setDevMsg(null);
@@ -1229,6 +1234,11 @@ export function SalesHistory() {
                   <input type="checkbox" checked={devInsp.completo} onChange={e => setDevInsp({ ...devInsp, completo: e.target.checked })} />
                   Completo (accesorios / empaque)
                 </label>
+                <p className={`text-xs mt-2 ${(devInsp.sinDano && devInsp.mismo && devInsp.completo) ? 'text-green-600' : 'text-amber-600'}`}>
+                  {(devInsp.sinDano && devInsp.mismo && devInsp.completo)
+                    ? '✓ Inspección confirmada — puedes aprobar.'
+                    : 'Marca los 3 puntos para poder aprobar (deja constancia de que verificaste).'}
+                </p>
               </div>
 
               <div>
@@ -1246,8 +1256,11 @@ export function SalesHistory() {
             </div>
 
             <div className="flex gap-2 p-4 border-t border-gray-200">
-              <button disabled={devLoading} onClick={() => submitDevolucion(true)}
-                className="flex-1 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50">
+              <button
+                disabled={devLoading || !(devInsp.sinDano && devInsp.mismo && devInsp.completo)}
+                onClick={() => submitDevolucion(true)}
+                title={!(devInsp.sinDano && devInsp.mismo && devInsp.completo) ? 'Confirma los 3 puntos de la inspección física para aprobar' : ''}
+                className="flex-1 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed">
                 {devLoading ? 'Guardando...' : 'Aprobar'}
               </button>
               <button disabled={devLoading} onClick={() => submitDevolucion(false)}
