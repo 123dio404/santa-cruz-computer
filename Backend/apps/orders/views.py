@@ -747,8 +747,9 @@ class DevolucionViewSet(viewsets.ModelViewSet):
         venta = detalle.venta
 
         if aprobar:
-            # (1) Plazo <= 7 días desde la venta
-            if venta.fecha_venta and venta.fecha_venta < timezone.now() - timedelta(days=self.DIAS_DEVOLUCION):
+            # (1) Plazo <= 7 días desde la venta. Se compara por FECHA (día) para
+            # evitar el choque naive/aware entre fecha_venta y timezone.now().
+            if venta.fecha_venta and (timezone.now().date() - venta.fecha_venta.date()).days > self.DIAS_DEVOLUCION:
                 return Response(
                     {'error': f'Fuera de plazo: la venta tiene más de {self.DIAS_DEVOLUCION} días. Solo puedes rechazar.'},
                     status=status.HTTP_400_BAD_REQUEST)
