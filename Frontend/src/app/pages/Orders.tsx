@@ -17,9 +17,17 @@
  *   reclamo queda registrado para que el vendedor/admin lo atienda en tienda.
  */
 import { useState, useEffect } from 'react';
-import { Package, Eye, X, FileText, ShieldCheck, Star } from 'lucide-react';
+import { Package, Eye, X, FileText, ShieldCheck, Star, Wrench } from 'lucide-react';
+
+const SERV_ESTADO: Record<string, { label: string; cls: string }> = {
+  solicitado: { label: 'Solicitado', cls: 'bg-gray-100 text-gray-700' },
+  agendado:   { label: 'Agendado',   cls: 'bg-yellow-100 text-yellow-700' },
+  en_proceso: { label: 'En proceso', cls: 'bg-blue-100 text-blue-700' },
+  finalizado: { label: 'Finalizado', cls: 'bg-green-100 text-green-700' },
+  cancelado:  { label: 'Cancelado',  cls: 'bg-red-100 text-red-600' },
+};
 import { useEscapeKey } from '../hooks/useEscapeKey';
-import { ventasAPI, garantiasAPI, resenasAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia, ApiResena } from '../services/api';
+import { ventasAPI, garantiasAPI, resenasAPI, servicioTecnicoAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia, ApiResena, ApiOrdenServicio } from '../services/api';
 import { StarRating } from '../components/StarRating';
 import { useAuth } from '../context/AuthContext';
 
@@ -28,6 +36,7 @@ export function Orders() {
   const [orders, setOrders] = useState<ApiVenta[]>([]);
   const [garantias, setGarantias] = useState<ApiGarantia[]>([]);
   const [resenas, setResenas] = useState<ApiResena[]>([]);
+  const [servicios, setServicios] = useState<ApiOrdenServicio[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<ApiVenta | null>(null);
 
@@ -57,6 +66,7 @@ export function Orders() {
       ventasAPI.getByCliente(clienteId).then(setOrders).catch(() => setOrders([])),
       cargarGarantias(clienteId),
       cargarResenas(clienteId),
+      servicioTecnicoAPI.ordenes({ cliente: clienteId }).then(setServicios).catch(() => setServicios([])),
     ]).finally(() => setLoading(false));
   }, [user]);
 
@@ -171,6 +181,36 @@ export function Orders() {
         <h1 className="text-2xl font-bold text-gray-900">Mis Pedidos</h1>
         <p className="text-gray-600">Historial de compras, garantías y seguimiento</p>
       </div>
+
+      {/* CU27: Historial de servicio técnico de mis equipos */}
+      {servicios.length > 0 && (
+        <div className="bg-white rounded-xl p-6 border border-gray-200">
+          <h2 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Wrench className="w-5 h-5 text-blue-600" /> Servicio técnico de mis equipos
+          </h2>
+          <div className="divide-y divide-gray-100">
+            {servicios.map(s => (
+              <div key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-900">
+                    #{s.id} · {s.tipo === 'preventivo' ? 'Preventivo' : 'Correctivo'} · {s.equipo}
+                  </p>
+                  <p className="text-gray-500 truncate">
+                    {new Date(s.fecha_solicitud).toLocaleDateString('es-BO')}
+                    {s.detalles.length > 0 && ` · ${s.detalles.map(d => d.servicio_nombre).join(', ')}`}
+                  </p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${SERV_ESTADO[s.estado]?.cls ?? ''}`}>
+                    {SERV_ESTADO[s.estado]?.label ?? s.estado}
+                  </span>
+                  <p className="text-gray-700 mt-1">{s.es_beneficio ? 'GRATIS' : `Bs ${Number(s.costo_total).toFixed(2)}`}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {orders.length === 0 ? (
         <div className="bg-white rounded-xl p-12 border border-gray-200 text-center">
