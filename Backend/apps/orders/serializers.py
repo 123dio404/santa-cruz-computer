@@ -25,6 +25,7 @@ from rest_framework import serializers
 from .models import (
     Venta, DetalleVenta, PagoVenta, Factura, Garantia, Resena, Devolucion,
     ServicioCatalogo, OrdenServicio, OrdenDetalle, TareaServicio,
+    PlanCredito, Cuota,
 )
 
 
@@ -215,6 +216,57 @@ class OrdenServicioSerializer(serializers.ModelSerializer):
 
     def get_tecnico_nombre(self, obj):
         return obj.tecnico.username if obj.tecnico else '—'
+
+
+# ── Venta a crédito / Cartera (CU28/CU29) ────────────────────────────────────────
+class CuotaSerializer(serializers.ModelSerializer):
+    total    = serializers.SerializerMethodField()   # monto + mora
+    vencida  = serializers.SerializerMethodField()    # vencida y sin pagar
+
+    class Meta:
+        model  = Cuota
+        fields = ['id', 'numero', 'monto', 'mora', 'total',
+                  'fecha_vencimiento', 'fecha_pago', 'estado', 'vencida']
+
+    def get_total(self, obj):
+        return round(float(obj.monto) + float(obj.mora), 2)
+
+    def get_vencida(self, obj):
+        return obj.estado == 'vencida'
+
+
+class PlanCreditoSerializer(serializers.ModelSerializer):
+    cuotas          = CuotaSerializer(many=True, read_only=True)
+    cliente_nombre  = serializers.SerializerMethodField()
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    cuotas_pagadas  = serializers.SerializerMethodField()
+    total_pagado    = serializers.SerializerMethodField()
+    proxima_cuota   = serializers.SerializerMethodField()   # fecha de la siguiente cuota pendiente
+
+    class Meta:
+        model  = PlanCredito
+        fields = ['id', 'venta', 'detalle', 'producto', 'producto_nombre',
+                  'cliente', 'cliente_nombre', 'usuario',
+                  'precio_unitario', 'cantidad', 'precio_base', 'recargo_pct',
+                  'precio_financiado', 'inicial', 'n_cuotas', 'monto_cuota',
+                  'saldo', 'estado', 'fecha',
+                  'cuotas', 'cuotas_pagadas', 'total_pagado', 'proxima_cuota']
+
+    def get_cliente_nombre(self, obj):
+        c = obj.cliente
+        return f'{c.nombre} {c.apellido}'.strip() if c else 'Consumidor Final'
+
+    def get_cuotas_pagadas(self, obj):
+        return sum(1 for c in obj.cuotas.all() if c.estado == 'pagada')
+
+    def get_total_pagado(self, obj):
+        pagado = sum(float(c.monto) + float(c.mora) for c in obj.cuotas.all() if c.estado == 'pagada')
+        return round(float(obj.inicial) + pagado, 2)
+
+    def get_proxima_cuota(self, obj):
+        pend = [c for c in obj.cuotas.all() if c.estado != 'pagada']
+        pend.sort(key=lambda c: c.numero)
+        return pend[0].fecha_vencimiento if pend else None
 
 
 # ── Escritura (POST) ────────────────────────────────────────────────────────────

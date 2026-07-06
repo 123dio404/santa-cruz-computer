@@ -35,6 +35,7 @@ import { SalesHistory } from './pages/SalesHistory';
 import { Users } from './pages/Users';
 import { Suppliers } from './pages/Suppliers';
 import { Promociones } from './pages/Promociones';
+import { Creditos } from './pages/Creditos';
 import { MisTrabajos } from './pages/MisTrabajos';
 import { Placeholder } from './components/Placeholder';
 import { Store } from './pages/Store';
@@ -201,6 +202,16 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['admin']}>
         <Layout>
           <Promociones />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
+  {
+    path: '/creditos',
+    element: (
+      <ProtectedRoute allowedRoles={['admin', 'employee']}>
+        <Layout>
+          <Creditos />
         </Layout>
       </ProtectedRoute>
     )

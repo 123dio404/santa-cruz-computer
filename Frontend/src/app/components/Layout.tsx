@@ -41,6 +41,7 @@ import {
   ClipboardList,
   History,
   Tag,
+  CreditCard,
   Wrench,
   CalendarClock,
   Clock,
@@ -194,6 +195,7 @@ export function Layout({ children }: LayoutProps) {
       { path: '/inventory', icon: Warehouse, label: 'Inventario' },
       { path: '/sales', icon: ShoppingCart, label: 'Nueva Venta' },
       { path: '/sales-history', icon: History, label: 'Historial de Ventas' },
+      { path: '/creditos', icon: CreditCard, label: 'Créditos' },
       { path: '/suppliers', icon: Building2, label: 'Proveedores' },
       { path: '/promociones', icon: Tag, label: 'Promociones' },
       { path: '/warranties', icon: ShieldCheck, label: 'Reclamos de Garantía' },
@@ -206,6 +208,7 @@ export function Layout({ children }: LayoutProps) {
       { path: '/inventory', icon: Warehouse, label: 'Inventario' },
       { path: '/sales', icon: ShoppingCart, label: 'Nueva Venta' },
       { path: '/sales-history', icon: History, label: 'Historial de Ventas' },
+      { path: '/creditos', icon: CreditCard, label: 'Créditos' },
       { path: '/warranties', icon: ShieldCheck, label: 'Reclamos de Garantía' },
     ];
 
