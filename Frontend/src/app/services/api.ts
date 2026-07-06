@@ -186,6 +186,8 @@ export interface ApiProduct {
   categoria_nombre: string | null;
   is_low_stock: boolean;
   created_at: string;
+  promo_porcentaje: number | null;    // CU24: % de descuento si hay promo vigente
+  precio_promocional: number | null;  // CU24: precio ya con el descuento
 }
 
 export interface ApiVenta {
@@ -795,6 +797,47 @@ export interface ApiNotificacion {
   leido: boolean;
   fecha: string;
 }
+
+// ── Promociones (CU24) ────────────────────────────────────────────────────────
+export interface ApiPromocion {
+  id: number;
+  producto: number;
+  producto_nombre: string;
+  porcentaje: number;
+  fecha_inicio: string;
+  fecha_fin: string;
+  activo: boolean;
+  precio_normal: number;
+  precio_promocional: number;
+  vigente: boolean;
+}
+
+export const promocionesAPI = {
+  getAll: async (): Promise<ApiPromocion[]> => {
+    const r = await fetch(`${API_BASE_URL}/products/promociones/`, { headers: authHeaders() });
+    return handlePaginated(r);
+  },
+  create: async (data: {
+    producto: number; porcentaje: number; fecha_inicio: string; fecha_fin: string; activo?: boolean;
+  }): Promise<ApiPromocion> => {
+    const r = await fetch(`${API_BASE_URL}/products/promociones/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data),
+    });
+    return handleJson(r);
+  },
+  remove: async (id: number): Promise<void> => {
+    await fetch(`${API_BASE_URL}/products/promociones/${id}/`, { method: 'DELETE', headers: authHeaders() });
+  },
+  // CU24: envía las ofertas vigentes a todos los clientes (correo + campana)
+  enviarOfertas: async (): Promise<{ enviados: number; promociones: number }> => {
+    const r = await fetch(`${API_BASE_URL}/products/promociones/enviar-ofertas/`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    return handleJson(r);
+  },
+};
 
 // ── Devoluciones (CU23) ───────────────────────────────────────────────────────
 export const devolucionesAPI = {

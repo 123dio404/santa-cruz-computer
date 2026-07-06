@@ -16,12 +16,13 @@ ProveedorViewSet y CompraViewSet para que sus rutas específicas no sean sobresc
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import CategoriaViewSet, ProductoViewSet, ProveedorViewSet, CompraViewSet
+from .views import CategoriaViewSet, ProductoViewSet, ProveedorViewSet, CompraViewSet, PromocionViewSet
 
 router = DefaultRouter()
 router.register(r'categorias',  CategoriaViewSet,  basename='categoria')
 router.register(r'proveedores', ProveedorViewSet,  basename='proveedor')
 router.register(r'compras',     CompraViewSet,     basename='compra')
+router.register(r'promociones', PromocionViewSet,  basename='promocion')
 router.register(r'',            ProductoViewSet,   basename='producto')
 
 urlpatterns = [

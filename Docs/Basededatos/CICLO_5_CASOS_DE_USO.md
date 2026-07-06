@@ -11,7 +11,7 @@
 | CU21 | Notificaciones (sistema + correo) | Todos | ✅ Completado |
 | CU22 | Recibo de pago + Factura por correo | Cliente | ✅ Completado |
 | CU23 | Devoluciones (RMA) | Vendedor/Admin | ✅ Completado |
-| CU24 | Promociones programadas | Admin | ⬜ Pendiente |
+| CU24 | Promociones programadas | Admin | ✅ Completado |
 | CU25 | Servicio preventivo | Cliente/Vendedor/Admin/Técnico | ⬜ Pendiente |
 | CU26 | Servicio correctivo | Cliente/Vendedor/Admin/Técnico | ⬜ Pendiente |
 | CU27 | Ficha/historial de mantenimiento | Técnico/Cliente | ⬜ Pendiente |
@@ -99,8 +99,14 @@ El vendedor/admin registra una devolución desde **Historial de Ventas** (pesta�
 - Tabla `devolucion` (SQL 005). Modelo/endpoints en `orders`. NO se notifica al cliente (está en el mostrador).
 Commits: 2bc875b1 (backend), d0fb2735 (UI), 79212ba8 (reportes/dashboard), + reporte de devoluciones.
 
-# CU24 — Promociones programadas ⬜ PENDIENTE
-Admin define descuento % por producto/categoría con `fecha_inicio`/`fecha_fin`. La tienda muestra el precio rebajado mientras esté vigente. Tabla `promocion`.
+# CU24 — Promociones programadas ✅ COMPLETADO
+El admin define un descuento **% por producto** (no por categoría) con `fecha_inicio`/`fecha_fin`. Mientras esté vigente, la tienda **muestra y cobra** el precio rebajado.
+- **Página `/promociones`** (admin, en el menú): lista con estado vigente/programada/vencida + modal crear (producto + %, fechas) con **vista previa** del precio.
+- **Tabla `promocion`** (SQL 006). Modelo/endpoints en `products`. El `ProductoSerializer` expone `promo_porcentaje` y `precio_promocional` cuando hay promo vigente hoy.
+- **Tienda:** badge **"OFERTA −X%"** + precio ~~normal~~ → rebajado (card y detalle). `addToCart` usa el precio promocional → el carrito/venta cobran el descuento real.
+- **Combina** con el descuento VIP (independientes). Distinto del VIP por fidelidad.
+- **Enviar ofertas a clientes** (botón admin): un solo correo con las promos vigentes a todos los clientes con correo + notificación en campana. **Reutiliza y EXTIENDE CU21** (primer envío broadcast/masivo, tipo 'oferta').
+Commits: 25f39076 (backend), e1c17abc (página admin), 36d617ce (tienda+carrito), + enviar-ofertas.
 
 # CU25 — Servicio preventivo ⬜ PENDIENTE
 Mantenimiento todo-en-uno (hardware + software). GRATIS para laptops de la tienda con garantía vigente (2 usos, 6 meses de separación); externos/agotados pagan 200 Bs. Ejecuta el Técnico; asigna Vendedor/Admin.

@@ -88,8 +88,9 @@ export function Store() {
   });
 
   // Agrega un producto al carrito (si ya existe, incrementa cantidad en 1)
+  // CU24: si el producto tiene promoción vigente, se usa el precio rebajado.
   const addToCart = (product: ApiProduct) => {
-    const price = parseFloat(String(product.price));
+    const price = parseFloat(String(product.precio_promocional ?? product.precio_venta ?? product.price));
     const existing = cartItems.find(i => i.productId === product.id);
     if (existing) {
       saveCart(cartItems.map(i =>
@@ -220,6 +221,7 @@ export function Store() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
         {filtered.map(product => {
           const price = parseFloat(String(product.precio_venta ?? product.price));
+          const enPromo = product.precio_promocional != null && product.promo_porcentaje != null;
           const stock = product.stock ?? 0;
           return (
             <div key={product.id} className="bg-white rounded-xl overflow-hidden border border-gray-200 hover:shadow-lg transition-shadow flex flex-col">
@@ -242,6 +244,11 @@ export function Store() {
                     Agotado
                   </span>
                 )}
+                {enPromo && (
+                  <span className="absolute top-2 left-2 px-2 py-1 bg-amber-500 text-white text-xs font-bold rounded shadow">
+                    🏷️ OFERTA -{product.promo_porcentaje}%
+                  </span>
+                )}
               </div>
               <div className="p-4 flex flex-col flex-1">
                 <div className="flex-1">
@@ -250,7 +257,14 @@ export function Store() {
                   {product.modelo && <p className="text-sm text-gray-500">{product.modelo}</p>}
                 </div>
                 <div className="mt-auto pt-3 space-y-2">
-                  <span className="block text-xl font-bold text-gray-900">{price.toFixed(2)} Bs</span>
+                  {enPromo ? (
+                    <div>
+                      <span className="block text-sm text-gray-400 line-through">{price.toFixed(2)} Bs</span>
+                      <span className="block text-xl font-bold text-amber-600">{Number(product.precio_promocional).toFixed(2)} Bs</span>
+                    </div>
+                  ) : (
+                    <span className="block text-xl font-bold text-gray-900">{price.toFixed(2)} Bs</span>
+                  )}
                   <button onClick={() => setDetailProduct(product)}
                     className="w-full flex items-center justify-center gap-1 px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">
                     <Eye className="w-4 h-4" /> Ver detalles
@@ -342,9 +356,23 @@ export function Store() {
               {/* Nombre y precio */}
               <div className="flex items-start justify-between gap-3">
                 <h2 className="text-xl font-bold text-gray-900 leading-tight">{detailProduct.name}</h2>
-                <span className="text-2xl font-bold text-blue-600 whitespace-nowrap">
-                  {parseFloat(String(detailProduct.precio_venta ?? detailProduct.price)).toFixed(2)} Bs
-                </span>
+                {detailProduct.precio_promocional != null ? (
+                  <div className="text-right whitespace-nowrap">
+                    <span className="block px-2 py-0.5 bg-amber-500 text-white text-xs font-bold rounded mb-1">
+                      OFERTA -{detailProduct.promo_porcentaje}%
+                    </span>
+                    <span className="block text-sm text-gray-400 line-through">
+                      {parseFloat(String(detailProduct.precio_venta ?? detailProduct.price)).toFixed(2)} Bs
+                    </span>
+                    <span className="block text-2xl font-bold text-amber-600">
+                      {Number(detailProduct.precio_promocional).toFixed(2)} Bs
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-2xl font-bold text-blue-600 whitespace-nowrap">
+                    {parseFloat(String(detailProduct.precio_venta ?? detailProduct.price)).toFixed(2)} Bs
+                  </span>
+                )}
               </div>
 
               {/* Ficha técnica */}
