@@ -8,7 +8,7 @@
 | ID | Caso de Uso | Actores | Estado |
 |----|-------------|---------|--------|
 | CU20 | Chatbot de atención (IA) | Cliente | ⬜ Pendiente (va al final) |
-| CU21 | Notificaciones (sistema + correo) | Todos | 🟡 En progreso (5/6 pasos) |
+| CU21 | Notificaciones (sistema + correo) | Todos | ✅ Completado |
 | CU22 | Factura por correo (PDF) | Cliente | ⬜ Pendiente |
 | CU23 | Devoluciones (RMA) | Vendedor/Admin | ⬜ Pendiente |
 | CU24 | Promociones programadas | Admin | ⬜ Pendiente |
@@ -22,7 +22,7 @@ Roles del sistema: **Administrador · Vendedor · Cliente · Técnico** (Técnic
 
 ---
 
-# CU21 — Notificaciones (sistema + correo) 🟡 EN PROGRESO
+# CU21 — Notificaciones (sistema + correo) ✅ COMPLETADO
 
 ## Descripción
 Centro de notificaciones **persistente** (guardado en BD) con leído/no leído e historial, para **todos** los usuarios (incluido el cliente, que antes no tenía). Las importantes hacia el cliente también se envían por **correo (Brevo)**. Reemplaza la campana anterior, que solo mostraba conteos en vivo para admin/vendedor.
@@ -63,9 +63,14 @@ Tabla `notificacion` (`Backend/sql/004_notificaciones.sql`):
 - ✅ **3. Helper** `crear_notificacion()` + endpoints.
 - ✅ **4. Redirect after login** (`?next=`).
 - ✅ **5. Campana** conectada a la BD, visible para todos (clientes incluidos).
-- ⬜ **6. Enganchar eventos + los 4 correos** (con HTML + `FRONTEND_URL`). ← siguiente
+- ✅ **6. Eventos enganchados + 4 correos** con HTML de marca y `FRONTEND_URL`:
+  - Registro de cliente → **Bienvenida** (correo + campana).
+  - Reclamo de garantía creado → **Reclamo recibido** al cliente (correo + campana).
+  - Reclamo aprobado/rechazado → **Reclamo resuelto** al cliente (correo + campana).
+  - Entrega de venta confirmada → **Invitación a reseña** al cliente (correo + campana).
+  - Nueva reseña → aviso a los **administradores** (solo campana).
 
-Commits: `15c08ea4` (backend), `db34b974` (redirect), `344ac07d` (campana).
+Commits: `15c08ea4` (backend), `db34b974` (redirect), `344ac07d` (campana), + eventos/correos.
 
 ---
 

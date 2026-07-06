@@ -339,6 +339,26 @@ class VentaViewSet(viewsets.ModelViewSet):
             descripcion=f'Se confirmó la entrega de la venta #{venta.id} (estado → completada)',
             **actor,
         )
+        # CU21: invitar al cliente a dejar su reseña (campana + correo)
+        cli = venta.cliente
+        if cli and getattr(cli, 'correo', ''):
+            from django.conf import settings as _s
+            from apps.users.views import crear_notificacion, _email_html
+            cli_nombre = f'{cli.nombre} {cli.apellido}'.strip()
+            _html = _email_html(
+                cli_nombre,
+                f'<p>¡Gracias por tu compra! 🛍️ (Venta #{venta.id})</p>'
+                f'<p>Nos encantaría saber cómo te fue. Tu opinión ayuda a otros clientes '
+                f'y a mejorar nuestro servicio.</p>'
+                f'<p style="text-align:center;font-size:20px;margin:10px 0;">⭐ ⭐ ⭐ ⭐ ⭐</p>',
+                'Dejar mi reseña', f'{_s.FRONTEND_URL}/orders',
+            )
+            crear_notificacion(
+                tipo='resena', titulo='¿Cómo te fue con tu compra?',
+                mensaje=f'Déjanos tu reseña de la venta #{venta.id}.',
+                cliente_id=venta.cliente_id, enlace='/orders',
+                canal='ambos', email=cli.correo, html=_html,
+            )
         return Response(VentaSerializer(venta).data)
 
     @action(detail=False, methods=['get'])
@@ -438,6 +458,23 @@ class GarantiaViewSet(viewsets.ModelViewSet):
             usuario_id=None, usuario_nombre=nombre, usuario_rol='client',
             ip_address=get_client_ip(request),
         )
+        # CU21: avisar al cliente que recibimos su reclamo (campana + correo)
+        if cli and getattr(cli, 'correo', ''):
+            from django.conf import settings as _s
+            from apps.users.views import crear_notificacion, _email_html
+            _html = _email_html(
+                nombre,
+                f'<p>Recibimos tu reclamo de garantía del <strong>{prod}</strong> '
+                f'(garantía #{g.id}) y ya lo estamos revisando 🔎.</p>'
+                f'<p>Te avisaremos por este medio apenas tengamos una respuesta.</p>',
+                'Ver el estado', f'{_s.FRONTEND_URL}/warranties',
+            )
+            crear_notificacion(
+                tipo='reclamo', titulo='Recibimos tu reclamo de garantía',
+                mensaje=f'Tu reclamo del {prod} (garantía #{g.id}) está en revisión.',
+                cliente_id=g.cliente_id, enlace='/warranties',
+                canal='ambos', email=cli.correo, html=_html,
+            )
         g.refresh_from_db()
         return Response(GarantiaSerializer(g).data)
 
@@ -473,6 +510,28 @@ class GarantiaViewSet(viewsets.ModelViewSet):
                          f'garantía #{g.id} ({prod}, pedido #{g.venta_id}){extra}'),
             **actor,
         )
+        # CU21: avisar al cliente el resultado del reclamo (campana + correo)
+        cli = g.cliente
+        if cli and getattr(cli, 'correo', ''):
+            from django.conf import settings as _s
+            from apps.users.views import crear_notificacion, _email_html
+            cli_nombre = f'{cli.nombre} {cli.apellido}'.strip()
+            resultado  = 'APROBADO ✅' if aprobar else 'RECHAZADO'
+            det        = f'<p style="margin:8px 0;">Detalle: {resolucion}</p>' if resolucion else ''
+            _html = _email_html(
+                cli_nombre,
+                f'<p>Revisamos tu reclamo de garantía del <strong>{prod}</strong> '
+                f'(garantía #{g.id}) y el resultado es: <strong>{resultado}</strong>.</p>{det}'
+                f'<p>Gracias por tu confianza.</p>',
+                'Ver mis garantías', f'{_s.FRONTEND_URL}/warranties',
+            )
+            crear_notificacion(
+                tipo='reclamo_resuelto',
+                titulo=f'Tu reclamo de garantía fue {"aprobado" if aprobar else "rechazado"}',
+                mensaje=f'Reclamo del {prod} (garantía #{g.id}): {resultado}.',
+                cliente_id=g.cliente_id, enlace='/warranties',
+                canal='ambos', email=cli.correo, html=_html,
+            )
         g.refresh_from_db()
         return Response(GarantiaSerializer(g).data)
 
@@ -566,6 +625,13 @@ class ResenaViewSet(viewsets.ModelViewSet):
                          f'{puntuacion}★{(" — " + comentario) if comentario else ""}'),
             usuario_id=None, usuario_nombre=nombre, usuario_rol='client',
             ip_address=get_client_ip(request),
+        )
+        # CU21: avisar a los administradores que hay una nueva reseña (solo campana)
+        from apps.users.views import notificar_admins
+        notificar_admins(
+            tipo='resena', titulo='Nueva reseña de un cliente',
+            mensaje=f'{nombre} calificó la venta #{venta_id} con {puntuacion}★.',
+            enlace='/reviews',
         )
         return Response(ResenaSerializer(resena).data, status=status.HTTP_201_CREATED)
 
