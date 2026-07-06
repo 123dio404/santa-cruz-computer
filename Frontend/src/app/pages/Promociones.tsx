@@ -18,6 +18,7 @@ export function Promociones() {
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState('');
   const [enviando, setEnviando] = useState(false);
+  const [catSel, setCatSel] = useState('');
   useEscapeKey(modalOpen, () => setModalOpen(false));
 
   const cargar = () => {
@@ -28,6 +29,10 @@ export function Promociones() {
       .finally(() => setLoading(false));
   };
   useEffect(cargar, []);
+
+  // Categorías únicas (de los productos) y productos filtrados por la categoría elegida
+  const categorias = Array.from(new Set(productos.map(p => p.categoria_nombre).filter(Boolean))) as string[];
+  const productosFiltrados = catSel ? productos.filter(p => p.categoria_nombre === catSel) : productos;
 
   const productoSel  = productos.find(p => String(p.id) === form.producto);
   const precioNormal = productoSel ? Number((productoSel as any).precio_venta ?? (productoSel as any).price ?? 0) : 0;
@@ -46,6 +51,7 @@ export function Promociones() {
 
   const abrirModal = () => {
     setForm({ producto: '', porcentaje: '', fecha_inicio: '', fecha_fin: '' });
+    setCatSel('');
     setError('');
     setModalOpen(true);
   };
@@ -173,11 +179,20 @@ export function Promociones() {
             </div>
             <div className="p-4 space-y-4">
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Categoría</label>
+                <select value={catSel} onChange={e => { setCatSel(e.target.value); setForm({ ...form, producto: '' }); }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="">— Todas las categorías —</option>
+                  {categorias.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Producto</label>
                 <select value={form.producto} onChange={e => setForm({ ...form, producto: e.target.value })}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                   <option value="">— Elige un producto —</option>
-                  {productos.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {productosFiltrados.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 {productoSel && <p className="text-xs text-gray-500 mt-1">Precio normal: Bs {precioNormal.toFixed(2)}</p>}
               </div>
