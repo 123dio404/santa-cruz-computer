@@ -152,6 +152,10 @@ export function SalesHistory() {
     (Date.now() - new Date(fecha).getTime()) <= 7 * 86400000;
 
   const abrirDevolucion = (v: ApiVenta) => {
+    if (!dentroPlazoDevolucion(v.fecha)) {
+      alert('Fuera de plazo: la venta tiene más de 7 días. No se puede registrar una devolución.');
+      return;
+    }
     setDevVenta(v);
     setDevDetalleId(v.detalles && v.detalles.length === 1 ? v.detalles[0].id : '');
     setDevCantidad(1);
@@ -831,9 +835,8 @@ export function SalesHistory() {
                           </button>
                           <button
                             onClick={() => abrirDevolucion(v)}
-                            disabled={!dentroPlazoDevolucion(v.fecha)}
                             title={!dentroPlazoDevolucion(v.fecha) ? 'Fuera de plazo: más de 7 días desde la compra' : ''}
-                            className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-colors ${dentroPlazoDevolucion(v.fecha) ? 'bg-amber-600 hover:bg-amber-700' : 'bg-gray-400 hover:bg-gray-500'}`}
                           >
                             <RotateCcw className="w-4 h-4" />
                             Registrar devolución
@@ -1065,9 +1068,8 @@ export function SalesHistory() {
                           </button>
                           <button
                             onClick={() => abrirDevolucion(venta as unknown as ApiVenta)}
-                            disabled={!dentroPlazoDevolucion(venta.fecha)}
                             title={!dentroPlazoDevolucion(venta.fecha) ? 'Fuera de plazo: más de 7 días desde la compra' : ''}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-colors ${dentroPlazoDevolucion(venta.fecha) ? 'bg-amber-600 hover:bg-amber-700' : 'bg-gray-400 hover:bg-gray-500'}`}
                           >
                             <RotateCcw className="w-4 h-4" />
                             Registrar devolución
