@@ -13,7 +13,7 @@
  * - cliente sin permiso → /store
  * - admin/vendedor sin permiso → /dashboard
  */
-import { Navigate } from 'react-router';
+import { Navigate, useLocation } from 'react-router';
 import { useAuth, UserRole } from '../context/AuthContext';
 import { ReactNode } from 'react';
 
@@ -24,10 +24,13 @@ interface ProtectedRouteProps {
 
 export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
   const { user, isAuthenticated } = useAuth();
+  const location = useLocation();
 
-  // Si no está autenticado, redirige al login
+  // Si no está autenticado, redirige al login guardando a dónde iba (?next=...)
+  // para volver ahí tras iniciar sesión (ej. enlaces de los correos de notificaciones).
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    const next = encodeURIComponent(location.pathname + location.search);
+    return <Navigate to={`/login?next=${next}`} replace />;
   }
 
   // Si tiene rol no permitido, redirige según su rol

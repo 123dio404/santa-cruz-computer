@@ -22,7 +22,7 @@ ENDPOINTS DISPONIBLES:
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import UsuarioViewSet, ClienteViewSet, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView, CheckEmailView, ChangePasswordView, BlockedAccountsView, UnblockAccountView
+from .views import UsuarioViewSet, ClienteViewSet, LoginView, LogoutView, ForgotPasswordView, ResetPasswordView, CheckEmailView, ChangePasswordView, BlockedAccountsView, UnblockAccountView, NotificacionesView, NotificacionLeerView
 
 router = DefaultRouter()
 router.register(r'clientes', ClienteViewSet, basename='cliente')
@@ -37,5 +37,8 @@ urlpatterns = [
     path('change-password/',    ChangePasswordView.as_view(),    name='change-password'),
     path('blocked-accounts/',   BlockedAccountsView.as_view(),   name='blocked-accounts'),
     path('unblock-account/',    UnblockAccountView.as_view(),    name='unblock-account'),
+    # CU21 — Notificaciones (van ANTES del router para que no las capture su ruta genérica)
+    path('notificaciones/',               NotificacionesView.as_view(), name='notificaciones'),
+    path('notificaciones/marcar-leidas/', NotificacionLeerView.as_view(), name='notificaciones-leer'),
     path('', include(router.urls)),
 ]

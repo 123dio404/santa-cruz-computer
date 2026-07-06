@@ -17,7 +17,7 @@ import { ReactNode, useState, useEffect, FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { useAudit } from '../context/AuditContext';
-import { productosAPI, ventasAPI, garantiasAPI, authAPI, clearAuthToken, BACKEND_ROOT_URL, ApiProduct, ApiVenta, ApiGarantia } from '../services/api';
+import { productosAPI, ventasAPI, garantiasAPI, authAPI, clearAuthToken, BACKEND_ROOT_URL, ApiProduct, ApiVenta, ApiGarantia, notificacionesAPI, ApiNotificacion } from '../services/api';
 import { VoiceAssistant } from './VoiceAssistant';
 import { validatePassword } from '../utils/passwordValidation';
 import {
@@ -61,6 +61,8 @@ export function Layout({ children }: LayoutProps) {
   const [lowStockProducts, setLowStockProducts] = useState<ApiProduct[]>([]);
   const [pendingVentas, setPendingVentas]       = useState<ApiVenta[]>([]);
   const [pendingReclamos, setPendingReclamos]   = useState<ApiGarantia[]>([]);
+  const [dbNotifs, setDbNotifs]                 = useState<ApiNotificacion[]>([]);
+  const [unreadCount, setUnreadCount]           = useState(0);
   const [changePwOpen, setChangePwOpen]         = useState(false);
   const [cpCurrent, setCpCurrent]               = useState('');
   const [cpNew, setCpNew]                       = useState('');
@@ -73,7 +75,13 @@ export function Layout({ children }: LayoutProps) {
   const [cpShowConfirm, setCpShowConfirm]       = useState(false);
 
   const fetchNotifications = () => {
-    if (user?.role !== 'admin' && user?.role !== 'employee') return;
+    if (!user) return;
+    // Notificaciones de la BD: para TODOS los roles (incluye clientes)
+    notificacionesAPI.list()
+      .then(r => { setDbNotifs(r.notificaciones); setUnreadCount(r.no_leidas); })
+      .catch(() => {});
+    // Alertas en vivo: solo para admin/vendedor
+    if (user.role !== 'admin' && user.role !== 'employee') return;
     productosAPI.getAll()
       .then(products => setLowStockProducts(products.filter(p => p.is_low_stock)))
       .catch(() => {});
@@ -91,7 +99,26 @@ export function Layout({ children }: LayoutProps) {
     return () => clearInterval(interval);
   }, [user]);
 
+  // Alertas en vivo (solo admin/vendedor) + no leídas de la BD = badge de la campana
   const totalNotifications = lowStockProducts.length + pendingVentas.length + pendingReclamos.length;
+  const badgeCount = totalNotifications + unreadCount;
+
+  // Abrir una notificación: la marca leída y navega a su enlace (si tiene)
+  const abrirNotificacion = (n: ApiNotificacion) => {
+    if (!n.leido) {
+      notificacionesAPI.marcarLeidas({ id: n.id }).catch(() => {});
+      setDbNotifs(prev => prev.map(x => x.id === n.id ? { ...x, leido: true } : x));
+      setUnreadCount(c => Math.max(0, c - 1));
+    }
+    setNotificationsOpen(false);
+    if (n.enlace) navigate(n.enlace);
+  };
+
+  const marcarTodasLeidas = () => {
+    notificacionesAPI.marcarLeidas({ todas: true }).catch(() => {});
+    setDbNotifs(prev => prev.map(x => ({ ...x, leido: true })));
+    setUnreadCount(0);
+  };
 
   const handleLogout = () => {
     // Registrar logout en auditoría
@@ -321,8 +348,8 @@ export function Layout({ children }: LayoutProps) {
               </h2>
             </div>
 
-            {/* Notifications Bell - Only for Admin and Employee */}
-            {user?.role === 'admin' || user?.role === 'employee' ? (
+            {/* Campana de notificaciones - para todos los roles (CU21) */}
+            {user ? (
               <div className="relative">
                 <button
                   onClick={() => setNotificationsOpen(!notificationsOpen)}
@@ -330,9 +357,9 @@ export function Layout({ children }: LayoutProps) {
                   title="Notificaciones"
                 >
                   <Bell className="w-6 h-6" />
-                  {totalNotifications > 0 && (
+                  {badgeCount > 0 && (
                     <span className="absolute top-0 right-0 flex items-center justify-center w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full animate-pulse">
-                      {totalNotifications}
+                      {badgeCount}
                     </span>
                   )}
                 </button>
@@ -345,21 +372,60 @@ export function Layout({ children }: LayoutProps) {
                       <div className="flex items-center gap-2">
                         <Bell className="w-5 h-5 text-gray-700" />
                         <h3 className="font-bold text-gray-900">Notificaciones</h3>
-                        {totalNotifications > 0 && (
+                        {badgeCount > 0 && (
                           <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-bold">
-                            {totalNotifications}
+                            {badgeCount}
                           </span>
                         )}
                       </div>
-                      <button
-                        onClick={fetchNotifications}
-                        className="text-xs text-blue-600 hover:underline"
-                      >
-                        Actualizar
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {unreadCount > 0 && (
+                          <button onClick={marcarTodasLeidas} className="text-xs text-blue-600 hover:underline">
+                            Marcar leídas
+                          </button>
+                        )}
+                        <button onClick={fetchNotifications} className="text-xs text-blue-600 hover:underline">
+                          Actualizar
+                        </button>
+                      </div>
                     </div>
 
                     <div className="overflow-y-auto flex-1">
+                      {/* ── Sección: Notificaciones (BD) — para todos los roles ── */}
+                      <div className="border-b border-gray-200">
+                        <div className="flex items-center gap-2 px-4 py-2 bg-blue-50">
+                          <Bell className="w-4 h-4 text-blue-600" />
+                          <span className="text-xs font-semibold text-blue-700 uppercase tracking-wide">
+                            Novedades ({unreadCount})
+                          </span>
+                        </div>
+                        {dbNotifs.length === 0 ? (
+                          <div className="px-4 py-3 text-xs text-gray-400 flex items-center gap-2">
+                            <CheckCircle className="w-4 h-4 text-green-500" /> No tienes notificaciones
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-gray-100">
+                            {dbNotifs.map(n => (
+                              <button
+                                key={n.id}
+                                onClick={() => abrirNotificacion(n)}
+                                className={`w-full text-left flex items-start gap-3 px-4 py-3 hover:bg-blue-50 transition-colors ${n.leido ? '' : 'bg-blue-50/60'}`}
+                              >
+                                <span className={`mt-1.5 flex-shrink-0 block w-2 h-2 rounded-full ${n.leido ? 'bg-transparent' : 'bg-blue-600'}`} />
+                                <div className="flex-1 min-w-0">
+                                  <p className={`text-sm truncate ${n.leido ? 'text-gray-700' : 'font-semibold text-gray-900'}`}>{n.titulo}</p>
+                                  <p className="text-xs text-gray-500 truncate">{n.mensaje}</p>
+                                  <p className="text-xs text-gray-400">{new Date(n.fecha).toLocaleString('es-BO')}</p>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Alertas en vivo: solo admin/vendedor */}
+                      {(user?.role === 'admin' || user?.role === 'employee') && (
+                        <>
                       {/* ── Sección: Stock Bajo ── */}
                       <div className="border-b border-gray-200">
                         <div className="flex items-center gap-2 px-4 py-2 bg-orange-50">
@@ -527,6 +593,8 @@ export function Layout({ children }: LayoutProps) {
                           </div>
                         )}
                       </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}

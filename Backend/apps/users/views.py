@@ -43,8 +43,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import Usuario, Cliente
-from .serializers import UsuarioSerializer, ClienteSerializer
+from .models import Usuario, Cliente, Notificacion
+from .serializers import UsuarioSerializer, ClienteSerializer, NotificacionSerializer
 from apps.audit.utils import log_action, actor_from_request
 from utils import get_client_ip
 
@@ -338,6 +338,21 @@ class ClienteViewSet(viewsets.ModelViewSet):
             descripcion=f'Nuevo cliente registrado: "{nombre}"',
             **actor,
         )
+        # CU21: correo + campana de bienvenida al nuevo cliente
+        if instance.correo:
+            html = _email_html(
+                nombre,
+                '<p>¡Gracias por registrarte! Ya eres parte de Santa Cruz Computer 🖥️</p>'
+                '<p>Con tu cuenta puedes comprar, seguir tus garantías, solicitar servicio '
+                'técnico y dejar tus reseñas.</p>',
+                'Explorar la tienda', f'{django_settings.FRONTEND_URL}/store',
+            )
+            crear_notificacion(
+                tipo='bienvenida', titulo='¡Bienvenido a Santa Cruz Computer!',
+                mensaje='Tu cuenta fue creada con éxito. ¡Gracias por elegirnos!',
+                cliente_id=instance.pk, enlace='/store',
+                canal='ambos', email=instance.correo, html=html,
+            )
 
     def perform_update(self, serializer):
         instance = serializer.save()
@@ -552,6 +567,109 @@ def _send_brevo_email(to_email: str, subject: str, text_content: str, html_conte
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         return resp.status
+
+
+# ── CU21: Notificaciones ────────────────────────────────────────────────────
+def crear_notificacion(*, tipo, titulo, mensaje, usuario_id=None, cliente_id=None,
+                       enlace=None, canal='sistema', email='', html=None):
+    """
+    Crea una notificación (campana) para UN usuario interno O UN cliente.
+    Si canal == 'ambos' y hay email, además la envía por correo (Brevo).
+    NUNCA lanza excepción: si algo falla, se registra y el flujo principal sigue.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        Notificacion.objects.create(
+            usuario_id=usuario_id, cliente_id=cliente_id,
+            tipo=tipo, titulo=titulo, mensaje=mensaje,
+            enlace=enlace, canal=canal,
+        )
+    except Exception as e:
+        logger.error(f'crear_notificacion: no se pudo guardar: {e}')
+        return
+    if canal == 'ambos' and email:
+        try:
+            _send_brevo_email(email, titulo, mensaje, html)
+        except Exception as e:
+            logger.error(f'crear_notificacion: el correo falló: {e}')
+
+
+def notificar_admins(*, tipo, titulo, mensaje, enlace=None):
+    """Crea una notificación (solo campana) para todos los administradores activos."""
+    for admin_id in Usuario.objects.filter(rol='admin', activo=True).values_list('id', flat=True):
+        crear_notificacion(tipo=tipo, titulo=titulo, mensaje=mensaje,
+                           usuario_id=admin_id, enlace=enlace, canal='sistema')
+
+
+def _email_html(nombre, cuerpo_html, boton_texto=None, boton_url=None):
+    """Arma el HTML de marca para los correos al cliente (CU21): banda azul,
+    saludo, cuerpo y botón de acción opcional."""
+    boton = ''
+    if boton_texto and boton_url:
+        boton = (f'<p style="text-align:center;margin:22px 0 4px;">'
+                 f'<a href="{boton_url}" style="background:#1e40af;color:#ffffff;text-decoration:none;'
+                 f'padding:12px 26px;border-radius:6px;font-weight:bold;font-size:14px;display:inline-block;">'
+                 f'{boton_texto}</a></p>')
+    return (
+        '<div style="background:#f3f4f6;padding:24px;font-family:Arial,Helvetica,sans-serif;">'
+        '<table align="center" width="100%" style="max-width:520px;background:#ffffff;border-radius:10px;'
+        'overflow:hidden;border:1px solid #e5e7eb;border-collapse:collapse;">'
+        '<tr><td style="background:#1e40af;padding:18px 24px;color:#ffffff;font-size:18px;font-weight:bold;">'
+        '🖥️ Santa Cruz Computer</td></tr>'
+        '<tr><td style="padding:24px;color:#111827;font-size:14px;line-height:1.6;">'
+        f'<p style="margin:0 0 12px;">Hola <strong>{nombre}</strong> 👋</p>'
+        f'{cuerpo_html}{boton}</td></tr>'
+        '<tr><td style="background:#f9fafb;padding:14px 24px;color:#9ca3af;font-size:11px;">'
+        'Santa Cruz de la Sierra · Correo automático de Santa Cruz Computer.</td></tr>'
+        '</table></div>'
+    )
+
+
+class NotificacionesView(APIView):
+    """
+    GET /api/v1/users/notificaciones/
+    Devuelve las notificaciones del usuario autenticado (según el JWT) y el
+    contador de no leídas. Cliente -> filtra por idcliente; interno -> idusuario.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        if not request.auth:
+            return Response({'error': 'No autenticado'}, status=status.HTTP_401_UNAUTHORIZED)
+        user_id = request.auth.get('user_id')
+        role    = request.auth.get('role', '')
+
+        qs = Notificacion.objects.all()
+        qs = qs.filter(cliente_id=user_id) if role == 'cliente' else qs.filter(usuario_id=user_id)
+
+        no_leidas = qs.filter(leido=False).count()
+        data = NotificacionSerializer(qs.order_by('-id')[:50], many=True).data
+        return Response({'notificaciones': data, 'no_leidas': no_leidas})
+
+
+class NotificacionLeerView(APIView):
+    """
+    POST /api/v1/users/notificaciones/marcar-leidas/
+    Body: {"id": 5}       -> marca esa notificación como leída
+          {"todas": true} -> marca TODAS las del usuario como leídas
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not request.auth:
+            return Response({'error': 'No autenticado'}, status=status.HTTP_401_UNAUTHORIZED)
+        user_id = request.auth.get('user_id')
+        role    = request.auth.get('role', '')
+
+        qs = Notificacion.objects.all()
+        qs = qs.filter(cliente_id=user_id) if role == 'cliente' else qs.filter(usuario_id=user_id)
+
+        if request.data.get('todas'):
+            actualizadas = qs.filter(leido=False).update(leido=True)
+        else:
+            actualizadas = qs.filter(id=request.data.get('id'), leido=False).update(leido=True)
+        return Response({'actualizadas': actualizadas})
 
 
 class ForgotPasswordView(APIView):
