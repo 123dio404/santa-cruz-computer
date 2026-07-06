@@ -17,13 +17,14 @@
 import { useEffect, useState } from 'react';
 import { Package, DollarSign, AlertTriangle, ShoppingCart, BadgeDollarSign, TruckIcon, Boxes } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { productosAPI, ventasAPI, detallesVentaAPI, comprasAPI, ApiProduct, ApiVenta, ApiDetalleVenta, ApiCompra } from '../services/api';
+import { productosAPI, ventasAPI, detallesVentaAPI, comprasAPI, devolucionesAPI, ApiProduct, ApiVenta, ApiDetalleVenta, ApiCompra } from '../services/api';
 
 export function Dashboard() {
   const [products, setProducts] = useState<ApiProduct[]>([]);
   const [ventas, setVentas] = useState<ApiVenta[]>([]);
   const [detalles, setDetalles] = useState<ApiDetalleVenta[]>([]);
   const [compras, setCompras] = useState<ApiCompra[]>([]);
+  const [devoluciones, setDevoluciones] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -32,16 +33,22 @@ export function Dashboard() {
       ventasAPI.getAll(),
       detallesVentaAPI.getAll(),
       comprasAPI.getAll(),
-    ]).then(([p, v, d, c]) => {
+      devolucionesAPI.list(),
+    ]).then(([p, v, d, c, dev]) => {
       setProducts(p);
       setVentas(v);
       setDetalles(d);
       setCompras(c);
+      setDevoluciones(dev);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
   const lowStock = products.filter(p => p.is_low_stock);
   const totalRevenue = ventas.reduce((s, v) => s + parseFloat(String(v.total ?? 0)), 0);
+  const totalDevoluciones = devoluciones
+    .filter((d: any) => d.estado === 'aprobada')
+    .reduce((s: number, d: any) => s + (Number(d.monto_reembolso) || 0), 0);
+  const ingresosNetos = totalRevenue - totalDevoluciones;
 
   const ganancia = ventas
     .filter(v => v.status === 'completed')
@@ -91,7 +98,7 @@ export function Dashboard() {
 
   const stats = [
     { label: 'Total Productos',   value: products.length,                    icon: Package,         color: 'bg-blue-500'    },
-    { label: 'Ingresos Totales',  value: `${totalRevenue.toFixed(2)} Bs`,    icon: DollarSign,      color: 'bg-green-500'   },
+    { label: 'Ingresos Netos',    value: `${ingresosNetos.toFixed(2)} Bs`,   icon: DollarSign,      color: 'bg-green-500'   },
     { label: 'Ganancia Neta',     value: `${ganancia.toFixed(2)} Bs`,        icon: BadgeDollarSign, color: 'bg-emerald-600' },
     { label: 'Total Ventas',      value: ventas.length,                      icon: ShoppingCart,    color: 'bg-purple-500'  },
     { label: 'Total Compras',     value: `${totalCompras.toFixed(2)} Bs`,    icon: TruckIcon,       color: 'bg-sky-500'     },

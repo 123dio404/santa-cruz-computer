@@ -67,6 +67,7 @@ export function SalesHistory() {
   const [searchParams] = useSearchParams();
 
   const [historialData, setHistorialData] = useState<HistorialData | null>(null);
+  const [devolucionesReporte, setDevolucionesReporte] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedVenta, setExpandedVenta] = useState<number | null>(null);
@@ -122,6 +123,7 @@ export function SalesHistory() {
       const ventas = await ventasAPI.getAll() as unknown as VentaDetail[];
       const total_monto = ventas.reduce((s, v) => s + (Number(v.total) || 0), 0);
       setHistorialData({ total_ventas: ventas.length, total_monto, ventas });
+      devolucionesAPI.list().then(setDevolucionesReporte).catch(() => {});
     } catch (error) {
       console.error('Error cargando historial:', error);
       setLoadError(error instanceof Error ? error.message : 'Error al cargar ventas');
@@ -276,6 +278,15 @@ export function SalesHistory() {
 
   const totalGeneralReporte = ventasReporte.reduce((s, v) => s + (Number(v.total) || 0), 0);
 
+  // Devoluciones aprobadas → ítems devueltos (para marcar "Devuelta") y ventas netas
+  const returnedDetalleIds = new Set(
+    devolucionesReporte.filter((d: any) => d.estado === 'aprobada').map((d: any) => d.detalle)
+  );
+  const totalDevoluciones = devolucionesReporte
+    .filter((d: any) => d.estado === 'aprobada')
+    .reduce((s: number, d: any) => s + (Number(d.monto_reembolso) || 0), 0);
+  const totalNetoReporte = totalGeneralReporte - totalDevoluciones;
+
   const formatRangoFechas = () => {
     if (repDesde && repHasta) return `Del ${repDesde} al ${repHasta}`;
     if (repDesde) return `Desde ${repDesde}`;
@@ -316,12 +327,13 @@ export function SalesHistory() {
       } else {
         detalles.forEach(d => {
           const precio = Number(d.precio_unitario);
+          const estadoLinea = returnedDetalleIds.has(d.id) ? 'Devuelta' : estado;
           rows.push([
             `#${v.id}`,
             v.cliente_name || 'General',
             v.vendedor_name || 'Pedido online',
             fecha,
-            estado,
+            estadoLinea,
             d.producto_name,
             d.cantidad,
             Number(precio.toFixed(2)),
@@ -331,13 +343,18 @@ export function SalesHistory() {
       }
     });
 
+    // Resumen: bruto − devoluciones = neto
+    rows.push(['', '', '', '', '', '', '', 'TOTAL BRUTO (Bs)', Number(totalGeneralReporte.toFixed(2))]);
+    if (totalDevoluciones > 0) {
+      rows.push(['', '', '', '', '', '', '', 'DEVOLUCIONES (Bs)', -Number(totalDevoluciones.toFixed(2))]);
+      rows.push(['', '', '', '', '', '', '', 'VENTAS NETAS (Bs)', Number(totalNetoReporte.toFixed(2))]);
+    }
+
     exportToExcel({
       filename: `reporte_ventas_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Ventas',
       headers,
       rows,
-      // TOTAL GENERAL bajo "Precio Unit." y el valor bajo "Subtotal"
-      totalRow: ['', '', '', '', '', '', '', 'TOTAL GENERAL', Number(totalGeneralReporte.toFixed(2))],
     });
   };
 
@@ -373,7 +390,8 @@ export function SalesHistory() {
         body.push([`#${v.id}`, fecha, cliente, vendedor, estado, '(sin detalle)', '', '', '']);
       } else {
         detalles.forEach(d => body.push([
-          `#${v.id}`, fecha, cliente, vendedor, estado,
+          `#${v.id}`, fecha, cliente, vendedor,
+          returnedDetalleIds.has(d.id) ? 'Devuelta' : estado,
           d.producto_name,
           String(d.cantidad),
           (Number(d.precio_unitario) || 0).toFixed(2),
@@ -382,6 +400,18 @@ export function SalesHistory() {
       }
     });
 
+    // Pie: bruto − devoluciones = neto
+    const foot: any[] = [
+      [{ content: 'TOTAL BRUTO', colSpan: 8, styles: { halign: 'right' } },
+       { content: `Bs ${totalGeneralReporte.toFixed(2)}`, styles: { halign: 'right' } }],
+    ];
+    if (totalDevoluciones > 0) {
+      foot.push([{ content: 'Devoluciones', colSpan: 8, styles: { halign: 'right' } },
+                 { content: `- Bs ${totalDevoluciones.toFixed(2)}`, styles: { halign: 'right' } }]);
+      foot.push([{ content: 'VENTAS NETAS', colSpan: 8, styles: { halign: 'right' } },
+                 { content: `Bs ${totalNetoReporte.toFixed(2)}`, styles: { halign: 'right' } }]);
+    }
+
     const now = new Date();
 
     autoTable(doc, {
@@ -389,10 +419,7 @@ export function SalesHistory() {
       margin: { top: 92, left: 24, right: 24, bottom: 34 },
       head: [['# Venta', 'Fecha', 'Cliente', 'Vendedor', 'Estado', 'Producto', 'Cant.', 'P. Unit. (Bs)', 'Subtotal (Bs)']],
       body,
-      foot: [[
-        { content: 'TOTAL GENERAL', colSpan: 8, styles: { halign: 'right' } },
-        { content: `Bs ${totalGeneralReporte.toFixed(2)}`, styles: { halign: 'right' } },
-      ]],
+      foot,
       showFoot: 'lastPage',
       styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak', valign: 'middle' },
       headStyles: { fillColor: [30, 64, 175], textColor: 255 },
