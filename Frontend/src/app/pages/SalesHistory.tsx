@@ -20,9 +20,10 @@
  */
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router';
-import { Package, DollarSign, Clock, ChevronDown, ChevronUp, CheckCircle, Banknote, CreditCard, QrCode, Users, Eye, ArrowLeft, FileText, FileSpreadsheet } from 'lucide-react';
-import { ventasAPI, clientesAPI, API_BASE_URL, ApiCliente, ApiVenta } from '../services/api';
+import { Package, DollarSign, Clock, ChevronDown, ChevronUp, CheckCircle, Banknote, CreditCard, QrCode, Users, Eye, ArrowLeft, FileText, FileSpreadsheet, RotateCcw } from 'lucide-react';
+import { ventasAPI, clientesAPI, devolucionesAPI, API_BASE_URL, ApiCliente, ApiVenta } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import { exportToExcel } from '../utils/exportExcel';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -66,6 +67,7 @@ export function SalesHistory() {
   const [searchParams] = useSearchParams();
 
   const [historialData, setHistorialData] = useState<HistorialData | null>(null);
+  const [devolucionesReporte, setDevolucionesReporte] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedVenta, setExpandedVenta] = useState<number | null>(null);
@@ -86,6 +88,17 @@ export function SalesHistory() {
   const [expandedClientVenta, setExpandedClientVenta] = useState<number | null>(null);
   const [apiClientes, setApiClientes] = useState<ApiCliente[]>([]);
   const [loadingClientes, setLoadingClientes] = useState(false);
+
+  // Devoluciones (CU23)
+  const [devVenta, setDevVenta]                 = useState<ApiVenta | null>(null);
+  const [devDetalleId, setDevDetalleId]         = useState<number | ''>('');
+  const [devCantidad, setDevCantidad]           = useState(1);
+  const [devMotivo, setDevMotivo]               = useState('');
+  const [devInsp, setDevInsp]                   = useState({ sinDano: false, mismo: false, completo: false });
+  const [devMotivoRechazo, setDevMotivoRechazo] = useState('');
+  const [devLoading, setDevLoading]             = useState(false);
+  const [devMsg, setDevMsg]                     = useState<{ ok: boolean; text: string } | null>(null);
+  useEscapeKey(!!devVenta, () => setDevVenta(null));
 
   useEffect(() => {
     if (user) cargarHistorial();
@@ -110,6 +123,7 @@ export function SalesHistory() {
       const ventas = await ventasAPI.getAll() as unknown as VentaDetail[];
       const total_monto = ventas.reduce((s, v) => s + (Number(v.total) || 0), 0);
       setHistorialData({ total_ventas: ventas.length, total_monto, ventas });
+      devolucionesAPI.list().then(setDevolucionesReporte).catch(() => {});
     } catch (error) {
       console.error('Error cargando historial:', error);
       setLoadError(error instanceof Error ? error.message : 'Error al cargar ventas');
@@ -129,6 +143,38 @@ export function SalesHistory() {
       alert('Error al confirmar la entrega');
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  // ── Devoluciones (CU23) ──────────────────────────────────────────────────────
+  const abrirDevolucion = (v: ApiVenta) => {
+    setDevVenta(v);
+    setDevDetalleId(v.detalles && v.detalles.length === 1 ? v.detalles[0].id : '');
+    setDevCantidad(1);
+    setDevMotivo('');
+    setDevInsp({ sinDano: false, mismo: false, completo: false });
+    setDevMotivoRechazo('');
+    setDevMsg(null);
+  };
+
+  const submitDevolucion = async (aprobar: boolean) => {
+    if (!devDetalleId) { setDevMsg({ ok: false, text: 'Elige el producto a devolver.' }); return; }
+    if (!devMotivo.trim()) { setDevMsg({ ok: false, text: 'Indica el motivo de la devolución.' }); return; }
+    if (!aprobar && !devMotivoRechazo.trim()) { setDevMsg({ ok: false, text: 'Indica el motivo del rechazo.' }); return; }
+    setDevLoading(true);
+    setDevMsg(null);
+    try {
+      await devolucionesAPI.crear({
+        detalle: Number(devDetalleId), cantidad: devCantidad, motivo: devMotivo.trim(),
+        aprobar, motivo_rechazo: aprobar ? undefined : devMotivoRechazo.trim(),
+      });
+      setDevMsg({ ok: true, text: aprobar ? '✅ Devolución aprobada. Stock reingresado.' : 'Devolución rechazada registrada.' });
+      await cargarHistorial();
+      setTimeout(() => setDevVenta(null), 1400);
+    } catch (e) {
+      setDevMsg({ ok: false, text: e instanceof Error ? e.message : 'No se pudo registrar la devolución.' });
+    } finally {
+      setDevLoading(false);
     }
   };
 
@@ -232,6 +278,15 @@ export function SalesHistory() {
 
   const totalGeneralReporte = ventasReporte.reduce((s, v) => s + (Number(v.total) || 0), 0);
 
+  // Devoluciones aprobadas → ítems devueltos (para marcar "Devuelta") y ventas netas
+  const returnedDetalleIds = new Set(
+    devolucionesReporte.filter((d: any) => d.estado === 'aprobada').map((d: any) => d.detalle)
+  );
+  const totalDevoluciones = devolucionesReporte
+    .filter((d: any) => d.estado === 'aprobada')
+    .reduce((s: number, d: any) => s + (Number(d.monto_reembolso) || 0), 0);
+  const totalNetoReporte = totalGeneralReporte - totalDevoluciones;
+
   const formatRangoFechas = () => {
     if (repDesde && repHasta) return `Del ${repDesde} al ${repHasta}`;
     if (repDesde) return `Desde ${repDesde}`;
@@ -272,12 +327,13 @@ export function SalesHistory() {
       } else {
         detalles.forEach(d => {
           const precio = Number(d.precio_unitario);
+          const estadoLinea = returnedDetalleIds.has(d.id) ? 'Devuelta' : estado;
           rows.push([
             `#${v.id}`,
             v.cliente_name || 'General',
             v.vendedor_name || 'Pedido online',
             fecha,
-            estado,
+            estadoLinea,
             d.producto_name,
             d.cantidad,
             Number(precio.toFixed(2)),
@@ -287,13 +343,18 @@ export function SalesHistory() {
       }
     });
 
+    // Resumen: bruto − devoluciones = neto
+    rows.push(['', '', '', '', '', '', '', 'TOTAL BRUTO (Bs)', Number(totalGeneralReporte.toFixed(2))]);
+    if (totalDevoluciones > 0) {
+      rows.push(['', '', '', '', '', '', '', 'DEVOLUCIONES (Bs)', -Number(totalDevoluciones.toFixed(2))]);
+      rows.push(['', '', '', '', '', '', '', 'VENTAS NETAS (Bs)', Number(totalNetoReporte.toFixed(2))]);
+    }
+
     exportToExcel({
       filename: `reporte_ventas_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Ventas',
       headers,
       rows,
-      // TOTAL GENERAL bajo "Precio Unit." y el valor bajo "Subtotal"
-      totalRow: ['', '', '', '', '', '', '', 'TOTAL GENERAL', Number(totalGeneralReporte.toFixed(2))],
     });
   };
 
@@ -329,7 +390,8 @@ export function SalesHistory() {
         body.push([`#${v.id}`, fecha, cliente, vendedor, estado, '(sin detalle)', '', '', '']);
       } else {
         detalles.forEach(d => body.push([
-          `#${v.id}`, fecha, cliente, vendedor, estado,
+          `#${v.id}`, fecha, cliente, vendedor,
+          returnedDetalleIds.has(d.id) ? 'Devuelta' : estado,
           d.producto_name,
           String(d.cantidad),
           (Number(d.precio_unitario) || 0).toFixed(2),
@@ -338,6 +400,18 @@ export function SalesHistory() {
       }
     });
 
+    // Pie: bruto − devoluciones = neto
+    const foot: any[] = [
+      [{ content: 'TOTAL BRUTO', colSpan: 8, styles: { halign: 'right' } },
+       { content: `Bs ${totalGeneralReporte.toFixed(2)}`, styles: { halign: 'right' } }],
+    ];
+    if (totalDevoluciones > 0) {
+      foot.push([{ content: 'Devoluciones', colSpan: 8, styles: { halign: 'right' } },
+                 { content: `- Bs ${totalDevoluciones.toFixed(2)}`, styles: { halign: 'right' } }]);
+      foot.push([{ content: 'VENTAS NETAS', colSpan: 8, styles: { halign: 'right' } },
+                 { content: `Bs ${totalNetoReporte.toFixed(2)}`, styles: { halign: 'right' } }]);
+    }
+
     const now = new Date();
 
     autoTable(doc, {
@@ -345,10 +419,7 @@ export function SalesHistory() {
       margin: { top: 92, left: 24, right: 24, bottom: 34 },
       head: [['# Venta', 'Fecha', 'Cliente', 'Vendedor', 'Estado', 'Producto', 'Cant.', 'P. Unit. (Bs)', 'Subtotal (Bs)']],
       body,
-      foot: [[
-        { content: 'TOTAL GENERAL', colSpan: 8, styles: { halign: 'right' } },
-        { content: `Bs ${totalGeneralReporte.toFixed(2)}`, styles: { halign: 'right' } },
-      ]],
+      foot,
       showFoot: 'lastPage',
       styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak', valign: 'middle' },
       headStyles: { fillColor: [30, 64, 175], textColor: 255 },
@@ -402,6 +473,99 @@ export function SalesHistory() {
     const filename = `reporte_ventas_${new Date().toISOString().split('T')[0]}.pdf`;
     doc.save(filename);                             // descarga automática
     window.open(doc.output('bloburl'), '_blank');   // vista previa en pestaña
+  };
+
+  // ── Reporte de devoluciones (CU23) ──────────────────────────────────────────
+  const devolucionesFiltradas = () => devolucionesReporte.filter((d: any) => {
+    const f = new Date(d.fecha);
+    if (repDesde && f < new Date(repDesde + 'T00:00:00')) return false;
+    if (repHasta && f > new Date(repHasta + 'T23:59:59')) return false;
+    return true;
+  });
+
+  const motivoDev = (d: any) => (d.estado === 'rechazada' ? (d.motivo_rechazo || d.motivo) : d.motivo) || '—';
+
+  const descargarDevExcel = () => {
+    const devs = devolucionesFiltradas();
+    if (devs.length === 0) return;
+    const headers = ['# Dev', 'Fecha', '# Venta', 'Cliente', 'Producto', 'Cantidad', 'Motivo', 'Estado', 'Reembolso (Bs)'];
+    const rows = devs.map((d: any) => [
+      `#${d.id}`, new Date(d.fecha).toLocaleDateString('es-BO'), `#${d.venta}`,
+      d.cliente_nombre || '—', d.producto_nombre || '—', d.cantidad,
+      motivoDev(d), d.estado === 'aprobada' ? 'Aprobada' : 'Rechazada',
+      Number(Number(d.monto_reembolso || 0).toFixed(2)),
+    ]);
+    const totalReembolso = devs.filter((d: any) => d.estado === 'aprobada')
+      .reduce((s: number, d: any) => s + Number(d.monto_reembolso || 0), 0);
+    exportToExcel({
+      filename: `reporte_devoluciones_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Devoluciones', headers, rows,
+      totalRow: ['', '', '', '', '', '', '', 'TOTAL REEMBOLSADO', Number(totalReembolso.toFixed(2))],
+    });
+  };
+
+  const descargarDevPDF = async () => {
+    const devs = devolucionesFiltradas();
+    if (devs.length === 0) return;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const logo = await new Promise<HTMLImageElement | null>((resolve) => {
+      const img = new Image(); img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = '/logo.png';
+    });
+    const body = devs.map((d: any) => [
+      `#${d.id}`, new Date(d.fecha).toLocaleDateString('es-BO'), `#${d.venta}`,
+      d.cliente_nombre || '—', d.producto_nombre || '—', String(d.cantidad),
+      motivoDev(d), d.estado === 'aprobada' ? 'Aprobada' : 'Rechazada',
+      Number(d.monto_reembolso || 0).toFixed(2),
+    ]);
+    const totalReembolso = devs.filter((d: any) => d.estado === 'aprobada')
+      .reduce((s: number, d: any) => s + Number(d.monto_reembolso || 0), 0);
+    const now = new Date();
+    autoTable(doc, {
+      startY: 92,
+      margin: { top: 92, left: 24, right: 24, bottom: 34 },
+      head: [['# Dev', 'Fecha', '# Venta', 'Cliente', 'Producto', 'Cant.', 'Motivo', 'Estado', 'Reembolso (Bs)']],
+      body,
+      foot: [[{ content: 'TOTAL REEMBOLSADO (aprobadas)', colSpan: 8, styles: { halign: 'right' } },
+              { content: `Bs ${totalReembolso.toFixed(2)}`, styles: { halign: 'right' } }]],
+      showFoot: 'lastPage',
+      styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak', valign: 'middle' },
+      headStyles: { fillColor: [180, 83, 9], textColor: 255 },
+      footStyles: { fillColor: [180, 83, 9], textColor: 255, fontStyle: 'bold', fontSize: 10 },
+      alternateRowStyles: { fillColor: [253, 246, 236] },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 42 }, 1: { halign: 'center', cellWidth: 58 },
+        2: { halign: 'center', cellWidth: 48 }, 3: { cellWidth: 90 }, 4: { cellWidth: 'auto' },
+        5: { halign: 'center', cellWidth: 36 }, 6: { cellWidth: 130 }, 7: { halign: 'center', cellWidth: 60 },
+        8: { halign: 'right', cellWidth: 80 },
+      },
+      didDrawPage: () => {
+        if (logo) { try { doc.addImage(logo, 'PNG', 24, 16, 40, 40); } catch { /* logo opcional */ } }
+        const xText = logo ? 72 : 24;
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(180, 83, 9);
+        doc.text('SANTA CRUZ - COMPUTER', xText, 30);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90);
+        doc.text('Santa Cruz de la Sierra', xText, 44);
+        doc.setFontSize(9); doc.setTextColor(70);
+        doc.text(`Fecha: ${now.toLocaleDateString('es-BO')}`, pageWidth - 24, 26, { align: 'right' });
+        doc.text(`Hora: ${now.toLocaleTimeString('es-BO')}`, pageWidth - 24, 40, { align: 'right' });
+        doc.setDrawColor(180, 83, 9); doc.setLineWidth(1.5); doc.line(24, 54, pageWidth - 24, 54);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(180, 83, 9);
+        doc.text('REPORTE DE DEVOLUCIONES', pageWidth / 2, 72, { align: 'center' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(90);
+        doc.text(`${devs.length} devolución(es)  ·  ${formatRangoFechas()}`, pageWidth / 2, 84, { align: 'center' });
+      },
+    });
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(130);
+      doc.text('Documento generado automáticamente desde el sistema', 24, pageHeight - 16);
+      doc.text(`Pág: ${i} de ${totalPages}`, pageWidth - 24, pageHeight - 16, { align: 'right' });
+    }
+    doc.save(`reporte_devoluciones_${new Date().toISOString().split('T')[0]}.pdf`);
+    window.open(doc.output('bloburl'), '_blank');
   };
 
   return (
@@ -560,6 +724,25 @@ export function SalesHistory() {
             >
               <FileText className="w-4 h-4" /> PDF
             </button>
+            {devolucionesReporte.length > 0 && (
+              <>
+                <span className="mx-1 hidden sm:inline text-gray-300">|</span>
+                <button
+                  onClick={descargarDevExcel}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-medium"
+                  title="Reporte de devoluciones (Excel)"
+                >
+                  <RotateCcw className="w-4 h-4" /> Dev. Excel
+                </button>
+                <button
+                  onClick={descargarDevPDF}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 text-white rounded-lg hover:bg-amber-800 transition-colors text-sm font-medium"
+                  title="Reporte de devoluciones (PDF)"
+                >
+                  <RotateCcw className="w-4 h-4" /> Dev. PDF
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -627,15 +810,22 @@ export function SalesHistory() {
                         </div>
                       </button>
 
-                      {/* Botón factura */}
+                      {/* Acciones de la venta */}
                       {v.status === 'completed' && (
-                        <div className="px-4 pb-3 flex border-t border-gray-100 pt-3">
+                        <div className="px-4 pb-3 flex gap-2 flex-wrap border-t border-gray-100 pt-3">
                           <button
                             onClick={() => window.open(`${API_BASE_URL}/orders/ventas/${v.id}/pdf/`, '_blank')}
                             className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
                           >
                             <FileText className="w-4 h-4" />
                             Descargar Factura
+                          </button>
+                          <button
+                            onClick={() => abrirDevolucion(v)}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                            Registrar devolución
                           </button>
                         </div>
                       )}
@@ -972,6 +1162,92 @@ export function SalesHistory() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── MODAL: Registrar devolución (CU23) ── */}
+      {devVenta && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+             onClick={() => setDevVenta(null)}>
+          <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+               onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-amber-600" /> Devolución — Venta #{devVenta.id}
+              </h2>
+              <button onClick={() => setDevVenta(null)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Producto a devolver</label>
+                <select value={devDetalleId}
+                  onChange={e => { setDevDetalleId(e.target.value ? Number(e.target.value) : ''); setDevCantidad(1); }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="">— Elige un producto —</option>
+                  {(devVenta.detalles ?? []).map(d => (
+                    <option key={d.id} value={d.id}>{d.producto_name} (x{d.cantidad})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
+                <input type="number" min={1}
+                  max={devVenta.detalles?.find(d => d.id === devDetalleId)?.cantidad ?? 1}
+                  value={devCantidad}
+                  onChange={e => setDevCantidad(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Motivo de la devolución</label>
+                <textarea value={devMotivo} onChange={e => setDevMotivo(e.target.value)} rows={2}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Ej. Producto defectuoso, no era lo que esperaba..." />
+              </div>
+
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                <p className="text-xs font-semibold text-gray-600 uppercase mb-2">Inspección física</p>
+                <label className="flex items-center gap-2 text-sm mb-1">
+                  <input type="checkbox" checked={devInsp.sinDano} onChange={e => setDevInsp({ ...devInsp, sinDano: e.target.checked })} />
+                  Sin daño ni manipulación
+                </label>
+                <label className="flex items-center gap-2 text-sm mb-1">
+                  <input type="checkbox" checked={devInsp.mismo} onChange={e => setDevInsp({ ...devInsp, mismo: e.target.checked })} />
+                  Es el mismo producto vendido
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={devInsp.completo} onChange={e => setDevInsp({ ...devInsp, completo: e.target.checked })} />
+                  Completo (accesorios / empaque)
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Motivo de rechazo (solo si la rechazas)</label>
+                <input value={devMotivoRechazo} onChange={e => setDevMotivoRechazo(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Ej. Fuera de plazo, dañado por mal uso..." />
+              </div>
+
+              {devMsg && (
+                <div className={`text-sm rounded-lg px-3 py-2 border ${devMsg.ok ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                  {devMsg.text}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 p-4 border-t border-gray-200">
+              <button disabled={devLoading} onClick={() => submitDevolucion(true)}
+                className="flex-1 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50">
+                {devLoading ? 'Guardando...' : 'Aprobar'}
+              </button>
+              <button disabled={devLoading} onClick={() => submitDevolucion(false)}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium disabled:opacity-50">
+                Rechazar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

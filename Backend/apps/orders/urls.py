@@ -14,7 +14,7 @@ ENDPOINTS DISPONIBLES (bajo /api/v1/orders/):
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import VentaViewSet, PagoVentaViewSet, DetalleVentaViewSet, FacturaPDFView, GarantiaViewSet, ResenaViewSet
+from .views import VentaViewSet, PagoVentaViewSet, DetalleVentaViewSet, FacturaPDFView, GarantiaViewSet, ResenaViewSet, DevolucionViewSet
 from .stripe_views import CreateCheckoutSessionView, ConfirmCheckoutView
 from .voz_views import VozIntencionView
 
@@ -24,6 +24,7 @@ router.register(r'pagos',     PagoVentaViewSet,    basename='pago')
 router.register(r'detalles',  DetalleVentaViewSet, basename='detalle-venta')
 router.register(r'garantias', GarantiaViewSet,     basename='garantia')
 router.register(r'resenas',   ResenaViewSet,       basename='resena')
+router.register(r'devoluciones', DevolucionViewSet, basename='devolucion')
 
 urlpatterns = [
     path('', include(router.urls)),

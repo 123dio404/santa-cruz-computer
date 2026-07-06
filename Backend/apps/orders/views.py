@@ -39,10 +39,11 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.filters import OrderingFilter
-from .models import Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia, Resena
+from .models import Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia, Resena, Devolucion
 from .serializers import (
     VentaSerializer, VentaCreateSerializer,
     DetalleVentaSerializer, PagoVentaSerializer, GarantiaSerializer, ResenaSerializer,
+    DevolucionSerializer,
 )
 from apps.audit.utils import log_action, actor_from_request
 from utils import get_client_ip
@@ -692,3 +693,98 @@ class ResenaViewSet(viewsets.ModelViewSet):
             **actor,
         )
         return Response(ResenaSerializer(r).data)
+
+
+class DevolucionViewSet(viewsets.ModelViewSet):
+    """
+    Devoluciones (RMA) — CU23. Las registra el vendedor/admin desde Historial de Ventas.
+
+      GET  /devoluciones/            → lista (para reporte / historial)
+      GET  /devoluciones/?venta=<id> → devoluciones de una venta
+      POST /devoluciones/            → registrar (nace 'aprobada' o 'rechazada')
+    """
+    queryset           = Devolucion.objects.select_related('producto', 'cliente', 'usuario', 'venta')
+    serializer_class   = DevolucionSerializer
+    permission_classes = []
+    http_method_names  = ['get', 'post', 'head', 'options']
+    filter_backends    = [OrderingFilter]
+    ordering_fields    = ['id', 'fecha']
+    ordering           = ['-id']
+
+    DIAS_DEVOLUCION = 7
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        venta_id = self.request.query_params.get('venta')
+        if venta_id:
+            qs = qs.filter(venta_id=venta_id)
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        from django.utils import timezone
+        from datetime import timedelta
+        from django.db.models import Sum
+
+        detalle_id = request.data.get('detalle')
+        try:
+            cantidad = int(request.data.get('cantidad') or 1)
+        except (TypeError, ValueError):
+            return Response({'error': 'Cantidad inválida.'}, status=status.HTTP_400_BAD_REQUEST)
+        motivo         = (request.data.get('motivo') or '').strip()
+        aprobar        = bool(request.data.get('aprobar', True))
+        motivo_rechazo = (request.data.get('motivo_rechazo') or '').strip() or None
+
+        if cantidad < 1:
+            return Response({'error': 'La cantidad debe ser al menos 1.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not motivo:
+            return Response({'error': 'Indica el motivo de la devolución.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            detalle = DetalleVenta.objects.select_related('venta', 'producto').get(pk=detalle_id)
+        except DetalleVenta.DoesNotExist:
+            return Response({'error': 'El ítem de la venta no existe.'}, status=status.HTTP_404_NOT_FOUND)
+
+        venta = detalle.venta
+
+        if aprobar:
+            # (1) Plazo <= 7 días desde la venta
+            if venta.fecha_venta and venta.fecha_venta < timezone.now() - timedelta(days=self.DIAS_DEVOLUCION):
+                return Response(
+                    {'error': f'Fuera de plazo: la venta tiene más de {self.DIAS_DEVOLUCION} días. Solo puedes rechazar.'},
+                    status=status.HTTP_400_BAD_REQUEST)
+            # (2) No devuelto antes: cantidad disponible del ítem
+            ya = Devolucion.objects.filter(detalle_id=detalle.id, estado='aprobada').aggregate(t=Sum('cantidad'))['t'] or 0
+            disponible = detalle.cantidad - ya
+            if cantidad > disponible:
+                return Response(
+                    {'error': f'Solo quedan {disponible} unidad(es) por devolver de este ítem.'},
+                    status=status.HTTP_400_BAD_REQUEST)
+        else:
+            if not motivo_rechazo:
+                return Response({'error': 'Indica el motivo del rechazo.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        estado = 'aprobada' if aprobar else 'rechazada'
+        monto  = round(float(detalle.precio_unitario) * cantidad, 2) if aprobar else 0
+
+        actor = actor_from_request(request)
+        # El registrador debe ser un usuario interno (no un cliente) para no romper la FK
+        usuario_id = actor.get('usuario_id') if actor.get('usuario_rol') in ('admin', 'vendedor') else None
+
+        dev = Devolucion.objects.create(
+            venta_id=venta.id, detalle_id=detalle.id, producto_id=detalle.producto_id,
+            cliente_id=venta.cliente_id, cantidad=cantidad, motivo=motivo,
+            estado=estado, motivo_rechazo=motivo_rechazo, monto_reembolso=monto,
+            usuario_id=usuario_id,
+        )
+        # Al APROBAR: anular la garantía de ese ítem (el producto vuelve a la tienda)
+        if aprobar:
+            Garantia.objects.filter(detalle_id=detalle.id).exclude(estado='anulada').update(estado='anulada')
+
+        prod = detalle.producto.nombre if detalle.producto else 'producto'
+        log_action(
+            accion='UPDATE', modulo='Devolución',
+            descripcion=(f'Devolución {estado} de "{prod}" (x{cantidad}) de la venta #{venta.id}'
+                         + (f' — reembolso Bs {monto:.2f}' if aprobar else f' — rechazo: {motivo_rechazo}')),
+            **actor,
+        )
+        return Response(DevolucionSerializer(dev).data, status=status.HTTP_201_CREATED)

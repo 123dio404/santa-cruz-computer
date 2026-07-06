@@ -796,6 +796,26 @@ export interface ApiNotificacion {
   fecha: string;
 }
 
+// ── Devoluciones (CU23) ───────────────────────────────────────────────────────
+export const devolucionesAPI = {
+  list: async (ventaId?: number): Promise<any[]> => {
+    const q = ventaId ? `?venta=${ventaId}` : '';
+    const r = await fetch(`${API_BASE_URL}/orders/devoluciones/${q}`, { headers: authHeaders() });
+    return handlePaginated(r);
+  },
+  crear: async (data: {
+    detalle: number; cantidad: number; motivo: string;
+    aprobar: boolean; motivo_rechazo?: string;
+  }): Promise<any> => {
+    const r = await fetch(`${API_BASE_URL}/orders/devoluciones/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data),
+    });
+    return handleJson(r);
+  },
+};
+
 export const notificacionesAPI = {
   // Devuelve mis notificaciones + el contador de no leídas
   list: async (): Promise<{ notificaciones: ApiNotificacion[]; no_leidas: number }> => {
