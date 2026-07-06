@@ -147,6 +147,8 @@ export function Users() {
 
   // ── Modal usuario ──────────────────────────────────────────────────────────
   const handleOpenModal = (user?: ApiUser) => {
+    // Refresca las listas para validar el username contra datos actuales (evita "ocupado" por lista vieja tras borrar)
+    fetchUsers(); fetchClientes();
     setUserErrors({});
     setShowPassword(false);
     if (user) {
@@ -271,6 +273,8 @@ export function Users() {
 
   // ── Modal crear cliente ────────────────────────────────────────────────────
   const handleOpenCrearCliente = () => {
+    // Refresca las listas para validar contra datos actuales (evita "ocupado" por lista vieja tras borrar)
+    fetchUsers(); fetchClientes();
     setCrearClienteForm(emptyClienteForm);
     setClienteCrearErrors({});
     setShowCrearClientePassword(false);
