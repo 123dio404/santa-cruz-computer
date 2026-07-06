@@ -17,6 +17,7 @@ from django.db import models
 class RolUsuario(models.TextChoices):
     ADMIN    = 'admin',    'Administrador'
     VENDEDOR = 'vendedor', 'Vendedor'
+    TECNICO  = 'tecnico',  'Técnico'
 
 
 class Usuario(models.Model):
