@@ -35,6 +35,7 @@ import { SalesHistory } from './pages/SalesHistory';
 import { Users } from './pages/Users';
 import { Suppliers } from './pages/Suppliers';
 import { Promociones } from './pages/Promociones';
+import { MisTrabajos } from './pages/MisTrabajos';
 import { Placeholder } from './components/Placeholder';
 import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
@@ -209,7 +210,7 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute allowedRoles={['tecnico']}>
         <Layout>
-          <Placeholder title="Mis Trabajos" descripcion="Aquí verás y atenderás las órdenes de servicio técnico. (Próximamente)" />
+          <MisTrabajos />
         </Layout>
       </ProtectedRoute>
     )

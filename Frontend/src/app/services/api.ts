@@ -798,6 +798,77 @@ export interface ApiNotificacion {
   fecha: string;
 }
 
+// ── Servicio Técnico (CU25/26/27) ─────────────────────────────────────────────
+export interface ApiServicioCatalogo {
+  id: number; nombre: string; tipo: string; equipo: string | null; precio: number; activo: boolean;
+}
+export interface ApiOrdenServicio {
+  id: number;
+  cliente: number | null;
+  cliente_nombre: string;
+  tecnico: number | null;
+  tecnico_nombre: string;
+  garantia: number | null;
+  tipo: string;
+  origen: string;
+  equipo: string;
+  equipo_descripcion: string | null;
+  es_beneficio: boolean;
+  diagnostico: string | null;
+  observaciones: string | null;
+  costo_total: number;
+  estado: string;
+  fecha_solicitud: string;
+  fecha_agendada: string | null;
+  fecha_finalizacion: string | null;
+  detalles: { id: number; servicio: number; servicio_nombre: string; precio: number }[];
+  tareas: { id: number; tarea: string; realizado: boolean }[];
+}
+export interface ApiElegibilidad {
+  garantia_id: number; producto: string; fecha_fin: string; usos_disponibles: number;
+}
+
+export const servicioTecnicoAPI = {
+  catalogo: async (): Promise<ApiServicioCatalogo[]> => {
+    const r = await fetch(`${API_BASE_URL}/orders/servicios-catalogo/`, { headers: authHeaders() });
+    return handlePaginated(r);
+  },
+  ordenes: async (params?: { tecnico?: number; cliente?: number; estado?: string }): Promise<ApiOrdenServicio[]> => {
+    const q = new URLSearchParams();
+    if (params?.tecnico) q.set('tecnico', String(params.tecnico));
+    if (params?.cliente) q.set('cliente', String(params.cliente));
+    if (params?.estado)  q.set('estado', params.estado);
+    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/?${q.toString()}`, { headers: authHeaders() });
+    return handlePaginated(r);
+  },
+  elegibilidad: async (clienteId: number): Promise<ApiElegibilidad[]> => {
+    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/elegibilidad/?cliente=${clienteId}`, { headers: authHeaders() });
+    if (!r.ok) return [];
+    return r.json();
+  },
+  crear: async (data: any): Promise<ApiOrdenServicio> => {
+    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data),
+    });
+    return handleJson(r);
+  },
+  cambiarEstado: async (id: number, data: any): Promise<ApiOrdenServicio> => {
+    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/estado/`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data),
+    });
+    return handleJson(r);
+  },
+  checklist: async (id: number, tareas: { id: number; realizado: boolean }[]): Promise<ApiOrdenServicio> => {
+    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/checklist/`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ tareas }),
+    });
+    return handleJson(r);
+  },
+};
+
 // ── Promociones (CU24) ────────────────────────────────────────────────────────
 export interface ApiPromocion {
   id: number;
