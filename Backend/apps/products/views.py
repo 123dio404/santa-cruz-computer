@@ -27,10 +27,11 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
-from .models import Categoria, Producto, Proveedor, Compra, DetalleCompra
+from .models import Categoria, Producto, Proveedor, Compra, DetalleCompra, Promocion
 from .serializers import (
     CategoriaSerializer, ProductoSerializer,
     ProveedorSerializer, CompraSerializer, CompraCreateSerializer,
+    PromocionSerializer,
 )
 from .permissions import AdminWriteOrReadOnly
 from apps.audit.utils import log_action, actor_from_request
@@ -155,3 +156,47 @@ class CompraViewSet(viewsets.ModelViewSet):
             return Response(CompraSerializer(compra).data, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PromocionViewSet(viewsets.ModelViewSet):
+    """
+    Promociones programadas por producto (CU24).
+      GET  /promociones/            → lista (página admin)
+      GET  /promociones/?producto=  → promociones de un producto
+      POST/PUT/PATCH/DELETE          → solo admin (AdminWriteOrReadOnly)
+    """
+    queryset           = Promocion.objects.select_related('producto').all()
+    serializer_class   = PromocionSerializer
+    permission_classes = [AdminWriteOrReadOnly]
+    filter_backends    = [OrderingFilter]
+    ordering_fields    = ['id', 'fecha_inicio', 'fecha_fin']
+    ordering           = ['-id']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        producto_id = self.request.query_params.get('producto')
+        if producto_id:
+            qs = qs.filter(producto_id=producto_id)
+        return qs
+
+    def perform_create(self, serializer):
+        promo = serializer.save()
+        actor = actor_from_request(self.request)
+        nombre = promo.producto.nombre if promo.producto else f'#{promo.producto_id}'
+        log_action(
+            accion='CREATE', modulo='Promoción',
+            descripcion=(f'Se creó una promoción de {promo.porcentaje}% para "{nombre}" '
+                         f'({promo.fecha_inicio} → {promo.fecha_fin})'),
+            **actor,
+        )
+
+    def perform_destroy(self, instance):
+        actor = actor_from_request(self.request)
+        nombre = instance.producto.nombre if instance.producto else f'#{instance.producto_id}'
+        pid = instance.id
+        instance.delete()
+        log_action(
+            accion='DELETE', modulo='Promoción',
+            descripcion=f'Se eliminó la promoción #{pid} de "{nombre}"',
+            **actor,
+        )

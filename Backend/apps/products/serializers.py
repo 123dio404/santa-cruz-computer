@@ -18,7 +18,36 @@ Django solo inserta filas. Los triggers de PostgreSQL se encargan de:
   · trg_actualizar_total_compra: actualizar monto_total de la compra
 """
 from rest_framework import serializers
-from .models import Categoria, Producto, Proveedor, Compra, DetalleCompra
+from .models import Categoria, Producto, Proveedor, Compra, DetalleCompra, Promocion
+
+
+class PromocionSerializer(serializers.ModelSerializer):
+    """Promoción de un producto (CU24), con precios calculados para la UI del admin."""
+    producto_nombre    = serializers.SerializerMethodField()
+    precio_normal      = serializers.SerializerMethodField()
+    precio_promocional = serializers.SerializerMethodField()
+    vigente            = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Promocion
+        fields = ['id', 'producto', 'producto_nombre', 'porcentaje',
+                  'fecha_inicio', 'fecha_fin', 'activo',
+                  'precio_normal', 'precio_promocional', 'vigente']
+
+    def get_producto_nombre(self, obj):
+        return obj.producto.nombre if obj.producto else '—'
+
+    def get_precio_normal(self, obj):
+        return round(float(obj.producto.precio_actual or 0), 2) if obj.producto else 0
+
+    def get_precio_promocional(self, obj):
+        p = float(obj.producto.precio_actual or 0) if obj.producto else 0
+        return round(p * (1 - float(obj.porcentaje) / 100), 2)
+
+    def get_vigente(self, obj):
+        from django.utils import timezone
+        hoy = timezone.localdate()
+        return bool(obj.activo and obj.fecha_inicio <= hoy <= obj.fecha_fin)
 
 
 class CategoriaSerializer(serializers.ModelSerializer):
@@ -104,6 +133,21 @@ class ProductoSerializer(serializers.ModelSerializer):
         rep['price']        = rep.get('precio_actual')
         rep['stock']        = rep.get('stock_fisico')
         rep['precio_venta'] = rep.get('precio_actual')
+
+        # Promoción vigente hoy (CU24): precio con descuento si aplica
+        from django.utils import timezone
+        hoy = timezone.localdate()
+        promo = Promocion.objects.filter(
+            producto_id=instance.id, activo=True,
+            fecha_inicio__lte=hoy, fecha_fin__gte=hoy,
+        ).order_by('-porcentaje').first()
+        if promo:
+            precio = float(instance.precio_actual or 0)
+            rep['promo_porcentaje']   = float(promo.porcentaje)
+            rep['precio_promocional'] = round(precio * (1 - float(promo.porcentaje) / 100), 2)
+        else:
+            rep['promo_porcentaje']   = None
+            rep['precio_promocional'] = None
         # Campos eliminados — devolver null para no romper el frontend
         rep['estado']       = None
         rep['anio']         = None

@@ -147,3 +147,29 @@ class DetalleCompra(models.Model):
 
     def __str__(self):
         return f"Detalle #{self.id} — Compra #{self.compra_id}"
+
+
+class Promocion(models.Model):
+    """
+    Promoción programada de UN producto (CU24). Descuento % vigente entre
+    fecha_inicio y fecha_fin (si activo=True). Distinta del descuento VIP por
+    fidelidad. Tabla creada por SQL manual (managed=False): 006_promociones.sql
+    """
+    id           = models.AutoField(primary_key=True, db_column='idpromocion')
+    producto     = models.ForeignKey(
+        Producto, on_delete=models.CASCADE, db_column='idproducto', related_name='promociones',
+    )
+    porcentaje   = models.DecimalField(max_digits=5, decimal_places=2)   # 1.00 a 100.00
+    fecha_inicio = models.DateField()
+    fecha_fin    = models.DateField()
+    activo       = models.BooleanField(default=True)
+
+    class Meta:
+        managed             = False
+        db_table            = 'promocion'
+        verbose_name        = 'Promoción'
+        verbose_name_plural = 'Promociones'
+        ordering            = ['-id']
+
+    def __str__(self):
+        return f"Promoción #{self.id} — Producto #{self.producto_id} ({self.porcentaje}%)"
