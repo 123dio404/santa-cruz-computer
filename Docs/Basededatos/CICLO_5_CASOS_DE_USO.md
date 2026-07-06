@@ -10,7 +10,7 @@
 | CU20 | Chatbot de atención (IA) | Cliente | ⬜ Pendiente (va al final) |
 | CU21 | Notificaciones (sistema + correo) | Todos | ✅ Completado |
 | CU22 | Recibo de pago + Factura por correo | Cliente | ✅ Completado |
-| CU23 | Devoluciones (RMA) | Vendedor/Admin | ⬜ Pendiente |
+| CU23 | Devoluciones (RMA) | Vendedor/Admin | ✅ Completado |
 | CU24 | Promociones programadas | Admin | ⬜ Pendiente |
 | CU25 | Servicio preventivo | Cliente/Vendedor/Admin/Técnico | ⬜ Pendiente |
 | CU26 | Servicio correctivo | Cliente/Vendedor/Admin/Técnico | ⬜ Pendiente |
@@ -89,8 +89,15 @@ Flujo de **2 documentos** para dar coherencia al pago online (recojo en tienda):
 Detalles técnicos: `_send_brevo_email` soporta **adjunto** (base64). `_email_html` lleva el **logo** (`FRONTEND_URL/logo.png`, con texto de respaldo si el correo bloquea imágenes). `enviar_factura_por_correo(venta)` y `_enviar_recibo_pago(venta)` nunca rompen el flujo si el correo falla.
 Commits: `d8a2f755` (factura), + recibo de pago (stripe + PaymentSuccess).
 
-# CU23 — Devoluciones (RMA) ⬜ PENDIENTE
-El vendedor/admin registra una devolución en el mostrador (nace `aprobada` o `rechazada`). Parámetros: ≤7 días, venta existe, no devuelto antes, inspección física OK. Trigger `AFTER INSERT` reingresa stock solo si `aprobada`. Nunca toca `detalleventa`. Dashboard: ventas netas = brutas − devoluciones. Reporte de ventas marca la línea como "Devuelta".
+# CU23 — Devoluciones (RMA) ✅ COMPLETADO
+El vendedor/admin registra una devolución desde **Historial de Ventas** (pestaña Clientes → botón "Registrar devolución"). Nace `aprobada` o `rechazada`.
+- **Parámetros:** ≤ 7 días desde la venta, la venta existe, no devuelto antes (cantidad disponible), inspección física OK. `DIAS_DEVOLUCION = 7`.
+- **Trigger `AFTER INSERT`** reingresa stock SOLO si `aprobada` (una vez). Al aprobar, **anula la garantía** del ítem. NUNCA toca `detalleventa`/`factura`/`pagoventa`.
+- **Reporte de ventas** (Excel/PDF): las líneas devueltas salen como **"Devuelta"** + resumen bruto − devoluciones = **ventas netas**.
+- **Dashboard:** tarjeta **"Ingresos Netos"** = ingresos − devoluciones aprobadas.
+- **Reporte de devoluciones** propio (Excel/PDF, color ámbar) con total reembolsado.
+- Tabla `devolucion` (SQL 005). Modelo/endpoints en `orders`. NO se notifica al cliente (está en el mostrador).
+Commits: 2bc875b1 (backend), d0fb2735 (UI), 79212ba8 (reportes/dashboard), + reporte de devoluciones.
 
 # CU24 — Promociones programadas ⬜ PENDIENTE
 Admin define descuento % por producto/categoría con `fecha_inicio`/`fecha_fin`. La tienda muestra el precio rebajado mientras esté vigente. Tabla `promocion`.

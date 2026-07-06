@@ -475,6 +475,99 @@ export function SalesHistory() {
     window.open(doc.output('bloburl'), '_blank');   // vista previa en pestaña
   };
 
+  // ── Reporte de devoluciones (CU23) ──────────────────────────────────────────
+  const devolucionesFiltradas = () => devolucionesReporte.filter((d: any) => {
+    const f = new Date(d.fecha);
+    if (repDesde && f < new Date(repDesde + 'T00:00:00')) return false;
+    if (repHasta && f > new Date(repHasta + 'T23:59:59')) return false;
+    return true;
+  });
+
+  const motivoDev = (d: any) => (d.estado === 'rechazada' ? (d.motivo_rechazo || d.motivo) : d.motivo) || '—';
+
+  const descargarDevExcel = () => {
+    const devs = devolucionesFiltradas();
+    if (devs.length === 0) return;
+    const headers = ['# Dev', 'Fecha', '# Venta', 'Cliente', 'Producto', 'Cantidad', 'Motivo', 'Estado', 'Reembolso (Bs)'];
+    const rows = devs.map((d: any) => [
+      `#${d.id}`, new Date(d.fecha).toLocaleDateString('es-BO'), `#${d.venta}`,
+      d.cliente_nombre || '—', d.producto_nombre || '—', d.cantidad,
+      motivoDev(d), d.estado === 'aprobada' ? 'Aprobada' : 'Rechazada',
+      Number(Number(d.monto_reembolso || 0).toFixed(2)),
+    ]);
+    const totalReembolso = devs.filter((d: any) => d.estado === 'aprobada')
+      .reduce((s: number, d: any) => s + Number(d.monto_reembolso || 0), 0);
+    exportToExcel({
+      filename: `reporte_devoluciones_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Devoluciones', headers, rows,
+      totalRow: ['', '', '', '', '', '', '', 'TOTAL REEMBOLSADO', Number(totalReembolso.toFixed(2))],
+    });
+  };
+
+  const descargarDevPDF = async () => {
+    const devs = devolucionesFiltradas();
+    if (devs.length === 0) return;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const logo = await new Promise<HTMLImageElement | null>((resolve) => {
+      const img = new Image(); img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = '/logo.png';
+    });
+    const body = devs.map((d: any) => [
+      `#${d.id}`, new Date(d.fecha).toLocaleDateString('es-BO'), `#${d.venta}`,
+      d.cliente_nombre || '—', d.producto_nombre || '—', String(d.cantidad),
+      motivoDev(d), d.estado === 'aprobada' ? 'Aprobada' : 'Rechazada',
+      Number(d.monto_reembolso || 0).toFixed(2),
+    ]);
+    const totalReembolso = devs.filter((d: any) => d.estado === 'aprobada')
+      .reduce((s: number, d: any) => s + Number(d.monto_reembolso || 0), 0);
+    const now = new Date();
+    autoTable(doc, {
+      startY: 92,
+      margin: { top: 92, left: 24, right: 24, bottom: 34 },
+      head: [['# Dev', 'Fecha', '# Venta', 'Cliente', 'Producto', 'Cant.', 'Motivo', 'Estado', 'Reembolso (Bs)']],
+      body,
+      foot: [[{ content: 'TOTAL REEMBOLSADO (aprobadas)', colSpan: 8, styles: { halign: 'right' } },
+              { content: `Bs ${totalReembolso.toFixed(2)}`, styles: { halign: 'right' } }]],
+      showFoot: 'lastPage',
+      styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak', valign: 'middle' },
+      headStyles: { fillColor: [180, 83, 9], textColor: 255 },
+      footStyles: { fillColor: [180, 83, 9], textColor: 255, fontStyle: 'bold', fontSize: 10 },
+      alternateRowStyles: { fillColor: [253, 246, 236] },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 42 }, 1: { halign: 'center', cellWidth: 58 },
+        2: { halign: 'center', cellWidth: 48 }, 3: { cellWidth: 90 }, 4: { cellWidth: 'auto' },
+        5: { halign: 'center', cellWidth: 36 }, 6: { cellWidth: 130 }, 7: { halign: 'center', cellWidth: 60 },
+        8: { halign: 'right', cellWidth: 80 },
+      },
+      didDrawPage: () => {
+        if (logo) { try { doc.addImage(logo, 'PNG', 24, 16, 40, 40); } catch { /* logo opcional */ } }
+        const xText = logo ? 72 : 24;
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(180, 83, 9);
+        doc.text('SANTA CRUZ - COMPUTER', xText, 30);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90);
+        doc.text('Santa Cruz de la Sierra', xText, 44);
+        doc.setFontSize(9); doc.setTextColor(70);
+        doc.text(`Fecha: ${now.toLocaleDateString('es-BO')}`, pageWidth - 24, 26, { align: 'right' });
+        doc.text(`Hora: ${now.toLocaleTimeString('es-BO')}`, pageWidth - 24, 40, { align: 'right' });
+        doc.setDrawColor(180, 83, 9); doc.setLineWidth(1.5); doc.line(24, 54, pageWidth - 24, 54);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(180, 83, 9);
+        doc.text('REPORTE DE DEVOLUCIONES', pageWidth / 2, 72, { align: 'center' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(90);
+        doc.text(`${devs.length} devolución(es)  ·  ${formatRangoFechas()}`, pageWidth / 2, 84, { align: 'center' });
+      },
+    });
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(130);
+      doc.text('Documento generado automáticamente desde el sistema', 24, pageHeight - 16);
+      doc.text(`Pág: ${i} de ${totalPages}`, pageWidth - 24, pageHeight - 16, { align: 'right' });
+    }
+    doc.save(`reporte_devoluciones_${new Date().toISOString().split('T')[0]}.pdf`);
+    window.open(doc.output('bloburl'), '_blank');
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -631,6 +724,25 @@ export function SalesHistory() {
             >
               <FileText className="w-4 h-4" /> PDF
             </button>
+            {devolucionesReporte.length > 0 && (
+              <>
+                <span className="mx-1 hidden sm:inline text-gray-300">|</span>
+                <button
+                  onClick={descargarDevExcel}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-medium"
+                  title="Reporte de devoluciones (Excel)"
+                >
+                  <RotateCcw className="w-4 h-4" /> Dev. Excel
+                </button>
+                <button
+                  onClick={descargarDevPDF}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 text-white rounded-lg hover:bg-amber-800 transition-colors text-sm font-medium"
+                  title="Reporte de devoluciones (PDF)"
+                >
+                  <RotateCcw className="w-4 h-4" /> Dev. PDF
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
