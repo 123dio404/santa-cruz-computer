@@ -49,7 +49,7 @@ from utils import get_client_ip
 
 
 class FacturaPDFView(View):
-    """Genera la factura PDF de una venta completada usando ReportLab."""
+    """Descarga/visualiza la factura PDF de una venta completada usando ReportLab."""
     def get(self, request, venta_id):
         try:
             venta = (
@@ -60,10 +60,18 @@ class FacturaPDFView(View):
             )
         except Venta.DoesNotExist:
             raise Http404('Venta no encontrada')
-
         if venta.estado != 'completed':
             return HttpResponse('La factura solo está disponible para ventas completadas.', status=403)
+        pdf_bytes, nro = self.construir_pdf(venta)
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="factura-{nro}.pdf"'
+        response['Access-Control-Allow-Origin'] = '*'
+        return response
 
+    @staticmethod
+    def construir_pdf(venta):
+        """Genera la factura PDF (ReportLab) → (pdf_bytes, nro). Crea el registro
+        Factura si no existe. Reutilizado por la descarga y por el correo (CU22)."""
         # Registrar la factura en BD si aún no existe (SIAT pendiente de integración)
         factura, _ = Factura.objects.get_or_create(
             venta=venta,
@@ -254,11 +262,35 @@ class FacturaPDFView(View):
         story.append(Paragraph('Este documento es válido como comprobante de venta.', s_footer))
 
         doc.build(story)
-        buffer.seek(0)
-        response = HttpResponse(buffer, content_type='application/pdf')
-        response['Content-Disposition'] = f'inline; filename="factura-{nro}.pdf"'
-        response['Access-Control-Allow-Origin'] = '*'
-        return response
+        return buffer.getvalue(), nro
+
+
+def enviar_factura_por_correo(venta):
+    """CU22: envía la factura en PDF al correo del cliente. Solo para ventas
+    completadas con cliente y correo. Nunca rompe el flujo si algo falla."""
+    cli = getattr(venta, 'cliente', None)
+    if venta.estado != 'completed' or not (cli and getattr(cli, 'correo', '')):
+        return
+    try:
+        from django.conf import settings as _s
+        from apps.users.views import _send_brevo_email, _email_html
+        pdf_bytes, nro = FacturaPDFView.construir_pdf(venta)
+        cli_nombre = f'{cli.nombre} {cli.apellido}'.strip()
+        html = _email_html(
+            cli_nombre,
+            f'<p>¡Gracias por tu compra! 🧾 Adjuntamos la <strong>factura</strong> '
+            f'de tu pedido <strong>#{venta.id}</strong>.</p>'
+            f'<p>Total: <strong>Bs {float(venta.monto_total or 0):.2f}</strong></p>',
+            'Ver mis pedidos', f'{_s.FRONTEND_URL}/orders',
+        )
+        _send_brevo_email(
+            cli.correo,
+            f'Factura de tu compra #{venta.id} — Santa Cruz Computer',
+            f'Adjuntamos la factura de tu pedido #{venta.id}.',
+            html, attachment_bytes=pdf_bytes, attachment_name=f'factura-{nro}.pdf',
+        )
+    except Exception:
+        pass
 
 
 class VentaViewSet(viewsets.ModelViewSet):
@@ -302,6 +334,8 @@ class VentaViewSet(viewsets.ModelViewSet):
                 ),
                 **actor,
             )
+            # CU22: si la venta nace completada (venta en tienda), enviar la factura
+            enviar_factura_por_correo(venta)
             return Response(
                 VentaSerializer(venta).data,
                 status=status.HTTP_201_CREATED,
@@ -359,6 +393,8 @@ class VentaViewSet(viewsets.ModelViewSet):
                 cliente_id=venta.cliente_id, enlace='/orders',
                 canal='ambos', email=cli.correo, html=_html,
             )
+        # CU22: enviar la factura en PDF por correo al completar la entrega
+        enviar_factura_por_correo(venta)
         return Response(VentaSerializer(venta).data)
 
     @action(detail=False, methods=['get'])

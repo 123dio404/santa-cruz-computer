@@ -154,6 +154,53 @@ class CreateCheckoutSessionView(APIView):
         return Response({'url': session.url, 'session_id': session.id})
 
 
+def _enviar_recibo_pago(venta):
+    """CU22: envía el recibo de pago (Stripe) al cliente. El producto queda
+    pendiente de entrega; la factura se envía luego, al completar. No rompe el flujo."""
+    cli = getattr(venta, 'cliente', None)
+    if not (cli and getattr(cli, 'correo', '')):
+        return
+    try:
+        from django.conf import settings as _s
+        from apps.users.views import _send_brevo_email, _email_html
+        cli_nombre = f'{cli.nombre} {cli.apellido}'.strip()
+        filas = ''
+        for d in venta.detalles.all():
+            nombre_prod = d.producto.nombre if d.producto else f'Producto #{d.producto_id}'
+            filas += (
+                f'<tr><td style="padding:6px;border-bottom:1px solid #eee;">{nombre_prod}</td>'
+                f'<td style="padding:6px;border-bottom:1px solid #eee;text-align:center;">{d.cantidad}</td>'
+                f'<td style="padding:6px;border-bottom:1px solid #eee;text-align:right;">Bs {float(d.subtotal):.2f}</td></tr>'
+            )
+        tabla = (
+            '<table width="100%" style="border-collapse:collapse;font-size:13px;margin:10px 0;">'
+            '<tr style="background:#1e40af;color:#fff;">'
+            '<td style="padding:6px;">Producto</td>'
+            '<td style="padding:6px;text-align:center;">Cant.</td>'
+            '<td style="padding:6px;text-align:right;">Subtotal</td></tr>'
+            f'{filas}</table>'
+        )
+        cuerpo = (
+            '<p style="color:#16a34a;font-weight:bold;font-size:16px;margin:0 0 8px;">✅ Pago confirmado</p>'
+            f'<p><strong>N° de pago:</strong> #ST-{venta.id}<br>'
+            '<strong>Método:</strong> 💳 Tarjeta (Stripe)</p>'
+            f'{tabla}'
+            f'<p style="text-align:right;font-size:15px;"><strong>Total pagado: Bs {float(venta.monto_total or 0):.2f}</strong></p>'
+            '<p style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:10px;color:#9a3412;">'
+            '⏳ <strong>Pendiente de entrega.</strong> Pasa por la tienda a recoger tu producto. '
+            'Tu factura se emitirá cuando se complete la entrega.</p>'
+        )
+        html = _email_html(cli_nombre, cuerpo, 'Ver mis pedidos', f'{_s.FRONTEND_URL}/orders')
+        _send_brevo_email(
+            cli.correo,
+            f'Recibo de pago #{venta.id} — Santa Cruz Computer',
+            f'Recibimos tu pago de Bs {float(venta.monto_total or 0):.2f} (pedido #{venta.id}).',
+            html,
+        )
+    except Exception:
+        pass
+
+
 class ConfirmCheckoutView(APIView):
     """POST /orders/stripe/confirm/
 
@@ -250,5 +297,8 @@ class ConfirmCheckoutView(APIView):
             ),
             **actor,
         )
+
+        # CU22: enviar el recibo de pago al cliente (producto pendiente de entrega)
+        _enviar_recibo_pago(venta)
 
         return Response(VentaSerializer(venta).data, status=status.HTTP_201_CREATED)

@@ -528,13 +528,15 @@ def _lookup_user_by_identifier(identifier: str):
     return None
 
 
-def _send_brevo_email(to_email: str, subject: str, text_content: str, html_content: str = None):
+def _send_brevo_email(to_email: str, subject: str, text_content: str, html_content: str = None,
+                      attachment_bytes: bytes = None, attachment_name: str = None):
     """
     Envía un correo transaccional usando el API HTTP de Brevo.
     Endpoint: https://api.brevo.com/v3/smtp/email
 
     Usa urllib (librería estándar) para no añadir dependencias.
     Lee la clave y el remitente desde settings (BREVO_*). Lanza excepción si falla.
+    Si se pasa attachment_bytes + attachment_name, adjunta ese archivo (ej. la factura PDF).
     """
     import json
     import urllib.request
@@ -554,6 +556,12 @@ def _send_brevo_email(to_email: str, subject: str, text_content: str, html_conte
     }
     if html_content:
         payload['htmlContent'] = html_content
+    if attachment_bytes and attachment_name:
+        import base64
+        payload['attachment'] = [{
+            'content': base64.b64encode(attachment_bytes).decode('ascii'),
+            'name':    attachment_name,
+        }]
 
     req = urllib.request.Request(
         'https://api.brevo.com/v3/smtp/email',
@@ -611,12 +619,15 @@ def _email_html(nombre, cuerpo_html, boton_texto=None, boton_url=None):
                  f'<a href="{boton_url}" style="background:#1e40af;color:#ffffff;text-decoration:none;'
                  f'padding:12px 26px;border-radius:6px;font-weight:bold;font-size:14px;display:inline-block;">'
                  f'{boton_texto}</a></p>')
+    logo_url = f'{django_settings.FRONTEND_URL}/logo.png'
     return (
         '<div style="background:#f3f4f6;padding:24px;font-family:Arial,Helvetica,sans-serif;">'
         '<table align="center" width="100%" style="max-width:520px;background:#ffffff;border-radius:10px;'
         'overflow:hidden;border:1px solid #e5e7eb;border-collapse:collapse;">'
-        '<tr><td style="background:#1e40af;padding:18px 24px;color:#ffffff;font-size:18px;font-weight:bold;">'
-        '🖥️ Santa Cruz Computer</td></tr>'
+        '<tr><td style="background:#1e40af;padding:14px 24px;">'
+        f'<img src="{logo_url}" alt="" height="34" style="vertical-align:middle;margin-right:10px;" />'
+        '<span style="color:#ffffff;font-size:18px;font-weight:bold;vertical-align:middle;">Santa Cruz Computer</span>'
+        '</td></tr>'
         '<tr><td style="padding:24px;color:#111827;font-size:14px;line-height:1.6;">'
         f'<p style="margin:0 0 12px;">Hola <strong>{nombre}</strong> 👋</p>'
         f'{cuerpo_html}{boton}</td></tr>'
