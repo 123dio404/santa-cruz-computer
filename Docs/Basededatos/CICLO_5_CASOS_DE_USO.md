@@ -9,7 +9,7 @@
 |----|-------------|---------|--------|
 | CU20 | Chatbot de atención (IA) | Cliente | ⬜ Pendiente (va al final) |
 | CU21 | Notificaciones (sistema + correo) | Todos | ✅ Completado |
-| CU22 | Factura por correo (PDF) | Cliente | ⬜ Pendiente |
+| CU22 | Recibo de pago + Factura por correo | Cliente | ✅ Completado |
 | CU23 | Devoluciones (RMA) | Vendedor/Admin | ⬜ Pendiente |
 | CU24 | Promociones programadas | Admin | ⬜ Pendiente |
 | CU25 | Servicio preventivo | Cliente/Vendedor/Admin/Técnico | ⬜ Pendiente |
@@ -74,8 +74,20 @@ Commits: `15c08ea4` (backend), `db34b974` (redirect), `344ac07d` (campana), + ev
 
 ---
 
-# CU22 — Factura por correo (PDF) ⬜ PENDIENTE
-Al confirmar una venta, se envía la factura en PDF (ReportLab) al correo del cliente (Brevo). Reutiliza el generador de factura existente.
+# CU22 — Recibo de pago + Factura por correo ✅ COMPLETADO
+
+Flujo de **2 documentos** para dar coherencia al pago online (recojo en tienda):
+
+**1. Recibo de pago (al pagar con Stripe):**
+- Cuando el cliente paga (`ConfirmCheckoutView` crea la venta *pendiente*), se le envía un **recibo de pago** por correo (plantilla de marca con logo, detalle de productos, total, aviso "pendiente de entrega").
+- Además se **muestra en pantalla** en `PaymentSuccess.tsx` (recibo con logo + tabla + total + botones).
+
+**2. Factura (al completar la entrega):**
+- Cuando un vendedor/admin **confirma la entrega** (o registra una venta en tienda ya completada), se envía la **factura en PDF adjunta** (ReportLab).
+- `FacturaPDFView.construir_pdf(venta)` es un `staticmethod` reutilizado por la descarga y por el correo.
+
+Detalles técnicos: `_send_brevo_email` soporta **adjunto** (base64). `_email_html` lleva el **logo** (`FRONTEND_URL/logo.png`, con texto de respaldo si el correo bloquea imágenes). `enviar_factura_por_correo(venta)` y `_enviar_recibo_pago(venta)` nunca rompen el flujo si el correo falla.
+Commits: `d8a2f755` (factura), + recibo de pago (stripe + PaymentSuccess).
 
 # CU23 — Devoluciones (RMA) ⬜ PENDIENTE
 El vendedor/admin registra una devolución en el mostrador (nace `aprobada` o `rechazada`). Parámetros: ≤7 días, venta existe, no devuelto antes, inspección física OK. Trigger `AFTER INSERT` reingresa stock solo si `aprobada`. Nunca toca `detalleventa`. Dashboard: ventas netas = brutas − devoluciones. Reporte de ventas marca la línea como "Devuelta".
