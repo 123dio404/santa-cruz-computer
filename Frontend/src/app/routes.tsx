@@ -34,6 +34,7 @@ import { Sales } from './pages/Sales';
 import { SalesHistory } from './pages/SalesHistory';
 import { Users } from './pages/Users';
 import { Suppliers } from './pages/Suppliers';
+import { Promociones } from './pages/Promociones';
 import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
 import { PaymentSuccess } from './pages/PaymentSuccess';
@@ -192,6 +193,16 @@ export const router = createBrowserRouter([
    * - Contactos y datos de entrega
    * - Acceso: Solo Admin
    */
+  {
+    path: '/promociones',
+    element: (
+      <ProtectedRoute allowedRoles={['admin']}>
+        <Layout>
+          <Promociones />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
   {
     path: '/suppliers',
     element: (
