@@ -147,6 +147,10 @@ export function SalesHistory() {
   };
 
   // ── Devoluciones (CU23) ──────────────────────────────────────────────────────
+  // Solo se puede devolver dentro de los 7 días desde la compra
+  const dentroPlazoDevolucion = (fecha: string) =>
+    (Date.now() - new Date(fecha).getTime()) <= 7 * 86400000;
+
   const abrirDevolucion = (v: ApiVenta) => {
     setDevVenta(v);
     setDevDetalleId(v.detalles && v.detalles.length === 1 ? v.detalles[0].id : '');
@@ -827,7 +831,9 @@ export function SalesHistory() {
                           </button>
                           <button
                             onClick={() => abrirDevolucion(v)}
-                            className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors"
+                            disabled={!dentroPlazoDevolucion(v.fecha)}
+                            title={!dentroPlazoDevolucion(v.fecha) ? 'Fuera de plazo: más de 7 días desde la compra' : ''}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <RotateCcw className="w-4 h-4" />
                             Registrar devolución
@@ -1059,7 +1065,9 @@ export function SalesHistory() {
                           </button>
                           <button
                             onClick={() => abrirDevolucion(venta as unknown as ApiVenta)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors"
+                            disabled={!dentroPlazoDevolucion(venta.fecha)}
+                            title={!dentroPlazoDevolucion(venta.fecha) ? 'Fuera de plazo: más de 7 días desde la compra' : ''}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <RotateCcw className="w-4 h-4" />
                             Registrar devolución

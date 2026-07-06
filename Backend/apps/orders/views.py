@@ -747,8 +747,9 @@ class DevolucionViewSet(viewsets.ModelViewSet):
         venta = detalle.venta
 
         if aprobar:
-            # (1) Plazo <= 7 días desde la venta
-            if venta.fecha_venta and venta.fecha_venta < timezone.now() - timedelta(days=self.DIAS_DEVOLUCION):
+            # (1) Plazo <= 7 días desde la venta. Se compara por FECHA (día) para
+            # evitar el choque naive/aware entre fecha_venta y timezone.now().
+            if venta.fecha_venta and (timezone.now().date() - venta.fecha_venta.date()).days > self.DIAS_DEVOLUCION:
                 return Response(
                     {'error': f'Fuera de plazo: la venta tiene más de {self.DIAS_DEVOLUCION} días. Solo puedes rechazar.'},
                     status=status.HTTP_400_BAD_REQUEST)
@@ -770,21 +771,28 @@ class DevolucionViewSet(viewsets.ModelViewSet):
         # El registrador debe ser un usuario interno (no un cliente) para no romper la FK
         usuario_id = actor.get('usuario_id') if actor.get('usuario_rol') in ('admin', 'vendedor') else None
 
-        dev = Devolucion.objects.create(
-            venta_id=venta.id, detalle_id=detalle.id, producto_id=detalle.producto_id,
-            cliente_id=venta.cliente_id, cantidad=cantidad, motivo=motivo,
-            estado=estado, motivo_rechazo=motivo_rechazo, monto_reembolso=monto,
-            usuario_id=usuario_id,
-        )
-        # Al APROBAR: anular la garantía de ese ítem (el producto vuelve a la tienda)
-        if aprobar:
-            Garantia.objects.filter(detalle_id=detalle.id).exclude(estado='anulada').update(estado='anulada')
+        try:
+            dev = Devolucion.objects.create(
+                venta_id=venta.id, detalle_id=detalle.id, producto_id=detalle.producto_id,
+                cliente_id=venta.cliente_id, cantidad=cantidad, motivo=motivo,
+                estado=estado, motivo_rechazo=motivo_rechazo, monto_reembolso=monto,
+                usuario_id=usuario_id,
+            )
+            # Al APROBAR: anular la garantía de ese ítem (el producto vuelve a la tienda)
+            if aprobar:
+                Garantia.objects.filter(detalle_id=detalle.id).exclude(estado='anulada').update(estado='anulada')
+        except Exception as e:
+            return Response({'error': f'No se pudo registrar la devolución: {e}'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         prod = detalle.producto.nombre if detalle.producto else 'producto'
-        log_action(
-            accion='UPDATE', modulo='Devolución',
-            descripcion=(f'Devolución {estado} de "{prod}" (x{cantidad}) de la venta #{venta.id}'
-                         + (f' — reembolso Bs {monto:.2f}' if aprobar else f' — rechazo: {motivo_rechazo}')),
-            **actor,
-        )
+        try:
+            log_action(
+                accion='UPDATE', modulo='Devolución',
+                descripcion=(f'Devolución {estado} de "{prod}" (x{cantidad}) de la venta #{venta.id}'
+                             + (f' — reembolso Bs {monto:.2f}' if aprobar else f' — rechazo: {motivo_rechazo}')),
+                **actor,
+            )
+        except Exception:
+            pass  # la bitácora no debe tumbar la operación
         return Response(DevolucionSerializer(dev).data, status=status.HTTP_201_CREATED)
