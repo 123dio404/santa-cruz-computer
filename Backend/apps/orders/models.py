@@ -314,3 +314,75 @@ class Devolucion(models.Model):
 
     def __str__(self):
         return f"Devolución #{self.id} — Venta #{self.venta_id} ({self.estado})"
+
+
+# ── Servicio Técnico (CU25/26/27) ────────────────────────────────────────────
+class ServicioCatalogo(models.Model):
+    """Catálogo de servicios técnicos con su precio (007_servicios_tecnicos.sql)."""
+    id      = models.AutoField(primary_key=True, db_column='idservicio')
+    nombre  = models.CharField(max_length=150)
+    tipo    = models.CharField(max_length=20)                          # preventivo | correctivo
+    equipo  = models.CharField(max_length=20, null=True, blank=True)   # laptop | escritorio (solo preventivo)
+    precio  = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    activo  = models.BooleanField(default=True)
+
+    class Meta:
+        managed  = False
+        db_table = 'servicio_catalogo'
+        ordering = ['id']
+
+
+class OrdenServicio(models.Model):
+    """Orden de servicio técnico. La registra y ejecuta el técnico (crea + atiende)."""
+    id                 = models.AutoField(primary_key=True, db_column='idorden')
+    cliente            = models.ForeignKey(
+        Cliente, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idcliente', related_name='ordenes_servicio')
+    tecnico            = models.ForeignKey(
+        Usuario, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idtecnico', related_name='ordenes_servicio')
+    garantia           = models.ForeignKey(
+        Garantia, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idgarantia', related_name='ordenes_servicio')
+    tipo               = models.CharField(max_length=20)                     # preventivo | correctivo
+    origen             = models.CharField(max_length=20, default='externo')  # tienda | externo
+    equipo             = models.CharField(max_length=20, default='laptop')   # laptop | escritorio
+    equipo_descripcion = models.CharField(max_length=200, null=True, blank=True)
+    es_beneficio       = models.BooleanField(default=False)
+    diagnostico        = models.TextField(null=True, blank=True)
+    observaciones      = models.TextField(null=True, blank=True)
+    costo_total        = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    estado             = models.CharField(max_length=20, default='solicitado')
+    fecha_solicitud    = models.DateTimeField(auto_now_add=True)
+    fecha_agendada     = models.DateTimeField(null=True, blank=True)
+    fecha_finalizacion = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        managed  = False
+        db_table = 'orden_servicio'
+        ordering = ['-id']
+
+
+class OrdenDetalle(models.Model):
+    """Servicios incluidos en una orden (el correctivo puede llevar varios)."""
+    id       = models.AutoField(primary_key=True, db_column='iddetorden')
+    orden    = models.ForeignKey(OrdenServicio, on_delete=models.CASCADE, db_column='idorden', related_name='detalles')
+    servicio = models.ForeignKey(ServicioCatalogo, on_delete=models.DO_NOTHING, db_column='idservicio', related_name='detalles')
+    precio   = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    class Meta:
+        managed  = False
+        db_table = 'orden_detalle'
+
+
+class TareaServicio(models.Model):
+    """Checklist de tareas de una orden (sobre todo del preventivo)."""
+    id        = models.AutoField(primary_key=True, db_column='idtarea')
+    orden     = models.ForeignKey(OrdenServicio, on_delete=models.CASCADE, db_column='idorden', related_name='tareas')
+    tarea     = models.CharField(max_length=150)
+    realizado = models.BooleanField(default=False)
+
+    class Meta:
+        managed  = False
+        db_table = 'tarea_servicio'
+        ordering = ['id']

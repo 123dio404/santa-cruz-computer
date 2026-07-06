@@ -41,6 +41,8 @@ import {
   ClipboardList,
   History,
   Tag,
+  Wrench,
+  CalendarClock,
   Clock,
   CheckCircle,
   Eye,
@@ -213,8 +215,14 @@ export function Layout({ children }: LayoutProps) {
       { path: '/orders', icon: Package, label: 'Mis Pedidos' }
     ];
 
+    const tecnicoItems = [
+      { path: '/mis-trabajos', icon: Wrench, label: 'Mis Trabajos' },
+      { path: '/agenda', icon: CalendarClock, label: 'Agenda' },
+    ];
+
     if (user.role === 'admin') return adminItems;
     if (user.role === 'employee') return employeeItems;
+    if (user.role === 'tecnico') return tecnicoItems;
     return clientItems;
   };
 
@@ -271,7 +279,7 @@ export function Layout({ children }: LayoutProps) {
                   <p className="text-sm font-bold text-gray-900">{user?.name}</p>
                   <p className="text-xs text-gray-600 flex items-center gap-1">
                     {user?.role === 'admin' && <Shield className="w-3 h-3" />}
-                    {user?.role === 'admin' ? 'Administrador' : user?.role === 'employee' ? 'Vendedor' : 'Cliente'}
+                    {user?.role === 'admin' ? 'Administrador' : user?.role === 'employee' ? 'Vendedor' : user?.role === 'tecnico' ? 'Técnico' : 'Cliente'}
                   </p>
                 </div>
                 <UserCircle className="w-5 h-5 text-blue-600" />

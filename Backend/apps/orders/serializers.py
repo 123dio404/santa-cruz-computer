@@ -22,7 +22,10 @@ ALIASES EN VentaSerializer:
   - 'cliente_name' → calculado como nombre + apellido del cliente
 """
 from rest_framework import serializers
-from .models import Venta, DetalleVenta, PagoVenta, Factura, Garantia, Resena, Devolucion
+from .models import (
+    Venta, DetalleVenta, PagoVenta, Factura, Garantia, Resena, Devolucion,
+    ServicioCatalogo, OrdenServicio, OrdenDetalle, TareaServicio,
+)
 
 
 # ── Lectura ────────────────────────────────────────────────────────────────────
@@ -169,6 +172,49 @@ class DevolucionSerializer(serializers.ModelSerializer):
 
     def get_usuario_nombre(self, obj):
         return obj.usuario.username if obj.usuario else '—'
+
+
+# ── Servicio Técnico (CU25/26/27) ────────────────────────────────────────────────
+class ServicioCatalogoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = ServicioCatalogo
+        fields = ['id', 'nombre', 'tipo', 'equipo', 'precio', 'activo']
+
+
+class TareaServicioSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = TareaServicio
+        fields = ['id', 'tarea', 'realizado']
+
+
+class OrdenDetalleServicioSerializer(serializers.ModelSerializer):
+    servicio_nombre = serializers.CharField(source='servicio.nombre', read_only=True)
+
+    class Meta:
+        model  = OrdenDetalle
+        fields = ['id', 'servicio', 'servicio_nombre', 'precio']
+
+
+class OrdenServicioSerializer(serializers.ModelSerializer):
+    cliente_nombre = serializers.SerializerMethodField()
+    tecnico_nombre = serializers.SerializerMethodField()
+    detalles       = OrdenDetalleServicioSerializer(many=True, read_only=True)
+    tareas         = TareaServicioSerializer(many=True, read_only=True)
+
+    class Meta:
+        model  = OrdenServicio
+        fields = ['id', 'cliente', 'cliente_nombre', 'tecnico', 'tecnico_nombre',
+                  'garantia', 'tipo', 'origen', 'equipo', 'equipo_descripcion',
+                  'es_beneficio', 'diagnostico', 'observaciones', 'costo_total',
+                  'estado', 'fecha_solicitud', 'fecha_agendada', 'fecha_finalizacion',
+                  'detalles', 'tareas']
+
+    def get_cliente_nombre(self, obj):
+        c = obj.cliente
+        return f'{c.nombre} {c.apellido}'.strip() if c else (obj.equipo_descripcion or 'Externo')
+
+    def get_tecnico_nombre(self, obj):
+        return obj.tecnico.username if obj.tecnico else '—'
 
 
 # ── Escritura (POST) ────────────────────────────────────────────────────────────

@@ -38,6 +38,9 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
     if (user.role === 'client') {
       return <Navigate to="/store" replace />;
     }
+    if (user.role === 'tecnico') {
+      return <Navigate to="/mis-trabajos" replace />;
+    }
     return <Navigate to="/dashboard" replace />;
   }
 

@@ -12,9 +12,9 @@
 | CU22 | Recibo de pago + Factura por correo | Cliente | ✅ Completado |
 | CU23 | Devoluciones (RMA) | Vendedor/Admin | ✅ Completado |
 | CU24 | Promociones programadas | Admin | ✅ Completado |
-| CU25 | Servicio preventivo | Cliente/Vendedor/Admin/Técnico | ⬜ Pendiente |
-| CU26 | Servicio correctivo | Cliente/Vendedor/Admin/Técnico | ⬜ Pendiente |
-| CU27 | Ficha/historial de mantenimiento | Técnico/Cliente | ⬜ Pendiente |
+| CU25 | Servicio preventivo | Cliente/Técnico | ✅ Completado |
+| CU26 | Servicio correctivo | Cliente/Técnico | ✅ Completado |
+| CU27 | Ficha/historial de mantenimiento | Técnico/Cliente | ✅ Completado |
 | CU28 | Venta a crédito | Cliente/Vendedor/Admin | ⬜ Pendiente |
 | CU29 | Cartera de créditos / cobranza | Admin | ⬜ Pendiente |
 
@@ -108,14 +108,18 @@ El admin define un descuento **% por producto** (no por categoría) con `fecha_i
 - **Enviar ofertas a clientes** (botón admin): un solo correo con las promos vigentes a todos los clientes con correo + notificación en campana. **Reutiliza y EXTIENDE CU21** (primer envío broadcast/masivo, tipo 'oferta').
 Commits: 25f39076 (backend), e1c17abc (página admin), 36d617ce (tienda+carrito), + enviar-ofertas.
 
-# CU25 — Servicio preventivo ⬜ PENDIENTE
-Mantenimiento todo-en-uno (hardware + software). GRATIS para laptops de la tienda con garantía vigente (2 usos, 6 meses de separación); externos/agotados pagan 200 Bs. Ejecuta el Técnico; asigna Vendedor/Admin.
+# Servicio Técnico (CU25 · CU26 · CU27) ✅ COMPLETADO
+Nuevo **rol Técnico** (4º actor). El técnico **registra Y ejecuta** todas las órdenes (clientes de tienda + externos). SQL `007_servicios_tecnicos.sql` (servicio_catalogo + orden_servicio + orden_detalle + tarea_servicio). Modelos/endpoints en `orders`.
 
-# CU26 — Servicio correctivo ⬜ PENDIENTE
-Catálogo de servicios de software con precio fijo: virus 100, formateo 150 (+instalación de programas con licencia), recuperación de datos 300/450/1000 según capacidad. Se pueden pedir varios; se suman.
+**CU25 — Preventivo:** todo-en-uno (HW+SW), con checklist. Precio por equipo: **laptop 200**, **escritorio 250**. **GRATIS** solo laptops de la tienda con garantía vigente (2 usos, 6 meses). El sistema muestra los usos disponibles (endpoint `elegibilidad`).
 
-# CU27 — Ficha/historial de mantenimiento ⬜ PENDIENTE
-Consulta del historial de servicios (preventivos + correctivos) por equipo. Refuerza CU25/CU26.
+**CU26 — Correctivo:** catálogo fijo (virus 100, formateo 150, recuperación 300/450/1000), cualquier equipo, se pueden sumar varios.
+
+**Órdenes:** estados solicitado→agendado→en_proceso→finalizado/cancelado (página **Mis Trabajos** del técnico: registrar + lista + detalle + checklist). Al **finalizar** avisa al cliente (CU21 "tu equipo está listo"). Todo en bitácora (módulo "Servicio Técnico").
+
+**CU27 — Ficha/historial:** el cliente ve su historial de servicios en **Mis Pedidos** (sección "Servicio técnico de mis equipos"); el técnico ve las órdenes por cliente en Mis Trabajos.
+
+Commits: 57912f2c (rol Técnico), 927495c9 (backend), 2e4ee5f5 (frontend técnico), + CU27.
 
 # CU28 — Venta a crédito ⬜ PENDIENTE
 Crédito POR PRODUCTO según el precio unitario: 1–5.000→6 cuotas (+20%), 5.001–10.000→9 (+25%), 10.001–15.000→12 (+30%). Inicial 20% del precio financiado, sin interés mensual, entrega al inicio. Mora: recargo 10% + bloqueo. Tablas `plan_credito` + `cuota`.

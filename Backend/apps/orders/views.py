@@ -39,11 +39,14 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.filters import OrderingFilter
-from .models import Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia, Resena, Devolucion
+from .models import (
+    Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia, Resena, Devolucion,
+    ServicioCatalogo, OrdenServicio, OrdenDetalle, TareaServicio,
+)
 from .serializers import (
     VentaSerializer, VentaCreateSerializer,
     DetalleVentaSerializer, PagoVentaSerializer, GarantiaSerializer, ResenaSerializer,
-    DevolucionSerializer,
+    DevolucionSerializer, ServicioCatalogoSerializer, OrdenServicioSerializer,
 )
 from apps.audit.utils import log_action, actor_from_request
 from utils import get_client_ip
@@ -796,3 +799,211 @@ class DevolucionViewSet(viewsets.ModelViewSet):
         except Exception:
             pass  # la bitácora no debe tumbar la operación
         return Response(DevolucionSerializer(dev).data, status=status.HTTP_201_CREATED)
+
+
+# ── Servicio Técnico (CU25/26/27) ────────────────────────────────────────────
+class ServicioCatalogoViewSet(viewsets.ReadOnlyModelViewSet):
+    """Catálogo de servicios técnicos (solo lectura, para el formulario del técnico)."""
+    queryset           = ServicioCatalogo.objects.filter(activo=True)
+    serializer_class   = ServicioCatalogoSerializer
+    permission_classes = []
+    filter_backends    = []
+
+
+TAREAS_PREVENTIVO = [
+    'Limpieza de polvo en ventiladores y disipadores',
+    'Limpieza de puertos',
+    'Cambio de pasta térmica',
+    'Actualización de SO y antivirus',
+    'Eliminación de archivos temporales',
+    'Desfragmentación del disco',
+]
+
+
+class OrdenServicioViewSet(viewsets.ModelViewSet):
+    """
+    Órdenes de servicio técnico (CU25/26/27). Las registra y ejecuta el técnico.
+      GET   /ordenes-servicio/                         → lista (filtra por tecnico/cliente/estado)
+      POST  /ordenes-servicio/                         → registrar (preventivo o correctivo)
+      GET   /ordenes-servicio/elegibilidad/?cliente=   → garantías vigentes + usos gratis
+      PATCH /ordenes-servicio/{id}/estado/             → cambiar estado / diagnóstico
+      PATCH /ordenes-servicio/{id}/checklist/          → marcar tareas
+    """
+    queryset           = OrdenServicio.objects.select_related('cliente', 'tecnico', 'garantia').prefetch_related('detalles__servicio', 'tareas')
+    serializer_class   = OrdenServicioSerializer
+    permission_classes = []
+    http_method_names  = ['get', 'post', 'patch', 'head', 'options']
+    filter_backends    = [OrderingFilter]
+    ordering_fields    = ['id', 'fecha_solicitud']
+    ordering           = ['-id']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        p = self.request.query_params
+        if p.get('tecnico'):
+            qs = qs.filter(tecnico_id=p['tecnico'])
+        if p.get('cliente'):
+            qs = qs.filter(cliente_id=p['cliente'])
+        if p.get('estado'):
+            qs = qs.filter(estado=p['estado'])
+        return qs
+
+    def _preventivo_gratis_disponible(self, garantia_id):
+        from django.utils import timezone
+        try:
+            g = Garantia.objects.get(pk=garantia_id)
+        except Garantia.DoesNotExist:
+            return False
+        if g.fecha_fin < timezone.localdate():
+            return False
+        usos = OrdenServicio.objects.filter(garantia_id=garantia_id, es_beneficio=True)
+        if usos.count() >= 2:
+            return False
+        ultimo = usos.order_by('-fecha_solicitud').first()
+        if ultimo and ultimo.fecha_solicitud and (timezone.now().date() - ultimo.fecha_solicitud.date()).days < 180:
+            return False
+        return True
+
+    @action(detail=False, methods=['get'])
+    def elegibilidad(self, request):
+        """Garantías vigentes del cliente + usos preventivos gratis disponibles."""
+        from django.utils import timezone
+        cliente_id = request.query_params.get('cliente')
+        if not cliente_id:
+            return Response([])
+        hoy = timezone.localdate()
+        gs = Garantia.objects.select_related('producto').filter(cliente_id=cliente_id, fecha_fin__gte=hoy)
+        out = []
+        for g in gs:
+            usados = OrdenServicio.objects.filter(garantia_id=g.id, es_beneficio=True).count()
+            out.append({
+                'garantia_id': g.id,
+                'producto': g.producto.nombre if g.producto else '—',
+                'fecha_fin': g.fecha_fin,
+                'usos_disponibles': max(0, 2 - usados),
+            })
+        return Response(out)
+
+    def create(self, request, *args, **kwargs):
+        tipo   = request.data.get('tipo')
+        origen = request.data.get('origen') or 'externo'
+        equipo = request.data.get('equipo') or 'laptop'
+        equipo_desc = (request.data.get('equipo_descripcion') or '').strip() or None
+        cliente_id  = request.data.get('cliente') or None
+        garantia_id = request.data.get('garantia') or None
+        servicios_ids = request.data.get('servicios') or []
+
+        if tipo not in ('preventivo', 'correctivo'):
+            return Response({'error': 'Tipo de servicio inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        es_beneficio = False
+        costo = 0.0
+        detalles = []   # (servicio_id, precio)
+
+        if tipo == 'preventivo':
+            serv = ServicioCatalogo.objects.filter(tipo='preventivo', equipo=equipo, activo=True).first()
+            if not serv:
+                return Response({'error': f'No hay servicio preventivo para "{equipo}".'}, status=status.HTTP_400_BAD_REQUEST)
+            precio = float(serv.precio)
+            if origen == 'tienda' and equipo == 'laptop' and garantia_id and self._preventivo_gratis_disponible(garantia_id):
+                es_beneficio = True
+                precio = 0.0
+            costo = precio
+            detalles.append((serv.id, precio))
+        else:  # correctivo
+            if not servicios_ids:
+                return Response({'error': 'Elige al menos un servicio correctivo.'}, status=status.HTTP_400_BAD_REQUEST)
+            servs = ServicioCatalogo.objects.filter(id__in=servicios_ids, tipo='correctivo', activo=True)
+            for s in servs:
+                detalles.append((s.id, float(s.precio)))
+                costo += float(s.precio)
+            if not detalles:
+                return Response({'error': 'Servicios inválidos.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        actor = actor_from_request(request)
+        tecnico_id = actor.get('usuario_id') if actor.get('usuario_rol') in ('admin', 'vendedor', 'tecnico') else None
+
+        try:
+            orden = OrdenServicio.objects.create(
+                cliente_id=cliente_id or None, tecnico_id=tecnico_id,
+                garantia_id=(garantia_id if es_beneficio else None),
+                tipo=tipo, origen=origen, equipo=equipo, equipo_descripcion=equipo_desc,
+                es_beneficio=es_beneficio, costo_total=round(costo, 2), estado='solicitado',
+            )
+            for (sid, precio) in detalles:
+                OrdenDetalle.objects.create(orden_id=orden.id, servicio_id=sid, precio=round(precio, 2))
+            if tipo == 'preventivo':
+                for t in TAREAS_PREVENTIVO:
+                    TareaServicio.objects.create(orden_id=orden.id, tarea=t, realizado=False)
+        except Exception as e:
+            return Response({'error': f'No se pudo registrar la orden: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            gratis = ' (GRATIS - beneficio)' if es_beneficio else ''
+            log_action(
+                accion='CREATE', modulo='Servicio Técnico',
+                descripcion=f'Se registró la orden de servicio #{orden.id} — {tipo} ({equipo}), costo Bs {orden.costo_total}{gratis}',
+                **actor,
+            )
+        except Exception:
+            pass
+        return Response(OrdenServicioSerializer(orden).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['patch'])
+    def estado(self, request, pk=None):
+        from django.utils import timezone
+        orden = self.get_object()
+        nuevo = request.data.get('estado')
+        if nuevo not in ('solicitado', 'agendado', 'en_proceso', 'finalizado', 'cancelado'):
+            return Response({'error': 'Estado inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+        orden.estado = nuevo
+        fields = ['estado']
+        if nuevo == 'finalizado':
+            orden.fecha_finalizacion = timezone.now()
+            fields.append('fecha_finalizacion')
+        if request.data.get('fecha_agendada'):
+            orden.fecha_agendada = request.data.get('fecha_agendada')
+            fields.append('fecha_agendada')
+        if 'diagnostico' in request.data:
+            orden.diagnostico = request.data.get('diagnostico')
+            fields.append('diagnostico')
+        if 'observaciones' in request.data:
+            orden.observaciones = request.data.get('observaciones')
+            fields.append('observaciones')
+        orden.save(update_fields=fields)
+        actor = actor_from_request(request)
+        try:
+            log_action(accion='UPDATE', modulo='Servicio Técnico',
+                       descripcion=f'Orden de servicio #{orden.id} → {nuevo}', **actor)
+        except Exception:
+            pass
+        # CU21: al finalizar, avisar al cliente que su equipo está listo
+        if nuevo == 'finalizado' and orden.cliente_id:
+            cli = orden.cliente
+            if cli and getattr(cli, 'correo', ''):
+                from django.conf import settings as _s
+                from apps.users.views import crear_notificacion, _email_html
+                nombre = f'{cli.nombre} {cli.apellido}'.strip()
+                _html = _email_html(
+                    nombre,
+                    '<p>¡Tu equipo ya está listo! 🔧</p>'
+                    f'<p>El servicio <strong>{orden.tipo}</strong> de tu {orden.equipo} fue finalizado. '
+                    'Puedes pasar a recogerlo.</p>',
+                    'Ver mis pedidos', f'{_s.FRONTEND_URL}/orders',
+                )
+                crear_notificacion(
+                    tipo='servicio', titulo='Tu equipo está listo 🔧',
+                    mensaje=f'El servicio {orden.tipo} de tu {orden.equipo} fue finalizado.',
+                    cliente_id=orden.cliente_id, enlace='/orders',
+                    canal='ambos', email=cli.correo, html=_html,
+                )
+        orden.refresh_from_db()
+        return Response(OrdenServicioSerializer(orden).data)
+
+    @action(detail=True, methods=['patch'])
+    def checklist(self, request, pk=None):
+        orden = self.get_object()
+        for t in (request.data.get('tareas') or []):
+            TareaServicio.objects.filter(id=t.get('id'), orden_id=orden.id).update(realizado=bool(t.get('realizado')))
+        orden.refresh_from_db()
+        return Response(OrdenServicioSerializer(orden).data)

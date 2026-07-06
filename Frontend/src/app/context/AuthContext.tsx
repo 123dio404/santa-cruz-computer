@@ -27,7 +27,7 @@ const STORAGE_KEY = 'user';
 // ============ TIPOS Y INTERFACES ============
 
 /** Tipos de roles disponibles en el sistema */
-export type UserRole = 'admin' | 'employee' | 'client';
+export type UserRole = 'admin' | 'employee' | 'client' | 'tecnico';
 
 /** Opciones de género para el registro de usuarios */
 export type UserGender = 'masculino' | 'femenino' | 'otro';
@@ -206,7 +206,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoginAttempts(new Map(loginAttempts.set(username, { username, failedAttempts: 0, lockStatus: 'unlocked' })));
 
       // Mapear rol del backend al rol del frontend
-      const roleMap: Record<string, UserRole> = { admin: 'admin', vendedor: 'employee', cliente: 'client' };
+      const roleMap: Record<string, UserRole> = { admin: 'admin', vendedor: 'employee', cliente: 'client', tecnico: 'tecnico' };
       const bu = data.user;
       const frontendUser: User = {
         id: String(bu.id),

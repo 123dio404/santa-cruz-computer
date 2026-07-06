@@ -17,12 +17,13 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 type Tab        = 'personal' | 'clientes';
-type BackendRole = 'admin' | 'vendedor';
+type BackendRole = 'admin' | 'vendedor' | 'tecnico';
 
-const roleLabels: Record<BackendRole, string> = { admin: 'Administrador', vendedor: 'Vendedor' };
+const roleLabels: Record<BackendRole, string> = { admin: 'Administrador', vendedor: 'Vendedor', tecnico: 'Técnico' };
 const roleColors: Record<BackendRole, string> = {
   admin:    'bg-purple-100 text-purple-700',
   vendedor: 'bg-blue-100 text-blue-700',
+  tecnico:  'bg-teal-100 text-teal-700',
 };
 
 type FormData = {
@@ -321,6 +322,7 @@ export function Users() {
   const roleStats = {
     admin:    users.filter(u => u.rol === 'admin').length,
     vendedor: users.filter(u => u.rol === 'vendedor').length,
+    tecnico:  users.filter(u => u.rol === 'tecnico').length,
   };
 
   const hasUserErrors    = Object.values(userErrors).some(Boolean);
@@ -347,8 +349,8 @@ export function Users() {
 
       {/* Estadísticas */}
       {activeTab === 'personal' && (
-        <div className="grid grid-cols-2 gap-4 sm:gap-6">
-          {(['admin', 'vendedor'] as BackendRole[]).map(role => (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-6">
+          {(['admin', 'vendedor', 'tecnico'] as BackendRole[]).map(role => (
             <div key={role} className="bg-white rounded-xl p-6 border border-gray-200">
               <div className="flex items-center justify-between">
                 <div>
@@ -634,6 +636,7 @@ export function Users() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                   <option value="vendedor">Vendedor</option>
                   <option value="admin">Administrador</option>
+                  <option value="tecnico">Técnico</option>
                 </select>
               </div>
 

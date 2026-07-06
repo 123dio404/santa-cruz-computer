@@ -103,7 +103,7 @@ export function Login() {
 
       setSuccess('✅ ' + result.message);
       const role = loggedInUser.role;
-      const redirectPath = role === 'admin' ? '/dashboard' : role === 'employee' ? '/inventory' : '/store';
+      const redirectPath = role === 'admin' ? '/dashboard' : role === 'employee' ? '/inventory' : role === 'tecnico' ? '/mis-trabajos' : '/store';
       // Si vino desde un enlace protegido (?next=/...), volver ahí; si no, al inicio por rol.
       // Solo se acepta una ruta interna (evita redirecciones externas).
       const nextParam = searchParams.get('next');
