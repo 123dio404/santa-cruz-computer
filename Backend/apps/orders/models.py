@@ -386,3 +386,68 @@ class TareaServicio(models.Model):
         managed  = False
         db_table = 'tarea_servicio'
         ordering = ['id']
+
+
+# ── Venta a crédito / Cartera (CU28/CU29) ────────────────────────────────────
+class PlanCredito(models.Model):
+    """
+    Plan de financiamiento POR PRODUCTO (cuelga del detalle de la venta).
+    El cálculo (recargo, inicial, cuotas, mora) lo hace el backend.
+    Tabla creada por SQL manual (managed=False): 009_credito.sql
+    """
+    id                = models.AutoField(primary_key=True, db_column='idplan')
+    venta             = models.ForeignKey(
+        Venta, on_delete=models.DO_NOTHING, db_column='idventa', related_name='planes_credito')
+    detalle           = models.ForeignKey(
+        DetalleVenta, on_delete=models.DO_NOTHING, db_column='iddetalle', related_name='planes_credito')
+    producto          = models.ForeignKey(
+        Producto, on_delete=models.DO_NOTHING, db_column='idproducto', related_name='planes_credito')
+    cliente           = models.ForeignKey(
+        Cliente, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idcliente', related_name='planes_credito')
+    usuario           = models.ForeignKey(
+        Usuario, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idusuario', related_name='planes_credito_registrados')
+    precio_unitario   = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cantidad          = models.IntegerField(default=1)
+    precio_base       = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    recargo_pct       = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    precio_financiado = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    inicial           = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    n_cuotas          = models.IntegerField(default=6)
+    monto_cuota       = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    saldo             = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    estado            = models.CharField(max_length=20, default='vigente')  # vigente | pagado | moroso
+    fecha             = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed  = False
+        db_table = 'plan_credito'
+        ordering = ['-id']
+
+    def __str__(self):
+        return f"Plan #{self.id} — Venta #{self.venta_id} ({self.estado})"
+
+
+class Cuota(models.Model):
+    """Cuota mensual de un plan de crédito (calendario de pagos)."""
+    id                = models.AutoField(primary_key=True, db_column='idcuota')
+    plan              = models.ForeignKey(
+        PlanCredito, on_delete=models.CASCADE, db_column='idplan', related_name='cuotas')
+    numero            = models.IntegerField()
+    monto             = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    mora              = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    fecha_vencimiento = models.DateField()
+    fecha_pago        = models.DateTimeField(null=True, blank=True)
+    estado            = models.CharField(max_length=20, default='pendiente')  # pendiente | pagada | vencida
+    usuario_cobro     = models.ForeignKey(
+        Usuario, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idusuario_cobro', related_name='cuotas_cobradas')
+
+    class Meta:
+        managed  = False
+        db_table = 'cuota'
+        ordering = ['numero']
+
+    def __str__(self):
+        return f"Cuota {self.numero} — Plan #{self.plan_id} ({self.estado})"

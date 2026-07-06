@@ -42,11 +42,13 @@ from rest_framework.filters import OrderingFilter
 from .models import (
     Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia, Resena, Devolucion,
     ServicioCatalogo, OrdenServicio, OrdenDetalle, TareaServicio,
+    PlanCredito, Cuota,
 )
 from .serializers import (
     VentaSerializer, VentaCreateSerializer,
     DetalleVentaSerializer, PagoVentaSerializer, GarantiaSerializer, ResenaSerializer,
     DevolucionSerializer, ServicioCatalogoSerializer, OrdenServicioSerializer,
+    PlanCreditoSerializer, CuotaSerializer,
 )
 from apps.audit.utils import log_action, actor_from_request
 from utils import get_client_ip
@@ -1024,3 +1026,314 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
             TareaServicio.objects.filter(id=t.get('id'), orden_id=orden.id).update(realizado=bool(t.get('realizado')))
         orden.refresh_from_db()
         return Response(OrdenServicioSerializer(orden).data)
+
+
+# ── Venta a crédito / Cartera de créditos (CU28/CU29) ─────────────────────────
+from decimal import Decimal, ROUND_HALF_UP
+
+# Rangos de crédito POR PRODUCTO (según su precio UNITARIO):
+#   (min, max, n_cuotas, recargo_pct)
+CREDITO_RANGOS = [
+    (Decimal('1'),      Decimal('5000'),  6,  Decimal('20')),
+    (Decimal('5001'),   Decimal('10000'), 9,  Decimal('25')),
+    (Decimal('10001'),  Decimal('15000'), 12, Decimal('30')),
+]
+CREDITO_INICIAL_PCT = Decimal('20')   # 20% del precio financiado
+CREDITO_MORA_PCT    = Decimal('10')   # 10% de recargo sobre la cuota vencida
+
+
+def _2d(x):
+    """Redondea un Decimal a 2 decimales (bancario HALF_UP)."""
+    return Decimal(x).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def _add_months(d, n):
+    """Suma n meses a una fecha (ajustando el día si el mes es más corto)."""
+    import calendar
+    m = d.month - 1 + n
+    y = d.year + m // 12
+    m = m % 12 + 1
+    day = min(d.day, calendar.monthrange(y, m)[1])
+    return d.replace(year=y, month=m, day=day)
+
+
+def calcular_credito(precio_unitario, cantidad):
+    """
+    Devuelve el plan calculado para un producto, o None si no califica.
+    El rango se decide por el PRECIO UNITARIO; el financiamiento por el total.
+    """
+    pu = Decimal(str(precio_unitario or 0))
+    cant = int(cantidad or 1)
+    if cant < 1:
+        cant = 1
+    rango = next((r for r in CREDITO_RANGOS if r[0] <= pu <= r[1]), None)
+    if not rango:
+        return None
+    _, _, n_cuotas, recargo_pct = rango
+    precio_base       = _2d(pu * cant)
+    precio_financiado = _2d(precio_base * (Decimal('1') + recargo_pct / Decimal('100')))
+    inicial           = _2d(precio_financiado * CREDITO_INICIAL_PCT / Decimal('100'))
+    saldo             = _2d(precio_financiado - inicial)
+    monto_cuota       = _2d(saldo / Decimal(n_cuotas))
+    # La última cuota absorbe el residuo del redondeo para que sumen exacto el saldo.
+    montos = [monto_cuota] * n_cuotas
+    montos[-1] = _2d(saldo - monto_cuota * (n_cuotas - 1))
+    return {
+        'precio_unitario': pu, 'cantidad': cant, 'precio_base': precio_base,
+        'recargo_pct': recargo_pct, 'precio_financiado': precio_financiado,
+        'inicial': inicial, 'n_cuotas': n_cuotas, 'monto_cuota': monto_cuota,
+        'saldo': saldo, 'montos_cuotas': montos,
+    }
+
+
+def _refrescar_moras(plan):
+    """
+    Marca como 'vencida' las cuotas pendientes cuyo vencimiento ya pasó y les
+    aplica el recargo de mora (10%) una sola vez. Ajusta el estado del plan.
+    Se llama de forma perezosa al leer un plan / la cartera (no hay cron).
+    """
+    from django.utils import timezone
+    hoy = timezone.localdate()
+    hubo_vencida = False
+    for c in plan.cuotas.all():
+        if c.estado == 'pendiente' and c.fecha_vencimiento < hoy:
+            c.estado = 'vencida'
+            c.mora = _2d(Decimal(str(c.monto)) * CREDITO_MORA_PCT / Decimal('100'))
+            c.save(update_fields=['estado', 'mora'])
+            hubo_vencida = True
+        elif c.estado == 'vencida':
+            hubo_vencida = True
+    nuevo_estado = 'moroso' if hubo_vencida else plan.estado
+    # Si ya no hay cuotas pendientes/vencidas → pagado
+    if all(c.estado == 'pagada' for c in plan.cuotas.all()) and plan.cuotas.exists():
+        nuevo_estado = 'pagado'
+    elif not hubo_vencida and plan.estado == 'moroso':
+        nuevo_estado = 'vigente'
+    if nuevo_estado != plan.estado:
+        plan.estado = nuevo_estado
+        plan.save(update_fields=['estado'])
+    return plan
+
+
+class PlanCreditoViewSet(viewsets.ModelViewSet):
+    """
+    Venta a crédito (CU28) + Cartera (CU29).
+
+      GET   /planes-credito/                    → lista (filtra por cliente/estado)
+      GET   /planes-credito/?cliente=<id>       → créditos de un cliente
+      POST  /planes-credito/                    → crear plan sobre un detalle de venta
+      GET   /planes-credito/simular/?precio=&cantidad=  → vista previa (sin guardar)
+      GET   /planes-credito/bloqueo/?cliente=<id>       → ¿bloqueado por mora?
+      PATCH /planes-credito/pagar-cuota/        → registrar el pago de una cuota
+      GET   /planes-credito/cartera/            → resumen para el admin (CU29)
+    """
+    queryset           = PlanCredito.objects.select_related('cliente', 'producto', 'usuario').prefetch_related('cuotas')
+    serializer_class   = PlanCreditoSerializer
+    permission_classes = []
+    http_method_names  = ['get', 'post', 'patch', 'head', 'options']
+    filter_backends    = [OrderingFilter]
+    ordering_fields    = ['id', 'fecha']
+    ordering           = ['-id']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        p = self.request.query_params
+        if p.get('cliente'):
+            qs = qs.filter(cliente_id=p['cliente'])
+        if p.get('estado'):
+            qs = qs.filter(estado=p['estado'])
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        # Refrescar moras de forma perezosa antes de responder
+        for plan in self.filter_queryset(self.get_queryset()):
+            _refrescar_moras(plan)
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        plan = self.get_object()
+        _refrescar_moras(plan)
+        return Response(PlanCreditoSerializer(plan).data)
+
+    @action(detail=False, methods=['get'])
+    def simular(self, request):
+        """Vista previa del plan (para el formulario, sin guardar nada)."""
+        precio   = request.query_params.get('precio')
+        cantidad = request.query_params.get('cantidad') or 1
+        plan = calcular_credito(precio, cantidad)
+        if not plan:
+            return Response({'elegible': False,
+                             'motivo': 'El precio unitario debe estar entre Bs 1 y Bs 15.000.'})
+        return Response({'elegible': True, **{k: (str(v) if isinstance(v, Decimal) else v)
+                                              for k, v in plan.items() if k != 'montos_cuotas'}})
+
+    @action(detail=False, methods=['get'])
+    def bloqueo(self, request):
+        """¿El cliente está bloqueado para nuevos créditos? (tiene cuotas vencidas)."""
+        cliente_id = request.query_params.get('cliente')
+        if not cliente_id:
+            return Response({'bloqueado': False, 'cuotas_vencidas': 0})
+        for plan in PlanCredito.objects.filter(cliente_id=cliente_id).prefetch_related('cuotas'):
+            _refrescar_moras(plan)
+        venc = Cuota.objects.filter(plan__cliente_id=cliente_id, estado='vencida').count()
+        return Response({'bloqueado': venc > 0, 'cuotas_vencidas': venc})
+
+    def create(self, request, *args, **kwargs):
+        from django.utils import timezone
+        detalle_id = request.data.get('detalle')
+        if not detalle_id:
+            return Response({'error': 'Falta el ítem de la venta (detalle).'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            detalle = DetalleVenta.objects.select_related('venta', 'producto').get(pk=detalle_id)
+        except DetalleVenta.DoesNotExist:
+            return Response({'error': 'El ítem de la venta no existe.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Un plan por ítem de venta
+        if PlanCredito.objects.filter(detalle_id=detalle.id).exists():
+            return Response({'error': 'Este producto de la venta ya tiene un plan de crédito.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        venta = detalle.venta
+        # Cliente bloqueado por mora → no se le da más crédito
+        if venta.cliente_id:
+            venc = Cuota.objects.filter(plan__cliente_id=venta.cliente_id, estado='vencida').count()
+            if venc > 0:
+                return Response({'error': 'El cliente tiene cuotas vencidas: está bloqueado para nuevos créditos.'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+        calc = calcular_credito(detalle.precio_unitario, detalle.cantidad)
+        if not calc:
+            return Response({'error': 'El producto no califica a crédito (precio unitario fuera de Bs 1–15.000).'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        actor = actor_from_request(request)
+        usuario_id = actor.get('usuario_id') if actor.get('usuario_rol') in ('admin', 'vendedor') else None
+
+        from django.db import transaction
+        try:
+            with transaction.atomic():
+                plan = PlanCredito.objects.create(
+                    venta_id=venta.id, detalle_id=detalle.id, producto_id=detalle.producto_id,
+                    cliente_id=venta.cliente_id, usuario_id=usuario_id,
+                    precio_unitario=calc['precio_unitario'], cantidad=calc['cantidad'],
+                    precio_base=calc['precio_base'], recargo_pct=calc['recargo_pct'],
+                    precio_financiado=calc['precio_financiado'], inicial=calc['inicial'],
+                    n_cuotas=calc['n_cuotas'], monto_cuota=calc['monto_cuota'],
+                    saldo=calc['saldo'], estado='vigente',
+                )
+                hoy = timezone.localdate()
+                for i, monto in enumerate(calc['montos_cuotas'], start=1):
+                    Cuota.objects.create(
+                        plan_id=plan.id, numero=i, monto=monto, mora=0,
+                        fecha_vencimiento=_add_months(hoy, i), estado='pendiente',
+                    )
+        except Exception as e:
+            return Response({'error': f'No se pudo crear el plan de crédito: {e}'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            log_action(
+                accion='CREATE', modulo='Crédito',
+                descripcion=(f'Plan de crédito #{plan.id} sobre la venta #{venta.id} — '
+                             f'{plan.n_cuotas} cuotas (+{plan.recargo_pct}%), '
+                             f'inicial Bs {plan.inicial}, financiado Bs {plan.precio_financiado}'),
+                **actor,
+            )
+        except Exception:
+            pass
+        return Response(PlanCreditoSerializer(plan).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['patch'], url_path='pagar-cuota')
+    def pagar_cuota(self, request):
+        """Registrar el pago de una cuota (marca pagada, baja el saldo del plan)."""
+        from django.utils import timezone
+        cuota_id = request.data.get('cuota')
+        try:
+            cuota = Cuota.objects.select_related('plan').get(pk=cuota_id)
+        except Cuota.DoesNotExist:
+            return Response({'error': 'La cuota no existe.'}, status=status.HTTP_404_NOT_FOUND)
+        if cuota.estado == 'pagada':
+            return Response({'error': 'Esa cuota ya está pagada.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        plan = cuota.plan
+        actor = actor_from_request(request)
+        usuario_id = actor.get('usuario_id') if actor.get('usuario_rol') in ('admin', 'vendedor') else None
+
+        pagado_total = _2d(Decimal(str(cuota.monto)) + Decimal(str(cuota.mora)))
+        cuota.estado = 'pagada'
+        cuota.fecha_pago = timezone.now()
+        cuota.usuario_cobro_id = usuario_id
+        cuota.save(update_fields=['estado', 'fecha_pago', 'usuario_cobro'])
+
+        # Bajar el saldo del plan (solo el capital de la cuota, la mora es recargo aparte)
+        nuevo_saldo = _2d(Decimal(str(plan.saldo)) - Decimal(str(cuota.monto)))
+        plan.saldo = nuevo_saldo if nuevo_saldo > 0 else Decimal('0.00')
+        plan.save(update_fields=['saldo'])
+        _refrescar_moras(plan)   # recalcula estado (pagado / moroso / vigente)
+
+        try:
+            log_action(
+                accion='UPDATE', modulo='Crédito',
+                descripcion=(f'Cobro de la cuota {cuota.numero}/{plan.n_cuotas} del plan #{plan.id} — '
+                             f'Bs {pagado_total}' + (f' (incluye mora Bs {cuota.mora})' if cuota.mora else '')),
+                **actor,
+            )
+        except Exception:
+            pass
+        plan.refresh_from_db()
+        return Response(PlanCreditoSerializer(plan).data)
+
+    @action(detail=False, methods=['get'])
+    def cartera(self, request):
+        """Resumen de la cartera de créditos para el admin (CU29)."""
+        from django.utils import timezone
+        planes = list(PlanCredito.objects.select_related('cliente', 'producto').prefetch_related('cuotas'))
+        for p in planes:
+            _refrescar_moras(p)
+
+        hoy = timezone.localdate()
+        total_financiado = Decimal('0'); total_cobrado = Decimal('0')
+        por_cobrar = Decimal('0'); en_mora = Decimal('0')
+        n_vigentes = n_pagados = n_morosos = 0
+        proyeccion = {}   # 'YYYY-MM' → monto que vence ese mes (cuotas pendientes)
+
+        for p in planes:
+            total_financiado += Decimal(str(p.precio_financiado))
+            total_cobrado    += Decimal(str(p.inicial))
+            if p.estado == 'pagado':
+                n_pagados += 1
+            elif p.estado == 'moroso':
+                n_morosos += 1
+            else:
+                n_vigentes += 1
+            for c in p.cuotas.all():
+                if c.estado == 'pagada':
+                    total_cobrado += Decimal(str(c.monto)) + Decimal(str(c.mora))
+                else:
+                    por_cobrar += Decimal(str(c.monto)) + Decimal(str(c.mora))
+                    if c.estado == 'vencida':
+                        en_mora += Decimal(str(c.monto)) + Decimal(str(c.mora))
+                    key = f'{c.fecha_vencimiento.year}-{c.fecha_vencimiento.month:02d}'
+                    proyeccion[key] = proyeccion.get(key, Decimal('0')) + Decimal(str(c.monto))
+
+        # Clientes bloqueados (con al menos una cuota vencida)
+        bloqueados = (Cuota.objects.filter(estado='vencida')
+                      .values_list('plan__cliente_id', flat=True).distinct())
+        bloqueados = [b for b in bloqueados if b]
+
+        data = self.get_serializer(
+            sorted(planes, key=lambda x: x.id, reverse=True), many=True).data
+        return Response({
+            'resumen': {
+                'total_financiado': str(_2d(total_financiado)),
+                'total_cobrado':    str(_2d(total_cobrado)),
+                'por_cobrar':       str(_2d(por_cobrar)),
+                'en_mora':          str(_2d(en_mora)),
+                'planes_vigentes':  n_vigentes,
+                'planes_pagados':   n_pagados,
+                'planes_morosos':   n_morosos,
+                'clientes_bloqueados': len(bloqueados),
+            },
+            'proyeccion': [{'mes': k, 'monto': str(_2d(v))} for k, v in sorted(proyeccion.items())],
+            'planes': data,
+        })

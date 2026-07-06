@@ -930,6 +930,113 @@ export const devolucionesAPI = {
   },
 };
 
+// ── Venta a crédito / Cartera (CU28/CU29) ─────────────────────────────────────
+export interface ApiCuota {
+  id: number;
+  numero: number;
+  monto: number;
+  mora: number;
+  total: number;
+  fecha_vencimiento: string;
+  fecha_pago: string | null;
+  estado: string;            // pendiente | pagada | vencida
+  vencida: boolean;
+}
+export interface ApiPlanCredito {
+  id: number;
+  venta: number;
+  detalle: number;
+  producto: number;
+  producto_nombre: string;
+  cliente: number | null;
+  cliente_nombre: string;
+  usuario: number | null;
+  precio_unitario: number;
+  cantidad: number;
+  precio_base: number;
+  recargo_pct: number;
+  precio_financiado: number;
+  inicial: number;
+  n_cuotas: number;
+  monto_cuota: number;
+  saldo: number;
+  estado: string;            // vigente | pagado | moroso
+  fecha: string;
+  cuotas: ApiCuota[];
+  cuotas_pagadas: number;
+  total_pagado: number;
+  proxima_cuota: string | null;
+}
+export interface ApiSimulacionCredito {
+  elegible: boolean;
+  motivo?: string;
+  precio_unitario?: string;
+  cantidad?: number;
+  precio_base?: string;
+  recargo_pct?: string;
+  precio_financiado?: string;
+  inicial?: string;
+  n_cuotas?: number;
+  monto_cuota?: string;
+  saldo?: string;
+}
+export interface ApiCartera {
+  resumen: {
+    total_financiado: string;
+    total_cobrado: string;
+    por_cobrar: string;
+    en_mora: string;
+    planes_vigentes: number;
+    planes_pagados: number;
+    planes_morosos: number;
+    clientes_bloqueados: number;
+  };
+  proyeccion: { mes: string; monto: string }[];
+  planes: ApiPlanCredito[];
+}
+
+export const creditoAPI = {
+  // Vista previa del plan (sin guardar) para el precio unitario y cantidad dados
+  simular: async (precio: number, cantidad = 1): Promise<ApiSimulacionCredito> => {
+    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/simular/?precio=${precio}&cantidad=${cantidad}`, { headers: authHeaders() });
+    return handleJson(r);
+  },
+  // ¿El cliente está bloqueado por mora?
+  bloqueo: async (clienteId: number): Promise<{ bloqueado: boolean; cuotas_vencidas: number }> => {
+    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/bloqueo/?cliente=${clienteId}`, { headers: authHeaders() });
+    if (!r.ok) return { bloqueado: false, cuotas_vencidas: 0 };
+    return r.json();
+  },
+  // Crear un plan de crédito sobre un ítem de venta (detalle)
+  crear: async (detalle: number): Promise<ApiPlanCredito> => {
+    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ detalle }),
+    });
+    return handleJson(r);
+  },
+  planes: async (params?: { cliente?: number; estado?: string }): Promise<ApiPlanCredito[]> => {
+    const q = new URLSearchParams();
+    if (params?.cliente) q.set('cliente', String(params.cliente));
+    if (params?.estado)  q.set('estado', params.estado);
+    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/?${q.toString()}`, { headers: authHeaders() });
+    return handlePaginated(r);
+  },
+  // Registrar el pago de una cuota
+  pagarCuota: async (cuota: number): Promise<ApiPlanCredito> => {
+    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/pagar-cuota/`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ cuota }),
+    });
+    return handleJson(r);
+  },
+  // Resumen de la cartera (admin, CU29)
+  cartera: async (): Promise<ApiCartera> => {
+    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/cartera/`, { headers: authHeaders() });
+    return handleJson(r);
+  },
+};
+
 export const notificacionesAPI = {
   // Devuelve mis notificaciones + el contador de no leídas
   list: async (): Promise<{ notificaciones: ApiNotificacion[]; no_leidas: number }> => {

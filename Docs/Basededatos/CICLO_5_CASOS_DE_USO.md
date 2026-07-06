@@ -15,8 +15,8 @@
 | CU25 | Servicio preventivo | Cliente/Técnico | ✅ Completado |
 | CU26 | Servicio correctivo | Cliente/Técnico | ✅ Completado |
 | CU27 | Ficha/historial de mantenimiento | Técnico/Cliente | ✅ Completado |
-| CU28 | Venta a crédito | Cliente/Vendedor/Admin | ⬜ Pendiente |
-| CU29 | Cartera de créditos / cobranza | Admin | ⬜ Pendiente |
+| CU28 | Venta a crédito | Cliente/Vendedor/Admin | ✅ Completado |
+| CU29 | Cartera de créditos / cobranza | Admin | ✅ Completado |
 
 Roles del sistema: **Administrador · Vendedor · Cliente · Técnico** (Técnico es nuevo en el Ciclo 5).
 
@@ -121,11 +121,34 @@ Nuevo **rol Técnico** (4º actor). El técnico **registra Y ejecuta** todas las
 
 Commits: 57912f2c (rol Técnico), 927495c9 (backend), 2e4ee5f5 (frontend técnico), + CU27.
 
-# CU28 — Venta a crédito ⬜ PENDIENTE
-Crédito POR PRODUCTO según el precio unitario: 1–5.000→6 cuotas (+20%), 5.001–10.000→9 (+25%), 10.001–15.000→12 (+30%). Inicial 20% del precio financiado, sin interés mensual, entrega al inicio. Mora: recargo 10% + bloqueo. Tablas `plan_credito` + `cuota`.
+# Venta a crédito / Cartera (CU28 · CU29) ✅ COMPLETADO
+Financiamiento **POR PRODUCTO** según su precio unitario. SQL `009_credito.sql`
+(`plan_credito` + `cuota`). Modelos/endpoints en `orders`. El cálculo (recargo,
+inicial, cuotas, mora) lo hace el **backend** (sin triggers).
 
-# CU29 — Cartera de créditos / cobranza ⬜ PENDIENTE
-Panel del admin con todos los créditos: por cobrar, vencidos, morosos, proyección. Consulta sobre `plan_credito` + `cuota`.
+**CU28 — Venta a crédito:** el vendedor, en la página **Créditos → Registrar**,
+elige una venta y un producto elegible (precio unitario Bs 1–15.000). El sistema
+calcula el plan y muestra la **simulación** (financiado, recargo, inicial, cuotas).
+- Rangos: **1–5.000 → 6 cuotas (+20%)**, **5.001–10.000 → 9 (+25%)**, **10.001–15.000 → 12 (+30%)**.
+- `precio_financiado = precio_base × (1 + recargo%)`; **inicial 20%** del financiado
+  (pagada al inicio); `cuota = (financiado − inicial) / n` (la última absorbe el redondeo).
+- Al crear el plan se genera el **calendario de cuotas** (1 por mes, la 1.ª vence en 1 mes).
+- **Mora:** una cuota vencida sin pagar recibe **+10%** y el cliente queda **bloqueado**
+  para nuevos créditos (se calcula perezosamente al leer: no hay cron). Un plan con
+  cuota vencida pasa a `moroso`; pagadas todas → `pagado`.
+- **Un plan por ítem de venta** (no se duplica). Todo en bitácora (módulo "Crédito").
+
+**CU29 — Cartera / cobranza:** en la misma página, pestaña **Cartera** (admin/vendedor):
+- Resumen: **total financiado, total cobrado, por cobrar, en mora**, conteo de planes
+  vigentes/morosos/pagados y clientes bloqueados.
+- **Proyección de cobros** por mes (cuotas pendientes agrupadas por vencimiento).
+- Lista de planes con su calendario de cuotas y el botón **"Cobrar"** por cuota
+  (marca pagada, baja el saldo, recalcula el estado del plan).
+
+**Nota de diseño:** el plan es una **capa de financiamiento** que cuelga del
+`detalleventa` (no altera stock/pagos de la venta original). Endpoints:
+`GET/POST /planes-credito/`, `/simular/`, `/bloqueo/`, `PATCH /pagar-cuota/`, `/cartera/`.
+Menú **Créditos** (admin + vendedor). Frontend: `Creditos.tsx` + `creditoAPI`.
 
 ---
 
