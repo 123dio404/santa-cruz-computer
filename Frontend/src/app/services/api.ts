@@ -783,3 +783,32 @@ export const comprasAPI = {
     return handleJson(r);
   },
 };
+
+// ── Notificaciones (CU21) ─────────────────────────────────────────────────────
+export interface ApiNotificacion {
+  id: number;
+  tipo: string;
+  titulo: string;
+  mensaje: string;
+  enlace: string | null;
+  canal: string;
+  leido: boolean;
+  fecha: string;
+}
+
+export const notificacionesAPI = {
+  // Devuelve mis notificaciones + el contador de no leídas
+  list: async (): Promise<{ notificaciones: ApiNotificacion[]; no_leidas: number }> => {
+    const r = await fetch(`${API_BASE_URL}/users/notificaciones/`, { headers: authHeaders() });
+    if (!r.ok) return { notificaciones: [], no_leidas: 0 };
+    return r.json();
+  },
+  // Marca una notificación ({id}) o todas ({todas:true}) como leídas
+  marcarLeidas: async (payload: { id?: number; todas?: boolean }): Promise<void> => {
+    await fetch(`${API_BASE_URL}/users/notificaciones/marcar-leidas/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+  },
+};
