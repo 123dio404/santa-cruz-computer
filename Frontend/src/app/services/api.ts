@@ -186,6 +186,8 @@ export interface ApiProduct {
   categoria_nombre: string | null;
   is_low_stock: boolean;
   created_at: string;
+  promo_porcentaje: number | null;    // CU24: % de descuento si hay promo vigente
+  precio_promocional: number | null;  // CU24: precio ya con el descuento
 }
 
 export interface ApiVenta {
