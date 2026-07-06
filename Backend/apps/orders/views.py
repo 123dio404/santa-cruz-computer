@@ -819,6 +819,13 @@ TAREAS_PREVENTIVO = [
     'Desfragmentación del disco',
 ]
 
+# El preventivo gratis es SOLO para laptops → se detecta por el nombre de la categoría
+_LAPTOP_KEYWORDS = ('laptop', 'notebook', 'portátil', 'portatil')
+
+def _es_categoria_laptop(nombre):
+    n = (nombre or '').lower()
+    return any(k in n for k in _LAPTOP_KEYWORDS)
+
 
 class OrdenServicioViewSet(viewsets.ModelViewSet):
     """
@@ -856,6 +863,10 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
             return False
         if g.fecha_fin < timezone.localdate():
             return False
+        # El preventivo gratis es solo para laptops
+        cat = g.producto.categoria.nombre if (g.producto and g.producto.categoria) else ''
+        if not _es_categoria_laptop(cat):
+            return False
         usos = OrdenServicio.objects.filter(garantia_id=garantia_id, es_beneficio=True)
         if usos.count() >= 2:
             return False
@@ -872,9 +883,15 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
         if not cliente_id:
             return Response([])
         hoy = timezone.localdate()
-        gs = Garantia.objects.select_related('producto').filter(cliente_id=cliente_id, fecha_fin__gte=hoy)
+        gs = (Garantia.objects
+              .select_related('producto', 'producto__categoria')
+              .filter(cliente_id=cliente_id, fecha_fin__gte=hoy))
         out = []
         for g in gs:
+            # Solo laptops tienen preventivo gratis
+            cat = g.producto.categoria.nombre if (g.producto and g.producto.categoria) else ''
+            if not _es_categoria_laptop(cat):
+                continue
             usados = OrdenServicio.objects.filter(garantia_id=g.id, es_beneficio=True).count()
             out.append({
                 'garantia_id': g.id,
