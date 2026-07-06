@@ -22,7 +22,7 @@ ALIASES EN VentaSerializer:
   - 'cliente_name' → calculado como nombre + apellido del cliente
 """
 from rest_framework import serializers
-from .models import Venta, DetalleVenta, PagoVenta, Factura, Garantia, Resena
+from .models import Venta, DetalleVenta, PagoVenta, Factura, Garantia, Resena, Devolucion
 
 
 # ── Lectura ────────────────────────────────────────────────────────────────────
@@ -146,6 +146,29 @@ class ResenaSerializer(serializers.ModelSerializer):
         apellido = obj.cliente.apellido or ''
         inicial  = f' {apellido[:1].upper()}.' if apellido else ''
         return f'{nombre}{inicial}'.strip()
+
+
+class DevolucionSerializer(serializers.ModelSerializer):
+    """Lectura de devoluciones (para reportes e historial)."""
+    producto_nombre = serializers.SerializerMethodField()
+    cliente_nombre  = serializers.SerializerMethodField()
+    usuario_nombre  = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Devolucion
+        fields = ['id', 'venta', 'detalle', 'producto', 'producto_nombre',
+                  'cliente', 'cliente_nombre', 'cantidad', 'motivo', 'estado',
+                  'motivo_rechazo', 'monto_reembolso', 'usuario', 'usuario_nombre', 'fecha']
+
+    def get_producto_nombre(self, obj):
+        return obj.producto.nombre if obj.producto else '—'
+
+    def get_cliente_nombre(self, obj):
+        c = obj.cliente
+        return f'{c.nombre} {c.apellido}'.strip() if c else 'Consumidor Final'
+
+    def get_usuario_nombre(self, obj):
+        return obj.usuario.username if obj.usuario else '—'
 
 
 # ── Escritura (POST) ────────────────────────────────────────────────────────────

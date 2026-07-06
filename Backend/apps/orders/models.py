@@ -271,3 +271,46 @@ class Resena(models.Model):
 
     def __str__(self):
         return f"Reseña #{self.id} — Venta #{self.venta_id} ({self.puntuacion}★)"
+
+
+class Devolucion(models.Model):
+    """
+    Devolución (RMA) de un ítem de una venta (CU23). La registra el vendedor/admin
+    en el mostrador; nace 'aprobada' o 'rechazada'. El stock del producto vuelve
+    (por trigger) SOLO si es 'aprobada'. NO toca detalleventa/factura/pagoventa.
+    Tabla creada por SQL manual (managed=False): 005_devoluciones.sql
+    """
+    id              = models.AutoField(primary_key=True, db_column='iddevolucion')
+    venta           = models.ForeignKey(
+        Venta, on_delete=models.DO_NOTHING, db_column='idventa', related_name='devoluciones',
+    )
+    detalle         = models.ForeignKey(
+        DetalleVenta, on_delete=models.DO_NOTHING, db_column='iddetalle', related_name='devoluciones',
+    )
+    producto        = models.ForeignKey(
+        Producto, on_delete=models.DO_NOTHING, db_column='idproducto', related_name='devoluciones',
+    )
+    cliente         = models.ForeignKey(
+        Cliente, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idcliente', related_name='devoluciones',
+    )
+    cantidad        = models.IntegerField(default=1)
+    motivo          = models.TextField()
+    estado          = models.CharField(max_length=20, default='aprobada')   # aprobada | rechazada
+    motivo_rechazo  = models.TextField(null=True, blank=True)
+    monto_reembolso = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    usuario         = models.ForeignKey(
+        Usuario, on_delete=models.DO_NOTHING, null=True, blank=True,
+        db_column='idusuario', related_name='devoluciones_registradas',
+    )
+    fecha           = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed             = False
+        db_table            = 'devolucion'
+        verbose_name        = 'Devolución'
+        verbose_name_plural = 'Devoluciones'
+        ordering            = ['-id']
+
+    def __str__(self):
+        return f"Devolución #{self.id} — Venta #{self.venta_id} ({self.estado})"
