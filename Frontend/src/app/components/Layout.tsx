@@ -250,7 +250,7 @@ export function Layout({ children }: LayoutProps) {
             </button>
           </div>
 
-          <nav className="flex-1 p-4 space-y-2">
+          <nav className="flex-1 overflow-y-auto p-4 space-y-2">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
