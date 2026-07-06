@@ -830,6 +830,13 @@ export const promocionesAPI = {
   remove: async (id: number): Promise<void> => {
     await fetch(`${API_BASE_URL}/products/promociones/${id}/`, { method: 'DELETE', headers: authHeaders() });
   },
+  // CU24: envía las ofertas vigentes a todos los clientes (correo + campana)
+  enviarOfertas: async (): Promise<{ enviados: number; promociones: number }> => {
+    const r = await fetch(`${API_BASE_URL}/products/promociones/enviar-ofertas/`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    return handleJson(r);
+  },
 };
 
 // ── Devoluciones (CU23) ───────────────────────────────────────────────────────

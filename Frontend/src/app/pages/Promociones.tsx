@@ -5,7 +5,7 @@
  * Mientras están vigentes, la Tienda muestra y cobra el precio rebajado.
  */
 import { useState, useEffect } from 'react';
-import { Tag, Plus, Trash2 } from 'lucide-react';
+import { Tag, Plus, Trash2, Send } from 'lucide-react';
 import { promocionesAPI, productosAPI, ApiPromocion, ApiProduct } from '../services/api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -17,6 +17,7 @@ export function Promociones() {
   const [form, setForm] = useState({ producto: '', porcentaje: '', fecha_inicio: '', fecha_fin: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState('');
+  const [enviando, setEnviando] = useState(false);
   useEscapeKey(modalOpen, () => setModalOpen(false));
 
   const cargar = () => {
@@ -75,6 +76,21 @@ export function Promociones() {
     catch { alert('No se pudo eliminar la promoción.'); }
   };
 
+  const enviarOfertas = async () => {
+    const vigentes = promos.filter(p => estadoDe(p).txt === 'Vigente').length;
+    if (vigentes === 0) { alert('No hay promociones vigentes para enviar.'); return; }
+    if (!confirm(`¿Enviar ${vigentes} oferta(s) vigente(s) a todos los clientes por correo y campana?`)) return;
+    setEnviando(true);
+    try {
+      const r = await promocionesAPI.enviarOfertas();
+      alert(`✅ Ofertas enviadas a ${r.enviados} cliente(s).`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'No se pudo enviar las ofertas.');
+    } finally {
+      setEnviando(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -84,10 +100,17 @@ export function Promociones() {
           </h1>
           <p className="text-gray-600">Descuentos programados por producto</p>
         </div>
-        <button onClick={abrirModal}
-          className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 font-medium">
-          <Plus className="w-4 h-4" /> Nueva promoción
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={enviarOfertas} disabled={enviando}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50"
+            title="Envía las ofertas vigentes a todos los clientes (correo + campana)">
+            <Send className="w-4 h-4" /> {enviando ? 'Enviando...' : 'Enviar ofertas a clientes'}
+          </button>
+          <button onClick={abrirModal}
+            className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 font-medium">
+            <Plus className="w-4 h-4" /> Nueva promoción
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

@@ -200,3 +200,65 @@ class PromocionViewSet(viewsets.ModelViewSet):
             descripcion=f'Se eliminó la promoción #{pid} de "{nombre}"',
             **actor,
         )
+
+    @action(detail=False, methods=['post'], url_path='enviar-ofertas')
+    def enviar_ofertas(self, request):
+        """CU24: envía UN correo con las ofertas vigentes a todos los clientes con
+        correo (+ notificación en la campana). Reutiliza y extiende CU21."""
+        from django.utils import timezone
+        from django.conf import settings as _s
+        from apps.users.models import Cliente
+        from apps.users.views import crear_notificacion, _email_html
+
+        hoy = timezone.localdate()
+        promos = list(Promocion.objects.select_related('producto').filter(
+            activo=True, fecha_inicio__lte=hoy, fecha_fin__gte=hoy,
+        ))
+        if not promos:
+            return Response({'error': 'No hay promociones vigentes para enviar.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # Tabla HTML de ofertas (común a todos los clientes)
+        filas = ''
+        for p in promos:
+            precio = float(p.producto.precio_actual or 0) if p.producto else 0
+            promo  = round(precio * (1 - float(p.porcentaje) / 100), 2)
+            nombre = p.producto.nombre if p.producto else '—'
+            filas += (
+                f'<tr><td style="padding:6px;border-bottom:1px solid #eee;">{nombre}</td>'
+                f'<td style="padding:6px;border-bottom:1px solid #eee;text-align:right;text-decoration:line-through;color:#888;">Bs {precio:.2f}</td>'
+                f'<td style="padding:6px;border-bottom:1px solid #eee;text-align:right;color:#b45309;font-weight:bold;">Bs {promo:.2f}</td>'
+                f'<td style="padding:6px;border-bottom:1px solid #eee;text-align:center;">-{float(p.porcentaje):.0f}%</td></tr>'
+            )
+        tabla = (
+            '<table width="100%" style="border-collapse:collapse;font-size:13px;margin:10px 0;">'
+            '<tr style="background:#1e40af;color:#fff;">'
+            '<td style="padding:6px;">Producto</td>'
+            '<td style="padding:6px;text-align:right;">Antes</td>'
+            '<td style="padding:6px;text-align:right;">Ahora</td>'
+            '<td style="padding:6px;text-align:center;">Desc.</td></tr>'
+            f'{filas}</table>'
+        )
+        cuerpo_base = ('<p>¡Tenemos ofertas para ti! 🔥</p>' + tabla +
+                       '<p style="color:#888;font-size:12px;">Ofertas por tiempo limitado.</p>')
+
+        total = len(promos)
+        enviados = 0
+        for c in Cliente.objects.exclude(correo__isnull=True).exclude(correo=''):
+            nombre = f'{c.nombre} {c.apellido}'.strip()
+            html = _email_html(nombre, cuerpo_base, 'Ver ofertas en la tienda', f'{_s.FRONTEND_URL}/store')
+            crear_notificacion(
+                tipo='oferta', titulo='🔥 ¡Nuevas ofertas en Santa Cruz Computer!',
+                mensaje=f'Tenemos {total} producto(s) en oferta. ¡No te lo pierdas!',
+                cliente_id=c.id, enlace='/store',
+                canal='ambos', email=c.correo, html=html,
+            )
+            enviados += 1
+
+        actor = actor_from_request(request)
+        log_action(
+            accion='UPDATE', modulo='Promoción',
+            descripcion=f'Se enviaron las ofertas ({total} vigentes) a {enviados} cliente(s)',
+            **actor,
+        )
+        return Response({'enviados': enviados, 'promociones': total})
