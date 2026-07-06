@@ -1044,13 +1044,22 @@ export function SalesHistory() {
                         </>
                       )}
                       {venta.status === 'completed' && (
-                        <button
-                          onClick={() => window.open(`${API_BASE_URL}/orders/ventas/${venta.id}/pdf/`, '_blank')}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
-                        >
-                          <FileText className="w-4 h-4" />
-                          Descargar Factura
-                        </button>
+                        <>
+                          <button
+                            onClick={() => window.open(`${API_BASE_URL}/orders/ventas/${venta.id}/pdf/`, '_blank')}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
+                          >
+                            <FileText className="w-4 h-4" />
+                            Descargar Factura
+                          </button>
+                          <button
+                            onClick={() => abrirDevolucion(venta as unknown as ApiVenta)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-medium transition-colors"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                            Registrar devolución
+                          </button>
+                        </>
                       )}
                     </div>
                   ) : null}
