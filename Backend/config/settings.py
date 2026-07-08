@@ -178,7 +178,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME':  timedelta(hours=8),
+    'ACCESS_TOKEN_LIFETIME':  timedelta(hours=4),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ALGORITHM': 'HS256',
     'AUTH_HEADER_TYPES': ('Bearer',),
@@ -192,7 +192,10 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+        # Blindaje: por defecto TODO endpoint exige token válido.
+        # Los endpoints públicos (login, registro, recuperar contraseña, stripe,
+        # PDF) declaran AllowAny explícitamente en su vista.
+        'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_PAGINATION_CLASS': 'config.pagination.FlexiblePageNumberPagination',
     'PAGE_SIZE': 20,

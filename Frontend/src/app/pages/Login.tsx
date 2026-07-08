@@ -21,7 +21,7 @@
  * - El código se genera y guarda en memoria del backend (_otps dict)
  * - Funciona tanto para usuarios (tabla usuario) como clientes (tabla cliente)
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { useAudit } from '../context/AuditContext';
@@ -41,6 +41,15 @@ export function Login() {
   const [searchParams] = useSearchParams();
   const { login, register, checkUsernameAvailable } = useAuth();
   const { addEvent } = useAudit();
+
+  // Aviso cuando la sesión se cerró sola (token caducado o 30 min de inactividad).
+  useEffect(() => {
+    if (searchParams.get('expired')) {
+      setError('🔒 Tu sesión expiró por seguridad. Inicia sesión de nuevo.');
+    } else if (searchParams.get('idle')) {
+      setError('🔒 Cerramos tu sesión por inactividad. Inicia sesión de nuevo.');
+    }
+  }, [searchParams]);
 
   // Login state
   const [username, setUsername] = useState('');

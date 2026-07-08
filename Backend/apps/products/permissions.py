@@ -34,3 +34,21 @@ class AdminWriteOrReadOnly(BasePermission):
         if not request.auth:
             return False
         return request.auth.get('role') == 'admin'
+
+
+class AdminWriteStaffRead(BasePermission):
+    """
+    Como AdminWriteOrReadOnly, pero la LECTURA también exige token (no público).
+    Para datos internos que no deben verse sin sesión: proveedores y compras
+    (costos de compra, datos de proveedor).
+      - GET/HEAD/OPTIONS → cualquier usuario autenticado (con token válido).
+      - POST/PUT/PATCH/DELETE → solo role='admin'.
+    """
+    message = 'Acceso restringido: inicia sesión.'
+
+    def has_permission(self, request, view):
+        if not request.auth:
+            return False  # ni siquiera leer sin sesión
+        if request.method in SAFE_METHODS:
+            return True
+        return request.auth.get('role') == 'admin'

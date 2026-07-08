@@ -33,7 +33,7 @@ from .serializers import (
     ProveedorSerializer, CompraSerializer, CompraCreateSerializer,
     PromocionSerializer,
 )
-from .permissions import AdminWriteOrReadOnly
+from .permissions import AdminWriteOrReadOnly, AdminWriteStaffRead
 from apps.audit.utils import log_action, actor_from_request
 
 
@@ -126,12 +126,12 @@ class ProductoViewSet(viewsets.ModelViewSet):
 class ProveedorViewSet(viewsets.ModelViewSet):
     queryset           = Proveedor.objects.all()
     serializer_class   = ProveedorSerializer
-    permission_classes = [AdminWriteOrReadOnly]
+    permission_classes = [AdminWriteStaffRead]  # datos internos: leer requiere sesión
 
 
 class CompraViewSet(viewsets.ModelViewSet):
     queryset           = Compra.objects.prefetch_related('detalles').select_related('proveedor')
-    permission_classes = [AdminWriteOrReadOnly]
+    permission_classes = [AdminWriteStaffRead]  # costos de compra: leer requiere sesión
     filter_backends    = [OrderingFilter]
     ordering_fields    = ['fecha_compra']
     ordering           = ['-fecha_compra']
