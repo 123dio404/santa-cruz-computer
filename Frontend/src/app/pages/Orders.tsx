@@ -17,7 +17,7 @@
  *   reclamo queda registrado para que el vendedor/admin lo atienda en tienda.
  */
 import { useState, useEffect } from 'react';
-import { Package, Eye, X, FileText, ShieldCheck, Star, Wrench } from 'lucide-react';
+import { Package, Eye, X, FileText, ShieldCheck, Star, Wrench, RotateCcw } from 'lucide-react';
 
 const SERV_ESTADO: Record<string, { label: string; cls: string }> = {
   solicitado: { label: 'Solicitado', cls: 'bg-gray-100 text-gray-700' },
@@ -27,7 +27,7 @@ const SERV_ESTADO: Record<string, { label: string; cls: string }> = {
   cancelado:  { label: 'Cancelado',  cls: 'bg-red-100 text-red-600' },
 };
 import { useEscapeKey } from '../hooks/useEscapeKey';
-import { ventasAPI, garantiasAPI, resenasAPI, servicioTecnicoAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia, ApiResena, ApiOrdenServicio } from '../services/api';
+import { ventasAPI, garantiasAPI, resenasAPI, servicioTecnicoAPI, devolucionesAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia, ApiResena, ApiOrdenServicio } from '../services/api';
 import { StarRating } from '../components/StarRating';
 import { useAuth } from '../context/AuthContext';
 
@@ -37,6 +37,7 @@ export function Orders() {
   const [garantias, setGarantias] = useState<ApiGarantia[]>([]);
   const [resenas, setResenas] = useState<ApiResena[]>([]);
   const [servicios, setServicios] = useState<ApiOrdenServicio[]>([]);
+  const [devoluciones, setDevoluciones] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<ApiVenta | null>(null);
 
@@ -58,7 +59,7 @@ export function Orders() {
   const cargarResenas = (clienteId: number) =>
     resenasAPI.getByCliente(clienteId).then(setResenas).catch(() => setResenas([]));
 
-  // Al montar el componente, carga las ventas, garantías y reseñas del cliente
+  // Al montar el componente, carga las ventas, garantías, reseñas y devoluciones del cliente
   useEffect(() => {
     if (!user) return;
     const clienteId = parseInt(user.id);
@@ -67,6 +68,7 @@ export function Orders() {
       cargarGarantias(clienteId),
       cargarResenas(clienteId),
       servicioTecnicoAPI.ordenes({ cliente: clienteId }).then(setServicios).catch(() => setServicios([])),
+      devolucionesAPI.getByCliente(clienteId).then(setDevoluciones).catch(() => setDevoluciones([])),
     ]).finally(() => setLoading(false));
   }, [user]);
 
@@ -105,6 +107,22 @@ export function Orders() {
   const garantiaPorDetalle: Record<number, ApiGarantia> = {};
   garantias.forEach(g => { garantiaPorDetalle[g.detalle] = g; });
 
+  // Mapa: id del detalle (ítem) → devoluciones asociadas (puede haber más de una)
+  const devolucionesPorDetalle: Record<number, any[]> = {};
+  devoluciones.forEach(d => {
+    if (!devolucionesPorDetalle[d.detalle]) devolucionesPorDetalle[d.detalle] = [];
+    devolucionesPorDetalle[d.detalle].push(d);
+  });
+
+  // Devoluciones agrupadas por venta (para el pill de la card principal)
+  const devolucionesPorVenta = (ventaId: number) => devoluciones.filter(d => d.venta === ventaId);
+
+  // Formato del número de comprobante RMA a partir de la fecha + id
+  const nroComprobante = (d: any) => {
+    const anio = new Date(d.fecha).getFullYear();
+    return `RMA-${anio}-${String(d.id).padStart(6, '0')}`;
+  };
+
   // Devuelve una etiqueta visual de color según el estado del pedido
   const getStatusBadge = (status: string) => {
     const map: Record<string, { label: string; color: string }> = {
@@ -133,6 +151,7 @@ export function Orders() {
       reclamada: { label: '🟡 En reclamo', color: 'text-yellow-700' },
       aprobada:  { label: '🔵 Reclamo aprobado', color: 'text-blue-700' },
       rechazada: { label: '🔴 Reclamo rechazado', color: 'text-red-600' },
+      anulada:   { label: '🚫 Garantía anulada', color: 'text-gray-600' },
     };
     const s = map[g.estado_efectivo] ?? { label: g.estado_efectivo, color: 'text-gray-600' };
     return <span className={`text-xs font-semibold ${s.color}`}>{s.label}</span>;
@@ -253,6 +272,23 @@ export function Orders() {
                   ))}
                 </div>
               )}
+
+              {/* Pill de resumen de devoluciones (CU23) — solo si hay alguna en esta venta */}
+              {(() => {
+                const devs = devolucionesPorVenta(order.id);
+                if (devs.length === 0) return null;
+                const aprobadas = devs.filter(d => d.estado === 'aprobada').length;
+                const rechazadas = devs.filter(d => d.estado === 'rechazada').length;
+                const partes: string[] = [];
+                if (aprobadas)  partes.push(`${aprobadas} devolución${aprobadas === 1 ? '' : 'es'} aprobada${aprobadas === 1 ? '' : 's'}`);
+                if (rechazadas) partes.push(`${rechazadas} rechazada${rechazadas === 1 ? '' : 's'}`);
+                return (
+                  <div className="mt-2 flex items-center gap-2 text-xs text-gray-600">
+                    <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                    <span>{partes.join(' · ')}</span>
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </div>
@@ -326,14 +362,57 @@ export function Orders() {
                                     </button>
                                   )}
                                 </div>
-                                {/* Resolución del vendedor/admin */}
-                                {(g.estado === 'aprobada' || g.estado === 'rechazada') && g.resolucion && (
+                                {/* Resolución del vendedor/admin (incluye el motivo de anulación por devolución) */}
+                                {(g.estado === 'aprobada' || g.estado === 'rechazada' || g.estado === 'anulada') && g.resolucion && (
                                   <p className="text-xs text-gray-600 mt-1">
-                                    <span className="font-medium">Respuesta:</span> {g.resolucion}
+                                    <span className="font-medium">Detalle:</span> {g.resolucion}
                                   </p>
                                 )}
                               </div>
                             )}
+
+                            {/* Devoluciones del producto (CU23) */}
+                            {(devolucionesPorDetalle[d.id] || []).map((dev: any) => {
+                              const esAprobada = dev.estado === 'aprobada';
+                              const bg = esAprobada ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200';
+                              const iconColor = esAprobada ? 'text-green-600' : 'text-red-600';
+                              return (
+                                <div key={dev.id} className={`mt-2 pt-2 border-t border-gray-200`}>
+                                  <div className="flex items-center gap-2 text-xs text-gray-600">
+                                    <RotateCcw className={`w-4 h-4 ${iconColor}`} />
+                                    <span>Devolución solicitada</span>
+                                  </div>
+                                  <div className={`mt-1 rounded-lg border ${bg} p-2 text-xs`}>
+                                    {esAprobada ? (
+                                      <>
+                                        <p className="font-semibold text-green-800">
+                                          🟢 Aprobada — Bs {Number(dev.monto_reembolso).toFixed(2)}
+                                          {dev.cantidad > 1 && ` (${dev.cantidad} unidades)`}
+                                        </p>
+                                        <p className="mt-1 text-gray-700">
+                                          📄 <span className="font-medium">Comprobante:</span> {nroComprobante(dev)}
+                                        </p>
+                                        <p className="mt-1 text-gray-600">
+                                          Presenta este comprobante y tu factura en tienda para el reembolso.
+                                        </p>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <p className="font-semibold text-red-700">🔴 Rechazada</p>
+                                        <p className="mt-1 text-gray-700">
+                                          📄 <span className="font-medium">Comprobante:</span> {nroComprobante(dev)}
+                                        </p>
+                                        {dev.motivo_rechazo && (
+                                          <p className="mt-1 text-gray-700">
+                                            <span className="font-medium">Motivo del rechazo:</span> {dev.motivo_rechazo}
+                                          </p>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       );

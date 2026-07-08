@@ -94,7 +94,7 @@ export function SalesHistory() {
   const [devDetalleId, setDevDetalleId]         = useState<number | ''>('');
   const [devCantidad, setDevCantidad]           = useState(1);
   const [devMotivo, setDevMotivo]               = useState('');
-  const [devInsp, setDevInsp]                   = useState({ sinDano: false, mismo: false, completo: false });
+  const [devInsp, setDevInsp]                   = useState({ sinDano: false, sinManipulacion: false, mismo: false, completo: false });
   const [devMotivoRechazo, setDevMotivoRechazo] = useState('');
   const [devLoading, setDevLoading]             = useState(false);
   const [devMsg, setDevMsg]                     = useState<{ ok: boolean; text: string } | null>(null);
@@ -179,7 +179,7 @@ export function SalesHistory() {
     setDevDetalleId(pendientes.length === 1 ? pendientes[0].id : '');
     setDevCantidad(1);
     setDevMotivo('');
-    setDevInsp({ sinDano: false, mismo: false, completo: false });
+    setDevInsp({ sinDano: false, sinManipulacion: false, mismo: false, completo: false });
     setDevMotivoRechazo('');
     setDevMsg(null);
   };
@@ -187,9 +187,10 @@ export function SalesHistory() {
   const submitDevolucion = async (aprobar: boolean) => {
     if (!devDetalleId) { setDevMsg({ ok: false, text: 'Elige el producto a devolver.' }); return; }
     if (!devMotivo.trim()) { setDevMsg({ ok: false, text: 'Indica el motivo de la devolución.' }); return; }
-    // Para APROBAR es obligatorio confirmar la inspección física (responsabilidad del trabajador)
-    if (aprobar && !(devInsp.sinDano && devInsp.mismo && devInsp.completo)) {
-      setDevMsg({ ok: false, text: 'Para APROBAR debes confirmar los 3 puntos de la inspección física.' });
+    // Para APROBAR es obligatorio confirmar los 4 puntos de la inspección física
+    const todosOK = devInsp.sinDano && devInsp.sinManipulacion && devInsp.mismo && devInsp.completo;
+    if (aprobar && !todosOK) {
+      setDevMsg({ ok: false, text: 'Para APROBAR debes confirmar los 4 puntos de la inspección física.' });
       return;
     }
     if (!aprobar && !devMotivoRechazo.trim()) { setDevMsg({ ok: false, text: 'Indica el motivo del rechazo.' }); return; }
@@ -199,6 +200,10 @@ export function SalesHistory() {
       await devolucionesAPI.crear({
         detalle: Number(devDetalleId), cantidad: devCantidad, motivo: devMotivo.trim(),
         aprobar, motivo_rechazo: aprobar ? undefined : devMotivoRechazo.trim(),
+        insp_sin_dano: devInsp.sinDano,
+        insp_sin_manipulacion: devInsp.sinManipulacion,
+        insp_mismo_producto: devInsp.mismo,
+        insp_completo: devInsp.completo,
       });
       setDevMsg({ ok: true, text: aprobar ? '✅ Devolución aprobada. Stock reingresado.' : 'Devolución rechazada registrada.' });
       await cargarHistorial();
@@ -1285,7 +1290,11 @@ export function SalesHistory() {
                 <p className="text-xs font-semibold text-gray-600 uppercase mb-2">Inspección física</p>
                 <label className="flex items-center gap-2 text-sm mb-1">
                   <input type="checkbox" checked={devInsp.sinDano} onChange={e => setDevInsp({ ...devInsp, sinDano: e.target.checked })} />
-                  Sin daño ni manipulación
+                  Sin daño
+                </label>
+                <label className="flex items-center gap-2 text-sm mb-1">
+                  <input type="checkbox" checked={devInsp.sinManipulacion} onChange={e => setDevInsp({ ...devInsp, sinManipulacion: e.target.checked })} />
+                  Sin manipulación
                 </label>
                 <label className="flex items-center gap-2 text-sm mb-1">
                   <input type="checkbox" checked={devInsp.mismo} onChange={e => setDevInsp({ ...devInsp, mismo: e.target.checked })} />
@@ -1295,11 +1304,23 @@ export function SalesHistory() {
                   <input type="checkbox" checked={devInsp.completo} onChange={e => setDevInsp({ ...devInsp, completo: e.target.checked })} />
                   Completo (accesorios / empaque)
                 </label>
-                <p className={`text-xs mt-2 ${(devInsp.sinDano && devInsp.mismo && devInsp.completo) ? 'text-green-600' : 'text-amber-600'}`}>
-                  {(devInsp.sinDano && devInsp.mismo && devInsp.completo)
-                    ? '✓ Inspección confirmada — puedes aprobar.'
-                    : 'Marca los 3 puntos para poder aprobar (deja constancia de que verificaste).'}
-                </p>
+                {(() => {
+                  const todosOK = devInsp.sinDano && devInsp.sinManipulacion && devInsp.mismo && devInsp.completo;
+                  return (
+                    <p className={`text-xs mt-2 ${todosOK ? 'text-green-600' : 'text-amber-600'}`}>
+                      {todosOK
+                        ? '✓ Inspección confirmada — puedes aprobar.'
+                        : 'Marca los 4 puntos para poder aprobar (deja constancia de que verificaste).'}
+                    </p>
+                  );
+                })()}
+                {/* Aviso si el vendedor está por rechazar por daño o manipulación */}
+                {(!devInsp.sinDano || !devInsp.sinManipulacion) && (
+                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+                    ⚠️ Si rechazas con <strong>daño</strong> o <strong>manipulación</strong> sin marcar,
+                    la garantía del producto se anulará automáticamente.
+                  </div>
+                )}
               </div>
 
               <div>
@@ -1317,13 +1338,18 @@ export function SalesHistory() {
             </div>
 
             <div className="flex gap-2 p-4 border-t border-gray-200">
-              <button
-                disabled={devLoading || !(devInsp.sinDano && devInsp.mismo && devInsp.completo)}
-                onClick={() => submitDevolucion(true)}
-                title={!(devInsp.sinDano && devInsp.mismo && devInsp.completo) ? 'Confirma los 3 puntos de la inspección física para aprobar' : ''}
-                className="flex-1 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed">
-                {devLoading ? 'Guardando...' : 'Aprobar'}
-              </button>
+              {(() => {
+                const todosOK = devInsp.sinDano && devInsp.sinManipulacion && devInsp.mismo && devInsp.completo;
+                return (
+                  <button
+                    disabled={devLoading || !todosOK}
+                    onClick={() => submitDevolucion(true)}
+                    title={!todosOK ? 'Confirma los 4 puntos de la inspección física para aprobar' : ''}
+                    className="flex-1 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+                    {devLoading ? 'Guardando...' : 'Aprobar'}
+                  </button>
+                );
+              })()}
               <button disabled={devLoading} onClick={() => submitDevolucion(false)}
                 className="flex-1 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium disabled:opacity-50">
                 Rechazar

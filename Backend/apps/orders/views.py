@@ -723,9 +723,12 @@ class DevolucionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        venta_id = self.request.query_params.get('venta')
+        venta_id   = self.request.query_params.get('venta')
+        cliente_id = self.request.query_params.get('cliente')
         if venta_id:
             qs = qs.filter(venta_id=venta_id)
+        if cliente_id:
+            qs = qs.filter(cliente_id=cliente_id)
         return qs
 
     def create(self, request, *args, **kwargs):
@@ -741,6 +744,11 @@ class DevolucionViewSet(viewsets.ModelViewSet):
         motivo         = (request.data.get('motivo') or '').strip()
         aprobar        = bool(request.data.get('aprobar', True))
         motivo_rechazo = (request.data.get('motivo_rechazo') or '').strip() or None
+        # Checklist de inspección física (los 4 puntos que verifica el vendedor)
+        insp_sin_dano         = bool(request.data.get('insp_sin_dano', False))
+        insp_sin_manipulacion = bool(request.data.get('insp_sin_manipulacion', False))
+        insp_mismo_producto   = bool(request.data.get('insp_mismo_producto', False))
+        insp_completo         = bool(request.data.get('insp_completo', False))
 
         if cantidad < 1:
             return Response({'error': 'La cantidad debe ser al menos 1.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -795,10 +803,35 @@ class DevolucionViewSet(viewsets.ModelViewSet):
                 cliente_id=venta.cliente_id, cantidad=cantidad, motivo=motivo,
                 estado=estado, motivo_rechazo=motivo_rechazo, monto_reembolso=monto,
                 usuario_id=usuario_id,
+                insp_sin_dano=insp_sin_dano, insp_sin_manipulacion=insp_sin_manipulacion,
+                insp_mismo_producto=insp_mismo_producto, insp_completo=insp_completo,
             )
-            # Al APROBAR: anular la garantía de ese ítem (el producto vuelve a la tienda)
+            # Anulación de garantía:
+            # - Al APROBAR: siempre (el producto vuelve a la tienda).
+            # - Al RECHAZAR: solo si la inspección detectó daño o manipulación
+            #   (el cliente rompió/abrió el producto → no tiene derecho a garantía).
+            #   Los otros motivos de rechazo (no es el mismo producto, incompleto,
+            #   fuera de plazo) NO anulan la garantía.
+            anular_garantia = False
+            resolucion_garantia = None
             if aprobar:
-                Garantia.objects.filter(detalle_id=detalle.id).exclude(estado='anulada').update(estado='anulada')
+                anular_garantia = True
+                resolucion_garantia = f'Garantía anulada por devolución aprobada (RMA-{timezone.now().year}-{dev.id:06d}).'
+            else:
+                if not insp_sin_dano and not insp_sin_manipulacion:
+                    anular_garantia = True
+                    resolucion_garantia = 'Garantía anulada por daño y manipulación detectados en la inspección física.'
+                elif not insp_sin_dano:
+                    anular_garantia = True
+                    resolucion_garantia = 'Garantía anulada por daño detectado en la inspección física.'
+                elif not insp_sin_manipulacion:
+                    anular_garantia = True
+                    resolucion_garantia = 'Garantía anulada por manipulación detectada en la inspección física.'
+            if anular_garantia:
+                Garantia.objects.filter(detalle_id=detalle.id).exclude(estado='anulada').update(
+                    estado='anulada', resolucion=resolucion_garantia,
+                    fecha_resolucion=timezone.now(),
+                )
         except Exception as e:
             return Response({'error': f'No se pudo registrar la devolución: {e}'},
                             status=status.HTTP_400_BAD_REQUEST)

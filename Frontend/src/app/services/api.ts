@@ -943,9 +943,15 @@ export const devolucionesAPI = {
     const r = await apiFetch(`${API_BASE_URL}/orders/devoluciones/${q}`, { headers: authHeaders() });
     return handlePaginated(r);
   },
+  getByCliente: async (clienteId: number): Promise<any[]> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/devoluciones/?cliente=${clienteId}`, { headers: authHeaders() });
+    return handlePaginated(r);
+  },
   crear: async (data: {
     detalle: number; cantidad: number; motivo: string;
     aprobar: boolean; motivo_rechazo?: string;
+    insp_sin_dano?: boolean; insp_sin_manipulacion?: boolean;
+    insp_mismo_producto?: boolean; insp_completo?: boolean;
   }): Promise<any> => {
     const r = await apiFetch(`${API_BASE_URL}/orders/devoluciones/`, {
       method: 'POST',
