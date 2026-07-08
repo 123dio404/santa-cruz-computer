@@ -304,6 +304,12 @@ class Devolucion(models.Model):
         db_column='idusuario', related_name='devoluciones_registradas',
     )
     fecha           = models.DateTimeField(auto_now_add=True)
+    # Checklist de inspección física (011_devolucion_inspeccion.sql). Sirve para
+    # decidir si el rechazo también anula la garantía (por daño o manipulación).
+    insp_sin_dano         = models.BooleanField(default=False, db_column='insp_sin_dano')
+    insp_sin_manipulacion = models.BooleanField(default=False, db_column='insp_sin_manipulacion')
+    insp_mismo_producto   = models.BooleanField(default=False, db_column='insp_mismo_producto')
+    insp_completo         = models.BooleanField(default=False, db_column='insp_completo')
 
     class Meta:
         managed             = False

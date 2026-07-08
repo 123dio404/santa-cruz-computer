@@ -162,7 +162,8 @@ class DevolucionSerializer(serializers.ModelSerializer):
         model  = Devolucion
         fields = ['id', 'venta', 'detalle', 'producto', 'producto_nombre',
                   'cliente', 'cliente_nombre', 'cantidad', 'motivo', 'estado',
-                  'motivo_rechazo', 'monto_reembolso', 'usuario', 'usuario_nombre', 'fecha']
+                  'motivo_rechazo', 'monto_reembolso', 'usuario', 'usuario_nombre', 'fecha',
+                  'insp_sin_dano', 'insp_sin_manipulacion', 'insp_mismo_producto', 'insp_completo']
 
     def get_producto_nombre(self, obj):
         return obj.producto.nombre if obj.producto else '—'
