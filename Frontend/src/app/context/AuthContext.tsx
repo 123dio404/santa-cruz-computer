@@ -17,12 +17,33 @@
  * - client: Cliente - Acceso solo a la tienda y sus pedidos
  */
 
-import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import { createContext, useContext, useState, ReactNode, useEffect, useRef } from 'react';
 import { validatePassword } from '../utils/passwordValidation';
 import { authAPI, clearAuthToken, clientesAPI } from '../services/api';
 
 // Clave usada para guardar el usuario en localStorage
 const STORAGE_KEY = 'user';
+
+// Corte de sesión por inactividad: 30 minutos sin interacción → logout automático.
+const IDLE_LIMIT_MS = 30 * 60 * 1000;
+
+/**
+ * Lee el 'exp' (caducidad) del JWT guardado y lo devuelve en milisegundos.
+ * Devuelve null si no hay token o no se puede leer. Sirve para cerrar la sesión
+ * en el frontend cuando el token ya expiró (antes solo se cerraba con logout manual,
+ * por eso la sesión "duraba días" aunque el token ya estuviera muerto).
+ */
+const getTokenExpiryMs = (): number | null => {
+  try {
+    const token = localStorage.getItem('access_token');
+    if (!token) return null;
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(b64));
+    return payload?.exp ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+};
 
 // ============ TIPOS Y INTERFACES ============
 
@@ -159,6 +180,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Rastreador de intentos fallidos (keyed by email, espeja los bloqueos del backend)
   const [loginAttempts, setLoginAttempts] = useState<Map<string, LoginAttempt>>(new Map());
 
+  // Marca de la última actividad del usuario (para el corte por inactividad)
+  const lastActivityRef = useRef<number>(Date.now());
+
   // Sincronizar usuario con localStorage
   useEffect(() => {
     if (user) {
@@ -167,6 +191,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem(STORAGE_KEY);
       clearAuthToken();
     }
+  }, [user]);
+
+  /**
+   * Cierra la sesión por caducidad/inactividad y manda al login con el motivo.
+   * (Distinto de logout(): no llama al backend, es un cierre local por seguridad.)
+   */
+  const endSession = (reason: 'expired' | 'idle') => {
+    clearAuthToken();
+    localStorage.removeItem(STORAGE_KEY);
+    setUser(null);
+    if (!window.location.pathname.startsWith('/login')) {
+      window.location.href = `/login?${reason}=1`;
+    }
+  };
+
+  /**
+   * Vigilancia de la sesión (solo con usuario logueado):
+   *  1) Si el token JWT ya caducó (exp) → cerrar sesión. Esto ataja la "sesión de
+   *     días": aunque el usuario quede en localStorage, el token vive 4 h.
+   *  2) Si pasan 30 min sin interacción → cerrar sesión por inactividad.
+   * Se revisa cada 15 s y ante cada actividad se reinicia el contador de inactividad.
+   */
+  useEffect(() => {
+    if (!user) return;
+
+    const markActivity = () => { lastActivityRef.current = Date.now(); };
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    events.forEach(e => window.addEventListener(e, markActivity, { passive: true }));
+
+    const check = () => {
+      // Sin token pero con usuario → estado inconsistente: cerrar.
+      if (!localStorage.getItem('access_token')) { endSession('expired'); return; }
+      // 1) Token caducado
+      const exp = getTokenExpiryMs();
+      if (exp !== null && Date.now() >= exp) { endSession('expired'); return; }
+      // 2) Inactividad
+      if (Date.now() - lastActivityRef.current >= IDLE_LIMIT_MS) { endSession('idle'); }
+    };
+
+    lastActivityRef.current = Date.now();
+    check(); // chequeo inmediato al cargar la app (token viejo → fuera)
+    const id = window.setInterval(check, 15000);
+
+    return () => {
+      events.forEach(e => window.removeEventListener(e, markActivity));
+      window.clearInterval(id);
+    };
   }, [user]);
 
   /**

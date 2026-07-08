@@ -45,6 +45,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import Usuario, Cliente, Notificacion
 from .serializers import UsuarioSerializer, ClienteSerializer, NotificacionSerializer
+from .permissions import IsAdmin, IsAuthenticatedJWT, PublicCreateElseAuthenticated
 from apps.audit.utils import log_action, actor_from_request
 from utils import get_client_ip
 
@@ -232,7 +233,7 @@ class LogoutView(APIView):
 class UsuarioViewSet(viewsets.ModelViewSet):
     queryset = Usuario.objects.all()
     serializer_class = UsuarioSerializer
-    permission_classes = []
+    permission_classes = [IsAdmin]  # gestión de usuarios del sistema: solo admin
 
     def perform_create(self, serializer):
         super().perform_create(serializer)
@@ -310,7 +311,7 @@ class ClienteViewSet(viewsets.ModelViewSet):
     """
     queryset           = Cliente.objects.all()
     serializer_class   = ClienteSerializer
-    permission_classes = []
+    permission_classes = [PublicCreateElseAuthenticated]  # registro público; resto con token
 
     def _actor_cliente(self):
         """Actor dict safe for bitacora: never passes a cliente PK as idusuario (FK violation)."""
@@ -377,7 +378,7 @@ class ClienteViewSet(viewsets.ModelViewSet):
 
 class BlockedAccountsView(APIView):
     """GET /api/v1/users/blocked-accounts/ — lista de cuentas con intentos fallidos."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsAdmin]
 
     def get(self, request):
         result = []
@@ -402,7 +403,7 @@ class BlockedAccountsView(APIView):
 
 class UnblockAccountView(APIView):
     """POST /api/v1/users/unblock-account/ — desbloquear una cuenta."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsAdmin]
 
     def post(self, request):
         username = request.data.get('username', '').strip()
@@ -424,7 +425,7 @@ class ChangePasswordView(APIView):
     Body: {"current_password": "...", "new_password": "..."}
     Requires a valid JWT. Works for usuario (admin/employee) and cliente.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticatedJWT]
 
     def post(self, request):
         from django.db import connection
@@ -643,7 +644,7 @@ class NotificacionesView(APIView):
     Devuelve las notificaciones del usuario autenticado (según el JWT) y el
     contador de no leídas. Cliente -> filtra por idcliente; interno -> idusuario.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticatedJWT]
 
     def get(self, request):
         if not request.auth:
@@ -665,7 +666,7 @@ class NotificacionLeerView(APIView):
     Body: {"id": 5}       -> marca esa notificación como leída
           {"todas": true} -> marca TODAS las del usuario como leídas
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticatedJWT]
 
     def post(self, request):
         if not request.auth:

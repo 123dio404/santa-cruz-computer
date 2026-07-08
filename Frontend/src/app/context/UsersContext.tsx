@@ -32,8 +32,12 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   const [allUsers, setAllUsers] = useState<ApiUser[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Carga todos los usuarios del backend al iniciar la app
+  // Carga todos los usuarios del backend. El endpoint /users/ está blindado a
+  // rol admin, así que solo el admin lo pide; para otros roles se omite (evita 403).
   const fetchUsers = async () => {
+    let role = '';
+    try { role = (JSON.parse(localStorage.getItem('user') || '{}')?.role) || ''; } catch { /* sin sesión */ }
+    if (role !== 'admin') { setAllUsers([]); setLoading(false); return; }
     setLoading(true);
     try {
       setAllUsers(await usuariosAPI.getAll());

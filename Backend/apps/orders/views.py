@@ -23,8 +23,10 @@ AUDITORÍA:
   Cada venta creada y cada entrega confirmada registra un evento en la bitácora.
 
 PERMISOS:
-  permission_classes = [] → Sin restricción de permisos (cualquier usuario autenticado
-  puede operar). El control de acceso se hace a nivel de negocio en el frontend.
+  permission_classes = [IsAuthenticatedJWT] → requiere un JWT válido (haber iniciado
+  sesión). Nadie sin token puede leer ni operar sobre ventas, pagos, garantías,
+  reseñas, devoluciones, servicios ni créditos. El detalle por rol/objeto se afina
+  en el frontend y (a futuro) con filtrado por objeto.
 """
 import io
 from django.http import HttpResponse, Http404
@@ -51,6 +53,7 @@ from .serializers import (
     PlanCreditoSerializer, CuotaSerializer,
 )
 from apps.audit.utils import log_action, actor_from_request
+from apps.users.permissions import IsAuthenticatedJWT
 from utils import get_client_ip
 
 
@@ -303,7 +306,7 @@ class VentaViewSet(viewsets.ModelViewSet):
     """CRUD de ventas. POST usa VentaCreateSerializer; GET usa VentaSerializer."""
     queryset          = Venta.objects.prefetch_related('detalles', 'detalles__producto', 'pagos').select_related('cliente', 'usuario')
     serializer_class  = VentaSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     filter_backends   = [OrderingFilter]
     ordering_fields   = ['fecha_venta', 'monto_total']
     ordering          = ['-fecha_venta']
@@ -429,7 +432,7 @@ class VentaViewSet(viewsets.ModelViewSet):
 class PagoVentaViewSet(viewsets.ModelViewSet):
     queryset           = PagoVenta.objects.all()
     serializer_class   = PagoVentaSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     filter_backends    = [OrderingFilter]
     ordering_fields    = ['fecha']
     ordering           = ['-fecha']
@@ -438,7 +441,7 @@ class PagoVentaViewSet(viewsets.ModelViewSet):
 class DetalleVentaViewSet(viewsets.ReadOnlyModelViewSet):
     queryset           = DetalleVenta.objects.all()
     serializer_class   = DetalleVentaSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     filter_backends    = []
 
 
@@ -455,7 +458,7 @@ class GarantiaViewSet(viewsets.ModelViewSet):
     """
     queryset           = Garantia.objects.select_related('producto', 'cliente', 'venta', 'detalle')
     serializer_class   = GarantiaSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     http_method_names  = ['get', 'patch', 'post', 'head', 'options']
     filter_backends    = [OrderingFilter]
     ordering_fields    = ['id', 'fecha_fin', 'fecha_reclamo']
@@ -603,7 +606,7 @@ class ResenaViewSet(viewsets.ModelViewSet):
     """
     queryset           = Resena.objects.select_related('cliente', 'venta')
     serializer_class   = ResenaSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     http_method_names  = ['get', 'post', 'patch', 'head', 'options']
     filter_backends    = [OrderingFilter]
     ordering_fields    = ['id', 'fecha', 'puntuacion']
@@ -710,7 +713,7 @@ class DevolucionViewSet(viewsets.ModelViewSet):
     """
     queryset           = Devolucion.objects.select_related('producto', 'cliente', 'usuario', 'venta')
     serializer_class   = DevolucionSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     http_method_names  = ['get', 'post', 'head', 'options']
     filter_backends    = [OrderingFilter]
     ordering_fields    = ['id', 'fecha']
@@ -808,7 +811,7 @@ class ServicioCatalogoViewSet(viewsets.ReadOnlyModelViewSet):
     """Catálogo de servicios técnicos (solo lectura, para el formulario del técnico)."""
     queryset           = ServicioCatalogo.objects.filter(activo=True)
     serializer_class   = ServicioCatalogoSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     filter_backends    = []
 
 
@@ -840,7 +843,7 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
     """
     queryset           = OrdenServicio.objects.select_related('cliente', 'tecnico', 'garantia').prefetch_related('detalles__servicio', 'tareas')
     serializer_class   = OrdenServicioSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     http_method_names  = ['get', 'post', 'patch', 'head', 'options']
     filter_backends    = [OrderingFilter]
     ordering_fields    = ['id', 'fecha_solicitud']
@@ -1129,7 +1132,7 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
     """
     queryset           = PlanCredito.objects.select_related('cliente', 'producto', 'usuario').prefetch_related('cuotas')
     serializer_class   = PlanCreditoSerializer
-    permission_classes = []
+    permission_classes = [IsAuthenticatedJWT]
     http_method_names  = ['get', 'post', 'patch', 'head', 'options']
     filter_backends    = [OrderingFilter]
     ordering_fields    = ['id', 'fecha']

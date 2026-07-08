@@ -45,6 +45,31 @@ const authHeaders = (): Record<string, string> => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
+// ── Wrapper de fetch: token automático + manejo de 401 ────────────────────────
+// Inyecta el header Authorization en TODAS las llamadas (aunque el sitio no lo
+// haya puesto), de modo que al blindar el backend ninguna lectura quede sin token.
+// Si el backend responde 401 (token ausente / inválido / expirado) limpiamos la
+// sesión y mandamos al login. Se excluye /users/login (un 401 ahí = credencial mala,
+// no sesión expirada). El 403 (rol sin permiso) NO cierra sesión: solo falla la acción.
+let sessionExpiredHandled = false;
+const apiFetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
+  const token = getToken();
+  const headers = new Headers(init.headers as HeadersInit | undefined);
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  const res = await window.fetch(url, { ...init, headers });
+  if (res.status === 401 && token && !url.includes('/users/login')) {
+    if (!sessionExpiredHandled) {
+      sessionExpiredHandled = true;
+      clearAuthToken();
+      localStorage.removeItem('user');
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login?expired=1';
+      }
+    }
+  }
+  return res;
+};
+
 // ── Helpers de Respuesta HTTP ─────────────────────────────────────────────────
 
 // handlePaginated: para listas paginadas del backend (devuelve el array de resultados)
@@ -78,7 +103,7 @@ export const authAPI = {
   login: async (username: string, password?: string): Promise<any> => {
     const body: Record<string, string> = { username };
     if (password) body.password = password;
-    const response = await fetch(`${API_BASE_URL}/users/login/`, {
+    const response = await apiFetch(`${API_BASE_URL}/users/login/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -89,7 +114,7 @@ export const authAPI = {
   },
 
   forgotPassword: async (identifier: string): Promise<{ message: string }> => {
-    const r = await fetch(`${API_BASE_URL}/users/forgot-password/`, {
+    const r = await apiFetch(`${API_BASE_URL}/users/forgot-password/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier }),
@@ -98,7 +123,7 @@ export const authAPI = {
   },
 
   resetPassword: async (identifier: string, code: string, new_password: string): Promise<{ message: string }> => {
-    const r = await fetch(`${API_BASE_URL}/users/reset-password/`, {
+    const r = await apiFetch(`${API_BASE_URL}/users/reset-password/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier, code, new_password }),
@@ -107,13 +132,13 @@ export const authAPI = {
   },
 
   checkEmail: async (email: string): Promise<{ available: boolean }> => {
-    const r = await fetch(`${API_BASE_URL}/users/check-email/?email=${encodeURIComponent(email)}`);
+    const r = await apiFetch(`${API_BASE_URL}/users/check-email/?email=${encodeURIComponent(email)}`);
     return handleJson(r);
   },
 
   logout: async (userData?: { usuario_id: number; usuario_nombre: string; usuario_rol: string }): Promise<void> => {
     const token = localStorage.getItem('access_token');
-    await fetch(`${API_BASE_URL}/users/logout/`, {
+    await apiFetch(`${API_BASE_URL}/users/logout/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(userData ?? {}),
@@ -121,14 +146,14 @@ export const authAPI = {
   },
 
   blockedAccounts: async (): Promise<{ username: string; failed_attempts: number; estado: string }[]> => {
-    const r = await fetch(`${API_BASE_URL}/users/blocked-accounts/`, {
+    const r = await apiFetch(`${API_BASE_URL}/users/blocked-accounts/`, {
       headers: authHeaders(),
     });
     return handleJson(r);
   },
 
   unblockAccount: async (username: string): Promise<{ message: string }> => {
-    const r = await fetch(`${API_BASE_URL}/users/unblock-account/`, {
+    const r = await apiFetch(`${API_BASE_URL}/users/unblock-account/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ username }),
@@ -137,7 +162,7 @@ export const authAPI = {
   },
 
   changePassword: async (current_password: string, new_password: string): Promise<{ message: string }> => {
-    const r = await fetch(`${API_BASE_URL}/users/change-password/`, {
+    const r = await apiFetch(`${API_BASE_URL}/users/change-password/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ current_password, new_password }),
@@ -285,15 +310,15 @@ export interface ApiCliente {
 // ============ CLIENTES ============
 export const clientesAPI = {
   getAll: async (): Promise<ApiCliente[]> => {
-    const r = await fetch(`${API_BASE_URL}/users/clientes/?page_size=1000`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/users/clientes/?page_size=1000`, { headers: authHeaders() });
     return handlePaginated(r);
   },
   getById: async (id: number): Promise<ApiCliente> => {
-    const r = await fetch(`${API_BASE_URL}/users/clientes/${id}/`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/users/clientes/${id}/`, { headers: authHeaders() });
     return handleJson(r);
   },
   create: async (data: Partial<ApiCliente>): Promise<ApiCliente> => {
-    const r = await fetch(`${API_BASE_URL}/users/clientes/`, {
+    const r = await apiFetch(`${API_BASE_URL}/users/clientes/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -301,7 +326,7 @@ export const clientesAPI = {
     return handleJson(r);
   },
   update: async (id: number, data: Partial<ApiCliente>): Promise<ApiCliente> => {
-    const r = await fetch(`${API_BASE_URL}/users/clientes/${id}/`, {
+    const r = await apiFetch(`${API_BASE_URL}/users/clientes/${id}/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -309,7 +334,7 @@ export const clientesAPI = {
     return handleJson(r);
   },
   delete: async (id: number): Promise<void> => {
-    const r = await fetch(`${API_BASE_URL}/users/clientes/${id}/`, {
+    const r = await apiFetch(`${API_BASE_URL}/users/clientes/${id}/`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
@@ -322,19 +347,19 @@ const USERS_URL = `${API_BASE_URL}/users`;
 
 export const usuariosAPI = {
   getAll: async (): Promise<ApiUser[]> => {
-    const r = await fetch(`${USERS_URL}/?page_size=1000`);
+    const r = await apiFetch(`${USERS_URL}/?page_size=1000`);
     return handlePaginated(r);
   },
   getById: async (id: number): Promise<ApiUser> => {
-    const r = await fetch(`${USERS_URL}/${id}/`);
+    const r = await apiFetch(`${USERS_URL}/${id}/`);
     return handleJson(r);
   },
   getByRole: async (role: string): Promise<ApiUser[]> => {
-    const r = await fetch(`${USERS_URL}/by_role/?role=${role}`);
+    const r = await apiFetch(`${USERS_URL}/by_role/?role=${role}`);
     return handlePaginated(r);
   },
   create: async (data: Partial<ApiUser>): Promise<ApiUser> => {
-    const r = await fetch(`${USERS_URL}/`, {
+    const r = await apiFetch(`${USERS_URL}/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -342,7 +367,7 @@ export const usuariosAPI = {
     return handleJson(r);
   },
   update: async (id: number, data: Partial<ApiUser>): Promise<ApiUser> => {
-    const r = await fetch(`${USERS_URL}/${id}/`, {
+    const r = await apiFetch(`${USERS_URL}/${id}/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -350,7 +375,7 @@ export const usuariosAPI = {
     return handleJson(r);
   },
   updateRole: async (id: number, role: string): Promise<ApiUser> => {
-    const r = await fetch(`${USERS_URL}/${id}/update_role/`, {
+    const r = await apiFetch(`${USERS_URL}/${id}/update_role/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ role }),
@@ -358,7 +383,7 @@ export const usuariosAPI = {
     return handleJson(r);
   },
   delete: async (id: number): Promise<void> => {
-    const r = await fetch(`${USERS_URL}/${id}/`, { method: 'DELETE' });
+    const r = await apiFetch(`${USERS_URL}/${id}/`, { method: 'DELETE' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
   },
 };
@@ -366,11 +391,11 @@ export const usuariosAPI = {
 // ============ CATEGORÍAS ============
 export const categoriasAPI = {
   getAll: async (): Promise<ApiCategoria[]> => {
-    const r = await fetch(`${API_BASE_URL}/products/categorias/?page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/products/categorias/?page_size=1000`);
     return handlePaginated(r);
   },
   create: async (nombre: string): Promise<ApiCategoria> => {
-    const r = await fetch(`${API_BASE_URL}/products/categorias/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/categorias/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ nombre }),
@@ -378,7 +403,7 @@ export const categoriasAPI = {
     return handleJson(r);
   },
   update: async (id: number, nombre: string): Promise<ApiCategoria> => {
-    const r = await fetch(`${API_BASE_URL}/products/categorias/${id}/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/categorias/${id}/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ nombre }),
@@ -386,7 +411,7 @@ export const categoriasAPI = {
     return handleJson(r);
   },
   delete: async (id: number): Promise<void> => {
-    const r = await fetch(`${API_BASE_URL}/products/categorias/${id}/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/categorias/${id}/`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
@@ -417,29 +442,29 @@ const buildProductBody = (
 // ============ PRODUCTOS ============
 export const productosAPI = {
   getAll: async (): Promise<ApiProduct[]> => {
-    const r = await fetch(`${API_BASE_URL}/products/?page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/products/?page_size=1000`);
     return handlePaginated(r);
   },
   getById: async (id: number): Promise<ApiProduct> => {
-    const r = await fetch(`${API_BASE_URL}/products/${id}/`);
+    const r = await apiFetch(`${API_BASE_URL}/products/${id}/`);
     return handleJson(r);
   },
   getLowStock: async (): Promise<ApiProduct[]> => {
-    const r = await fetch(`${API_BASE_URL}/products/low_stock/`);
+    const r = await apiFetch(`${API_BASE_URL}/products/low_stock/`);
     return handlePaginated(r);
   },
   create: async (data: Record<string, any>, imageFile?: File | null): Promise<ApiProduct> => {
     const { body, headers } = buildProductBody(data, imageFile);
-    const r = await fetch(`${API_BASE_URL}/products/`, { method: 'POST', headers, body });
+    const r = await apiFetch(`${API_BASE_URL}/products/`, { method: 'POST', headers, body });
     return handleJson(r);
   },
   update: async (id: number, data: Record<string, any>, imageFile?: File | null): Promise<ApiProduct> => {
     const { body, headers } = buildProductBody(data, imageFile);
-    const r = await fetch(`${API_BASE_URL}/products/${id}/`, { method: 'PATCH', headers, body });
+    const r = await apiFetch(`${API_BASE_URL}/products/${id}/`, { method: 'PATCH', headers, body });
     return handleJson(r);
   },
   adjustStock: async (id: number, newStock: number): Promise<ApiProduct> => {
-    const r = await fetch(`${API_BASE_URL}/products/${id}/adjust_stock/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/${id}/adjust_stock/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ stock: newStock }),
@@ -447,7 +472,7 @@ export const productosAPI = {
     return handleJson(r);
   },
   delete: async (id: number): Promise<void> => {
-    const r = await fetch(`${API_BASE_URL}/products/${id}/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/${id}/`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
@@ -474,7 +499,7 @@ export interface ApiBitacora {
 // ============ BITÁCORA ============
 export const bitacoraAPI = {
   getAll: async (): Promise<ApiBitacora[]> => {
-    const r = await fetch(`${API_BASE_URL}/audit/`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/audit/`, { headers: authHeaders() });
     return handlePaginated(r);
   },
 };
@@ -482,27 +507,27 @@ export const bitacoraAPI = {
 // ============ VENTAS ============
 export const ventasAPI = {
   getAll: async (): Promise<ApiVenta[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/?page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/?page_size=1000`);
     return handlePaginated(r);
   },
   getById: async (id: number): Promise<ApiVenta> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/${id}/`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/${id}/`);
     return handleJson(r);
   },
   getByCliente: async (clienteId: number): Promise<ApiVenta[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/?cliente=${clienteId}&page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/?cliente=${clienteId}&page_size=1000`);
     return handlePaginated(r);
   },
   getByVendedor: async (vendedorId: number): Promise<ApiVenta[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/by_vendedor/?vendedor_id=${vendedorId}`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/by_vendedor/?vendedor_id=${vendedorId}`);
     return handlePaginated(r);
   },
   getHistorialByVendedor: async (vendedorId: number): Promise<any> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/historial/?vendedor_id=${vendedorId}`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/historial/?vendedor_id=${vendedorId}`);
     return handleJson(r);
   },
   create: async (data: any): Promise<ApiVenta> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -510,7 +535,7 @@ export const ventasAPI = {
     return handleJson(r);
   },
   update: async (id: number, data: Partial<ApiVenta>): Promise<ApiVenta> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/${id}/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/${id}/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -518,14 +543,14 @@ export const ventasAPI = {
     return handleJson(r);
   },
   confirmarEntrega: async (id: number): Promise<ApiVenta> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/${id}/confirmar_entrega/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/${id}/confirmar_entrega/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
     return handleJson(r);
   },
   delete: async (id: number): Promise<void> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ventas/${id}/`, { method: 'DELETE' });
+    const r = await apiFetch(`${API_BASE_URL}/orders/ventas/${id}/`, { method: 'DELETE' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
   },
 };
@@ -539,7 +564,7 @@ export const stripeAPI = {
     monto: number;
     aplicar_descuento_vip: boolean;
   }): Promise<{ url: string; session_id: string }> => {
-    const r = await fetch(`${API_BASE_URL}/orders/stripe/create-checkout-session/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/stripe/create-checkout-session/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -548,7 +573,7 @@ export const stripeAPI = {
   },
   // Confirma el pago al volver de Stripe; el backend verifica y crea la venta (pending).
   confirm: async (sessionId: string): Promise<ApiVenta> => {
-    const r = await fetch(`${API_BASE_URL}/orders/stripe/confirm/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/stripe/confirm/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ session_id: sessionId }),
@@ -561,18 +586,18 @@ export const stripeAPI = {
 export const garantiasAPI = {
   // Garantías de un cliente (para "Mis Pedidos")
   getByCliente: async (clienteId: number): Promise<ApiGarantia[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/garantias/?cliente=${clienteId}&page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/garantias/?cliente=${clienteId}&page_size=1000`);
     return handlePaginated(r);
   },
   // Todas las garantías (panel interno). Opcionalmente filtra por estado.
   getAll: async (estado?: string): Promise<ApiGarantia[]> => {
     const q = estado ? `&estado=${estado}` : '';
-    const r = await fetch(`${API_BASE_URL}/orders/garantias/?page_size=1000${q}`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/garantias/?page_size=1000${q}`);
     return handlePaginated(r);
   },
   // Cliente reporta un problema con el producto
   reclamar: async (id: number, motivo: string): Promise<ApiGarantia> => {
-    const r = await fetch(`${API_BASE_URL}/orders/garantias/${id}/reclamar/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/garantias/${id}/reclamar/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ motivo }),
@@ -581,7 +606,7 @@ export const garantiasAPI = {
   },
   // Vendedor/admin: el reclamo procede
   aprobar: async (id: number, resolucion: string): Promise<ApiGarantia> => {
-    const r = await fetch(`${API_BASE_URL}/orders/garantias/${id}/aprobar/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/garantias/${id}/aprobar/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ resolucion }),
@@ -590,7 +615,7 @@ export const garantiasAPI = {
   },
   // Vendedor/admin: el reclamo NO procede (producto manipulado/mal uso)
   rechazar: async (id: number, resolucion: string): Promise<ApiGarantia> => {
-    const r = await fetch(`${API_BASE_URL}/orders/garantias/${id}/rechazar/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/garantias/${id}/rechazar/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ resolucion }),
@@ -599,7 +624,7 @@ export const garantiasAPI = {
   },
   // Genera las garantías faltantes de ventas anteriores
   generarRetroactivas: async (): Promise<{ creadas: number }> => {
-    const r = await fetch(`${API_BASE_URL}/orders/garantias/generar-retroactivas/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/garantias/generar-retroactivas/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
@@ -611,22 +636,22 @@ export const garantiasAPI = {
 export const resenasAPI = {
   // Reseñas de un cliente (para saber qué pedidos ya calificó en Mis Pedidos)
   getByCliente: async (clienteId: number): Promise<ApiResena[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/resenas/?cliente=${clienteId}&page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/resenas/?cliente=${clienteId}&page_size=1000`);
     return handlePaginated(r);
   },
   // Todas las reseñas incl. ocultas (moderación admin)
   getAll: async (): Promise<ApiResena[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/resenas/?page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/resenas/?page_size=1000`);
     return handlePaginated(r);
   },
   // Resumen público para la Tienda: promedio + total + lista visible
   getPublicas: async (): Promise<ResenasPublicas> => {
-    const r = await fetch(`${API_BASE_URL}/orders/resenas/publicas/`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/resenas/publicas/`);
     return handleJson(r);
   },
   // Cliente califica una venta completada (1 por venta)
   create: async (data: { cliente: number; venta: number; puntuacion: number; comentario?: string }): Promise<ApiResena> => {
-    const r = await fetch(`${API_BASE_URL}/orders/resenas/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/resenas/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -635,14 +660,14 @@ export const resenasAPI = {
   },
   // Admin: ocultar / mostrar (moderación)
   ocultar: async (id: number): Promise<ApiResena> => {
-    const r = await fetch(`${API_BASE_URL}/orders/resenas/${id}/ocultar/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/resenas/${id}/ocultar/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
     return handleJson(r);
   },
   mostrar: async (id: number): Promise<ApiResena> => {
-    const r = await fetch(`${API_BASE_URL}/orders/resenas/${id}/mostrar/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/resenas/${id}/mostrar/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
@@ -671,7 +696,7 @@ export interface VozIntencion {
 export const vozAPI = {
   // Respaldo: si las reglas del frontend no entienden el comando, Gemini lo interpreta
   interpretar: async (texto: string): Promise<VozIntencion> => {
-    const r = await fetch(`${API_BASE_URL}/orders/voz-intencion/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/voz-intencion/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ texto }),
@@ -683,11 +708,11 @@ export const vozAPI = {
 // ============ DETALLES ============
 export const detallesVentaAPI = {
   getAll: async (): Promise<ApiDetalleVenta[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/detalles/?page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/detalles/?page_size=1000`);
     return handlePaginated(r);
   },
   getByVenta: async (ventaId: number): Promise<ApiDetalleVenta[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/detalles/?venta=${ventaId}&page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/detalles/?venta=${ventaId}&page_size=1000`);
     return handlePaginated(r);
   },
 };
@@ -695,11 +720,11 @@ export const detallesVentaAPI = {
 // ============ PAGOS ============
 export const pagosAPI = {
   getAll: async (): Promise<ApiPago[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/pagos/?page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/pagos/?page_size=1000`);
     return handlePaginated(r);
   },
   getByVenta: async (ventaId: number): Promise<ApiPago[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/pagos/?venta=${ventaId}&page_size=1000`);
+    const r = await apiFetch(`${API_BASE_URL}/orders/pagos/?venta=${ventaId}&page_size=1000`);
     return handlePaginated(r);
   },
 };
@@ -739,11 +764,11 @@ export interface ApiCompra {
 
 export const proveedoresAPI = {
   getAll: async (): Promise<ApiProveedor[]> => {
-    const r = await fetch(`${API_BASE_URL}/products/proveedores/?page_size=1000`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/products/proveedores/?page_size=1000`, { headers: authHeaders() });
     return handlePaginated(r);
   },
   create: async (data: Partial<ApiProveedor>): Promise<ApiProveedor> => {
-    const r = await fetch(`${API_BASE_URL}/products/proveedores/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/proveedores/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -751,7 +776,7 @@ export const proveedoresAPI = {
     return handleJson(r);
   },
   update: async (id: number, data: Partial<ApiProveedor>): Promise<ApiProveedor> => {
-    const r = await fetch(`${API_BASE_URL}/products/proveedores/${id}/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/proveedores/${id}/`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -759,7 +784,7 @@ export const proveedoresAPI = {
     return handleJson(r);
   },
   delete: async (id: number): Promise<void> => {
-    const r = await fetch(`${API_BASE_URL}/products/proveedores/${id}/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/proveedores/${id}/`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
@@ -770,14 +795,14 @@ export const proveedoresAPI = {
 // ============ COMPRAS ============
 export const comprasAPI = {
   getAll: async (): Promise<ApiCompra[]> => {
-    const r = await fetch(`${API_BASE_URL}/products/compras/?page_size=1000`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/products/compras/?page_size=1000`, { headers: authHeaders() });
     return handlePaginated(r);
   },
   create: async (data: {
     proveedor: number;
     detalles: { producto: number; cantidad: number; costo_unitario: number }[];
   }): Promise<ApiCompra> => {
-    const r = await fetch(`${API_BASE_URL}/products/compras/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/compras/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -830,7 +855,7 @@ export interface ApiElegibilidad {
 
 export const servicioTecnicoAPI = {
   catalogo: async (): Promise<ApiServicioCatalogo[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/servicios-catalogo/`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/orders/servicios-catalogo/`, { headers: authHeaders() });
     return handlePaginated(r);
   },
   ordenes: async (params?: { tecnico?: number; cliente?: number; estado?: string }): Promise<ApiOrdenServicio[]> => {
@@ -838,30 +863,30 @@ export const servicioTecnicoAPI = {
     if (params?.tecnico) q.set('tecnico', String(params.tecnico));
     if (params?.cliente) q.set('cliente', String(params.cliente));
     if (params?.estado)  q.set('estado', params.estado);
-    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/?${q.toString()}`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/?${q.toString()}`, { headers: authHeaders() });
     return handlePaginated(r);
   },
   elegibilidad: async (clienteId: number): Promise<ApiElegibilidad[]> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/elegibilidad/?cliente=${clienteId}`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/elegibilidad/?cliente=${clienteId}`, { headers: authHeaders() });
     if (!r.ok) return [];
     return r.json();
   },
   crear: async (data: any): Promise<ApiOrdenServicio> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
     });
     return handleJson(r);
   },
   cambiarEstado: async (id: number, data: any): Promise<ApiOrdenServicio> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/estado/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/estado/`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
     });
     return handleJson(r);
   },
   checklist: async (id: number, tareas: { id: number; realizado: boolean }[]): Promise<ApiOrdenServicio> => {
-    const r = await fetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/checklist/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/checklist/`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ tareas }),
     });
@@ -885,13 +910,13 @@ export interface ApiPromocion {
 
 export const promocionesAPI = {
   getAll: async (): Promise<ApiPromocion[]> => {
-    const r = await fetch(`${API_BASE_URL}/products/promociones/`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/products/promociones/`, { headers: authHeaders() });
     return handlePaginated(r);
   },
   create: async (data: {
     producto: number; porcentaje: number; fecha_inicio: string; fecha_fin: string; activo?: boolean;
   }): Promise<ApiPromocion> => {
-    const r = await fetch(`${API_BASE_URL}/products/promociones/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/promociones/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -899,11 +924,11 @@ export const promocionesAPI = {
     return handleJson(r);
   },
   remove: async (id: number): Promise<void> => {
-    await fetch(`${API_BASE_URL}/products/promociones/${id}/`, { method: 'DELETE', headers: authHeaders() });
+    await apiFetch(`${API_BASE_URL}/products/promociones/${id}/`, { method: 'DELETE', headers: authHeaders() });
   },
   // CU24: envía las ofertas vigentes a todos los clientes (correo + campana)
   enviarOfertas: async (): Promise<{ enviados: number; promociones: number }> => {
-    const r = await fetch(`${API_BASE_URL}/products/promociones/enviar-ofertas/`, {
+    const r = await apiFetch(`${API_BASE_URL}/products/promociones/enviar-ofertas/`, {
       method: 'POST', headers: authHeaders(),
     });
     return handleJson(r);
@@ -914,14 +939,14 @@ export const promocionesAPI = {
 export const devolucionesAPI = {
   list: async (ventaId?: number): Promise<any[]> => {
     const q = ventaId ? `?venta=${ventaId}` : '';
-    const r = await fetch(`${API_BASE_URL}/orders/devoluciones/${q}`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/orders/devoluciones/${q}`, { headers: authHeaders() });
     return handlePaginated(r);
   },
   crear: async (data: {
     detalle: number; cantidad: number; motivo: string;
     aprobar: boolean; motivo_rechazo?: string;
   }): Promise<any> => {
-    const r = await fetch(`${API_BASE_URL}/orders/devoluciones/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/devoluciones/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
@@ -998,18 +1023,18 @@ export interface ApiCartera {
 export const creditoAPI = {
   // Vista previa del plan (sin guardar) para el precio unitario y cantidad dados
   simular: async (precio: number, cantidad = 1): Promise<ApiSimulacionCredito> => {
-    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/simular/?precio=${precio}&cantidad=${cantidad}`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/simular/?precio=${precio}&cantidad=${cantidad}`, { headers: authHeaders() });
     return handleJson(r);
   },
   // ¿El cliente está bloqueado por mora?
   bloqueo: async (clienteId: number): Promise<{ bloqueado: boolean; cuotas_vencidas: number }> => {
-    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/bloqueo/?cliente=${clienteId}`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/bloqueo/?cliente=${clienteId}`, { headers: authHeaders() });
     if (!r.ok) return { bloqueado: false, cuotas_vencidas: 0 };
     return r.json();
   },
   // Crear un plan de crédito sobre un ítem de venta (detalle)
   crear: async (detalle: number): Promise<ApiPlanCredito> => {
-    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ detalle }),
     });
@@ -1019,12 +1044,12 @@ export const creditoAPI = {
     const q = new URLSearchParams();
     if (params?.cliente) q.set('cliente', String(params.cliente));
     if (params?.estado)  q.set('estado', params.estado);
-    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/?${q.toString()}`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/?${q.toString()}`, { headers: authHeaders() });
     return handlePaginated(r);
   },
   // Registrar el pago de una cuota
   pagarCuota: async (cuota: number): Promise<ApiPlanCredito> => {
-    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/pagar-cuota/`, {
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/pagar-cuota/`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ cuota }),
     });
@@ -1032,7 +1057,7 @@ export const creditoAPI = {
   },
   // Resumen de la cartera (admin, CU29)
   cartera: async (): Promise<ApiCartera> => {
-    const r = await fetch(`${API_BASE_URL}/orders/planes-credito/cartera/`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/cartera/`, { headers: authHeaders() });
     return handleJson(r);
   },
 };
@@ -1040,13 +1065,13 @@ export const creditoAPI = {
 export const notificacionesAPI = {
   // Devuelve mis notificaciones + el contador de no leídas
   list: async (): Promise<{ notificaciones: ApiNotificacion[]; no_leidas: number }> => {
-    const r = await fetch(`${API_BASE_URL}/users/notificaciones/`, { headers: authHeaders() });
+    const r = await apiFetch(`${API_BASE_URL}/users/notificaciones/`, { headers: authHeaders() });
     if (!r.ok) return { notificaciones: [], no_leidas: 0 };
     return r.json();
   },
   // Marca una notificación ({id}) o todas ({todas:true}) como leídas
   marcarLeidas: async (payload: { id?: number; todas?: boolean }): Promise<void> => {
-    await fetch(`${API_BASE_URL}/users/notificaciones/marcar-leidas/`, {
+    await apiFetch(`${API_BASE_URL}/users/notificaciones/marcar-leidas/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(payload),

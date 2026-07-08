@@ -22,6 +22,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
+from apps.users.permissions import IsAuthenticatedJWT
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ Texto del usuario: "%(texto)s"
 
 class VozIntencionView(APIView):
     """POST {texto} → {reporte, formato}. Usa Gemini para interpretar el comando."""
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticatedJWT]
 
     def post(self, request):
         texto = (request.data.get('texto') or '').strip()
