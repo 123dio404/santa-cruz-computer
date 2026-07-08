@@ -813,6 +813,71 @@ class DevolucionViewSet(viewsets.ModelViewSet):
             )
         except Exception:
             pass  # la bitácora no debe tumbar la operación
+
+        # CU23: avisar al cliente el resultado de la devolución (campana + correo).
+        # Sigue el mismo patrón que garantías/reseñas; si falla no rompe el request.
+        # Número de comprobante correlativo derivado del id: RMA-YYYY-000042
+        # (simulacro por ahora; cuando se agregue transferencia bancaria en el
+        # futuro, incluir cliente.cuenta_bancaria dentro del bloque "Detalles"
+        # del correo aprobada — no requiere rediseñar el template).
+        try:
+            cli = venta.cliente
+            if cli and getattr(cli, 'correo', ''):
+                from django.conf import settings as _s
+                from apps.users.views import crear_notificacion, _email_html
+                from django.utils import timezone as _tz
+                cli_nombre = f'{cli.nombre or ""} {cli.apellido or ""}'.strip() or 'cliente'
+                nro_comprobante = f'RMA-{_tz.now().year}-{dev.id:06d}'
+                if aprobar:
+                    cuerpo = (
+                        f'<p>Revisamos tu solicitud de devolución del <strong>{prod}</strong> '
+                        f'(venta #{venta.id}) y el resultado es: <strong>APROBADA ✅</strong>.</p>'
+                        f'<p style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;'
+                        f'padding:10px 14px;margin:16px 0;font-size:13px;">'
+                        f'📄 <strong>Comprobante N°:</strong> {nro_comprobante}</p>'
+                        f'<p><strong>Detalles del reembolso:</strong></p>'
+                        f'<ul style="margin:6px 0 14px 20px;padding:0;">'
+                        f'<li>Cantidad: {cantidad} unidad(es)</li>'
+                        f'<li>Monto: Bs {monto:.2f}</li>'
+                        f'<li>Método: en efectivo, en tienda</li>'
+                        f'</ul>'
+                        f'<p>Presenta este comprobante junto con tu factura de compra '
+                        f'al retirar el reembolso.</p>'
+                        f'<p>Gracias por tu confianza.</p>'
+                    )
+                    titulo_notif = 'Tu solicitud de devolución fue aprobada'
+                    mensaje_notif = (f'Devolución del {prod} (venta #{venta.id}): APROBADA ✅ '
+                                     f'— Reembolso Bs {monto:.2f}. Comprobante {nro_comprobante}.')
+                else:
+                    motivo_txt = motivo_rechazo or 'no se indicó motivo específico'
+                    cuerpo = (
+                        f'<p>Revisamos tu solicitud de devolución del <strong>{prod}</strong> '
+                        f'(venta #{venta.id}) y el resultado es: <strong>RECHAZADA</strong>.</p>'
+                        f'<p style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;'
+                        f'padding:10px 14px;margin:16px 0;font-size:13px;">'
+                        f'📄 <strong>Comprobante N°:</strong> {nro_comprobante}</p>'
+                        f'<p><strong>Motivo del rechazo:</strong><br/>{motivo_txt}</p>'
+                        f'<p>Si tenés dudas o creés que hubo un error, podés acercarte a la tienda '
+                        f'para conversar con nuestro equipo.</p>'
+                    )
+                    titulo_notif = 'Tu solicitud de devolución fue rechazada'
+                    mensaje_notif = (f'Devolución del {prod} (venta #{venta.id}): RECHAZADA '
+                                     f'— Motivo: {motivo_txt}. Comprobante {nro_comprobante}.')
+
+                _html = _email_html(
+                    cli_nombre, cuerpo,
+                    'Ver mis pedidos', f'{_s.FRONTEND_URL}/orders',
+                )
+                crear_notificacion(
+                    tipo='devolucion_resuelta',
+                    titulo=titulo_notif,
+                    mensaje=mensaje_notif,
+                    cliente_id=venta.cliente_id, enlace='/orders',
+                    canal='ambos', email=cli.correo, html=_html,
+                )
+        except Exception:
+            pass  # el aviso al cliente no debe tumbar la operación
+
         return Response(DevolucionSerializer(dev).data, status=status.HTTP_201_CREATED)
 
 
