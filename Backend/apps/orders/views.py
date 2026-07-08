@@ -754,19 +754,29 @@ class DevolucionViewSet(viewsets.ModelViewSet):
 
         venta = detalle.venta
 
+        # (1) Ítem ya procesado: aplica tanto para aprobar como para rechazar.
+        # Contamos aprobadas Y rechazadas: una rechazada cierra la decisión de
+        # esas unidades, no se puede reintentar.
+        ya = Devolucion.objects.filter(
+            detalle_id=detalle.id,
+            estado__in=['aprobada', 'rechazada'],
+        ).aggregate(t=Sum('cantidad'))['t'] or 0
+        disponible = detalle.cantidad - ya
+        if disponible <= 0:
+            return Response(
+                {'error': 'Este ítem ya fue procesado (aprobado o rechazado). No se puede volver a solicitar devolución.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        if cantidad > disponible:
+            return Response(
+                {'error': f'Solo quedan {disponible} unidad(es) por devolver de este ítem.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
         if aprobar:
-            # (1) Plazo <= 7 días desde la venta. Se compara por FECHA (día) para
-            # evitar el choque naive/aware entre fecha_venta y timezone.now().
+            # (2) Plazo <= 7 días desde la venta (solo para aprobar). Se compara por FECHA
+            # (día) para evitar el choque naive/aware entre fecha_venta y timezone.now().
             if venta.fecha_venta and (timezone.now().date() - venta.fecha_venta.date()).days > self.DIAS_DEVOLUCION:
                 return Response(
                     {'error': f'Fuera de plazo: la venta tiene más de {self.DIAS_DEVOLUCION} días. Solo puedes rechazar.'},
-                    status=status.HTTP_400_BAD_REQUEST)
-            # (2) No devuelto antes: cantidad disponible del ítem
-            ya = Devolucion.objects.filter(detalle_id=detalle.id, estado='aprobada').aggregate(t=Sum('cantidad'))['t'] or 0
-            disponible = detalle.cantidad - ya
-            if cantidad > disponible:
-                return Response(
-                    {'error': f'Solo quedan {disponible} unidad(es) por devolver de este ítem.'},
                     status=status.HTTP_400_BAD_REQUEST)
         else:
             if not motivo_rechazo:
@@ -803,6 +813,71 @@ class DevolucionViewSet(viewsets.ModelViewSet):
             )
         except Exception:
             pass  # la bitácora no debe tumbar la operación
+
+        # CU23: avisar al cliente el resultado de la devolución (campana + correo).
+        # Sigue el mismo patrón que garantías/reseñas; si falla no rompe el request.
+        # Número de comprobante correlativo derivado del id: RMA-YYYY-000042
+        # (simulacro por ahora; cuando se agregue transferencia bancaria en el
+        # futuro, incluir cliente.cuenta_bancaria dentro del bloque "Detalles"
+        # del correo aprobada — no requiere rediseñar el template).
+        try:
+            cli = venta.cliente
+            if cli and getattr(cli, 'correo', ''):
+                from django.conf import settings as _s
+                from apps.users.views import crear_notificacion, _email_html
+                from django.utils import timezone as _tz
+                cli_nombre = f'{cli.nombre or ""} {cli.apellido or ""}'.strip() or 'cliente'
+                nro_comprobante = f'RMA-{_tz.now().year}-{dev.id:06d}'
+                if aprobar:
+                    cuerpo = (
+                        f'<p>Revisamos tu solicitud de devolución del <strong>{prod}</strong> '
+                        f'(venta #{venta.id}) y el resultado es: <strong>APROBADA ✅</strong>.</p>'
+                        f'<p style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;'
+                        f'padding:10px 14px;margin:16px 0;font-size:13px;">'
+                        f'📄 <strong>Comprobante N°:</strong> {nro_comprobante}</p>'
+                        f'<p><strong>Detalles del reembolso:</strong></p>'
+                        f'<ul style="margin:6px 0 14px 20px;padding:0;">'
+                        f'<li>Cantidad: {cantidad} unidad(es)</li>'
+                        f'<li>Monto: Bs {monto:.2f}</li>'
+                        f'<li>Método: en efectivo, en tienda</li>'
+                        f'</ul>'
+                        f'<p>Presenta este comprobante junto con tu factura de compra '
+                        f'al retirar el reembolso.</p>'
+                        f'<p>Gracias por tu confianza.</p>'
+                    )
+                    titulo_notif = 'Tu solicitud de devolución fue aprobada'
+                    mensaje_notif = (f'Devolución del {prod} (venta #{venta.id}): APROBADA ✅ '
+                                     f'— Reembolso Bs {monto:.2f}. Comprobante {nro_comprobante}.')
+                else:
+                    motivo_txt = motivo_rechazo or 'no se indicó motivo específico'
+                    cuerpo = (
+                        f'<p>Revisamos tu solicitud de devolución del <strong>{prod}</strong> '
+                        f'(venta #{venta.id}) y el resultado es: <strong>RECHAZADA</strong>.</p>'
+                        f'<p style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;'
+                        f'padding:10px 14px;margin:16px 0;font-size:13px;">'
+                        f'📄 <strong>Comprobante N°:</strong> {nro_comprobante}</p>'
+                        f'<p><strong>Motivo del rechazo:</strong><br/>{motivo_txt}</p>'
+                        f'<p>Si tenés dudas o creés que hubo un error, podés acercarte a la tienda '
+                        f'para conversar con nuestro equipo.</p>'
+                    )
+                    titulo_notif = 'Tu solicitud de devolución fue rechazada'
+                    mensaje_notif = (f'Devolución del {prod} (venta #{venta.id}): RECHAZADA '
+                                     f'— Motivo: {motivo_txt}. Comprobante {nro_comprobante}.')
+
+                _html = _email_html(
+                    cli_nombre, cuerpo,
+                    'Ver mis pedidos', f'{_s.FRONTEND_URL}/orders',
+                )
+                crear_notificacion(
+                    tipo='devolucion_resuelta',
+                    titulo=titulo_notif,
+                    mensaje=mensaje_notif,
+                    cliente_id=venta.cliente_id, enlace='/orders',
+                    canal='ambos', email=cli.correo, html=_html,
+                )
+        except Exception:
+            pass  # el aviso al cliente no debe tumbar la operación
+
         return Response(DevolucionSerializer(dev).data, status=status.HTTP_201_CREATED)
 
 

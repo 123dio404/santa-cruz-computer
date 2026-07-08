@@ -151,13 +151,32 @@ export function SalesHistory() {
   const dentroPlazoDevolucion = (fecha: string) =>
     (Date.now() - new Date(fecha).getTime()) <= 7 * 86400000;
 
+  // Unidades disponibles para devolver de un detalle: total menos lo ya procesado
+  // (aprobada o rechazada). Una devolución rechazada también consume porque la
+  // decisión es final: ese ítem ya fue evaluado y no se puede reintentar.
+  const unidadesDisponiblesDetalle = (detalleId: number, cantidadTotal: number) => {
+    const yaProcesado = devolucionesReporte
+      .filter((d: any) => d.detalle === detalleId && (d.estado === 'aprobada' || d.estado === 'rechazada'))
+      .reduce((s: number, d: any) => s + (Number(d.cantidad) || 0), 0);
+    return Math.max(0, cantidadTotal - yaProcesado);
+  };
+
+  // Detalles de una venta que aún tienen unidades por devolver
+  const detallesPendientes = (v: ApiVenta) =>
+    (v.detalles ?? []).filter(d => unidadesDisponiblesDetalle(d.id, d.cantidad) > 0);
+
   const abrirDevolucion = (v: ApiVenta) => {
     if (!dentroPlazoDevolucion(v.fecha)) {
       alert('Fuera de plazo: la venta tiene más de 7 días. No se puede registrar una devolución.');
       return;
     }
+    const pendientes = detallesPendientes(v);
+    if (pendientes.length === 0) {
+      alert('Todos los ítems de esta venta ya fueron procesados (aprobados o rechazados).');
+      return;
+    }
     setDevVenta(v);
-    setDevDetalleId(v.detalles && v.detalles.length === 1 ? v.detalles[0].id : '');
+    setDevDetalleId(pendientes.length === 1 ? pendientes[0].id : '');
     setDevCantidad(1);
     setDevMotivo('');
     setDevInsp({ sinDano: false, mismo: false, completo: false });
@@ -833,14 +852,27 @@ export function SalesHistory() {
                             <FileText className="w-4 h-4" />
                             Descargar Factura
                           </button>
-                          <button
-                            onClick={() => abrirDevolucion(v)}
-                            title={!dentroPlazoDevolucion(v.fecha) ? 'Fuera de plazo: más de 7 días desde la compra' : ''}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-colors ${dentroPlazoDevolucion(v.fecha) ? 'bg-amber-600 hover:bg-amber-700' : 'bg-gray-400 hover:bg-gray-500'}`}
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                            Registrar devolución
-                          </button>
+                          {(() => {
+                            const enPlazo = dentroPlazoDevolucion(v.fecha);
+                            const hayPend = detallesPendientes(v as unknown as ApiVenta).length > 0;
+                            const habilitado = enPlazo && hayPend;
+                            const tooltip = !enPlazo
+                              ? 'Fuera de plazo: más de 7 días desde la compra'
+                              : !hayPend
+                                ? 'Todos los ítems ya fueron procesados (aprobados o rechazados)'
+                                : '';
+                            return (
+                              <button
+                                onClick={() => abrirDevolucion(v as unknown as ApiVenta)}
+                                disabled={!habilitado}
+                                title={tooltip}
+                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-colors ${habilitado ? 'bg-amber-600 hover:bg-amber-700' : 'bg-gray-400 cursor-not-allowed'}`}
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                                Registrar devolución
+                              </button>
+                            );
+                          })()}
                         </div>
                       )}
 
@@ -1066,14 +1098,27 @@ export function SalesHistory() {
                             <FileText className="w-4 h-4" />
                             Descargar Factura
                           </button>
-                          <button
-                            onClick={() => abrirDevolucion(venta as unknown as ApiVenta)}
-                            title={!dentroPlazoDevolucion(venta.fecha) ? 'Fuera de plazo: más de 7 días desde la compra' : ''}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-colors ${dentroPlazoDevolucion(venta.fecha) ? 'bg-amber-600 hover:bg-amber-700' : 'bg-gray-400 hover:bg-gray-500'}`}
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                            Registrar devolución
-                          </button>
+                          {(() => {
+                            const enPlazo = dentroPlazoDevolucion(venta.fecha);
+                            const hayPend = detallesPendientes(venta as unknown as ApiVenta).length > 0;
+                            const habilitado = enPlazo && hayPend;
+                            const tooltip = !enPlazo
+                              ? 'Fuera de plazo: más de 7 días desde la compra'
+                              : !hayPend
+                                ? 'Todos los ítems ya fueron procesados (aprobados o rechazados)'
+                                : '';
+                            return (
+                              <button
+                                onClick={() => abrirDevolucion(venta as unknown as ApiVenta)}
+                                disabled={!habilitado}
+                                title={tooltip}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-colors ${habilitado ? 'bg-amber-600 hover:bg-amber-700' : 'bg-gray-400 cursor-not-allowed'}`}
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                                Registrar devolución
+                              </button>
+                            );
+                          })()}
                         </>
                       )}
                     </div>
@@ -1208,16 +1253,22 @@ export function SalesHistory() {
                   onChange={e => { setDevDetalleId(e.target.value ? Number(e.target.value) : ''); setDevCantidad(1); }}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                   <option value="">— Elige un producto —</option>
-                  {(devVenta.detalles ?? []).map(d => (
-                    <option key={d.id} value={d.id}>{d.producto_name} (x{d.cantidad})</option>
-                  ))}
+                  {detallesPendientes(devVenta).map(d => {
+                    const disp = unidadesDisponiblesDetalle(d.id, d.cantidad);
+                    const etiqueta = disp === d.cantidad
+                      ? `${d.producto_name} (x${d.cantidad})`
+                      : `${d.producto_name} (${disp} de ${d.cantidad} disponibles)`;
+                    return <option key={d.id} value={d.id}>{etiqueta}</option>;
+                  })}
                 </select>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
                 <input type="number" min={1}
-                  max={devVenta.detalles?.find(d => d.id === devDetalleId)?.cantidad ?? 1}
+                  max={devDetalleId
+                    ? unidadesDisponiblesDetalle(devDetalleId, devVenta.detalles?.find(d => d.id === devDetalleId)?.cantidad ?? 1)
+                    : 1}
                   value={devCantidad}
                   onChange={e => setDevCantidad(Math.max(1, Number(e.target.value) || 1))}
                   className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
