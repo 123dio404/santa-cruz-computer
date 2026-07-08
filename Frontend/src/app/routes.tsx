@@ -26,6 +26,7 @@
  */
 
 import { createBrowserRouter, Navigate } from 'react-router';
+import { useAuth } from './context/AuthContext';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { Products } from './pages/Products';
@@ -50,6 +51,22 @@ import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 
 /**
+ * HomeRedirect - Redirige la raíz "/" al inicio que corresponde a cada rol.
+ * Mantiene la misma tabla que Login.tsx post-login para que ambos caminos
+ * (login directo y aterrizaje en la raíz) lleven al mismo lugar.
+ */
+function HomeRedirect() {
+  const { user } = useAuth();
+  const destino =
+    user?.role === 'admin'    ? '/dashboard'    :
+    user?.role === 'employee' ? '/inventory'    :
+    user?.role === 'tecnico'  ? '/mis-trabajos' :
+    user?.role === 'client'   ? '/store'        :
+                                '/login';
+  return <Navigate to={destino} replace />;
+}
+
+/**
  * Definición de todas las rutas de la aplicación
  * El router automáticamente navega según la URL
  */
@@ -70,15 +87,14 @@ export const router = createBrowserRouter([
 
   /**
    * / - Ruta raíz (página de inicio)
-   * - Redirige a inventario por defecto
+   * - Redirige al inicio que corresponde al rol del usuario
+   *   (admin → dashboard, empleado → inventario, técnico → mis trabajos, cliente → tienda)
    */
   {
     path: '/',
     element: (
       <ProtectedRoute>
-        <Layout>
-          <Navigate to="/inventory" replace />
-        </Layout>
+        <HomeRedirect />
       </ProtectedRoute>
     )
   },
