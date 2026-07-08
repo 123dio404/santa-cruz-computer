@@ -863,6 +863,7 @@ export const servicioTecnicoAPI = {
     if (params?.tecnico) q.set('tecnico', String(params.tecnico));
     if (params?.cliente) q.set('cliente', String(params.cliente));
     if (params?.estado)  q.set('estado', params.estado);
+    q.set('page_size', '1000');
     const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/?${q.toString()}`, { headers: authHeaders() });
     return handlePaginated(r);
   },
