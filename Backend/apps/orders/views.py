@@ -754,19 +754,29 @@ class DevolucionViewSet(viewsets.ModelViewSet):
 
         venta = detalle.venta
 
+        # (1) Ítem ya procesado: aplica tanto para aprobar como para rechazar.
+        # Contamos aprobadas Y rechazadas: una rechazada cierra la decisión de
+        # esas unidades, no se puede reintentar.
+        ya = Devolucion.objects.filter(
+            detalle_id=detalle.id,
+            estado__in=['aprobada', 'rechazada'],
+        ).aggregate(t=Sum('cantidad'))['t'] or 0
+        disponible = detalle.cantidad - ya
+        if disponible <= 0:
+            return Response(
+                {'error': 'Este ítem ya fue procesado (aprobado o rechazado). No se puede volver a solicitar devolución.'},
+                status=status.HTTP_400_BAD_REQUEST)
+        if cantidad > disponible:
+            return Response(
+                {'error': f'Solo quedan {disponible} unidad(es) por devolver de este ítem.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
         if aprobar:
-            # (1) Plazo <= 7 días desde la venta. Se compara por FECHA (día) para
-            # evitar el choque naive/aware entre fecha_venta y timezone.now().
+            # (2) Plazo <= 7 días desde la venta (solo para aprobar). Se compara por FECHA
+            # (día) para evitar el choque naive/aware entre fecha_venta y timezone.now().
             if venta.fecha_venta and (timezone.now().date() - venta.fecha_venta.date()).days > self.DIAS_DEVOLUCION:
                 return Response(
                     {'error': f'Fuera de plazo: la venta tiene más de {self.DIAS_DEVOLUCION} días. Solo puedes rechazar.'},
-                    status=status.HTTP_400_BAD_REQUEST)
-            # (2) No devuelto antes: cantidad disponible del ítem
-            ya = Devolucion.objects.filter(detalle_id=detalle.id, estado='aprobada').aggregate(t=Sum('cantidad'))['t'] or 0
-            disponible = detalle.cantidad - ya
-            if cantidad > disponible:
-                return Response(
-                    {'error': f'Solo quedan {disponible} unidad(es) por devolver de este ítem.'},
                     status=status.HTTP_400_BAD_REQUEST)
         else:
             if not motivo_rechazo:
