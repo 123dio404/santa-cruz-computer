@@ -43,7 +43,6 @@ import {
   Tag,
   CreditCard,
   Wrench,
-  CalendarClock,
   Clock,
   CheckCircle,
   Eye,
@@ -220,7 +219,6 @@ export function Layout({ children }: LayoutProps) {
 
     const tecnicoItems = [
       { path: '/mis-trabajos', icon: Wrench, label: 'Mis Trabajos' },
-      { path: '/agenda', icon: CalendarClock, label: 'Agenda' },
     ];
 
     if (user.role === 'admin') return adminItems;
