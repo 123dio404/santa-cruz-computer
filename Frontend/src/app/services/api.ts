@@ -1043,24 +1043,93 @@ export interface ApiCartera {
   planes: ApiPlanCredito[];
 }
 
+// Payload compartido por walk-in y desde-venta
+export interface CreditoAtomicoPayload {
+  cliente:          number;
+  producto:         number;
+  cantidad?:        number;
+  tipo_empleo:      'dependiente' | 'independiente';
+  antiguedad_meses: number;
+  observaciones?:   string;
+  checklist: {
+    ci_solicitante?:          boolean;
+    ci_conyuge?:              boolean;
+    factura_servicios?:       boolean;
+    boletas_pago?:            boolean;
+    extracto_gestora?:        boolean;
+    facturas_ultimo_ano?:     boolean;
+    estados_financieros?:     boolean;
+    nit?:                     boolean;
+    croquis_domicilio?:       boolean;
+    croquis_negocio?:         boolean;
+    respaldos_patrimoniales?: boolean;
+  };
+}
+
+export interface ApiBloqueoCredito {
+  bloqueado:       boolean;
+  cuotas_vencidas: number;
+  activos:         number;
+  limite:          number;
+  motivo:          'mora' | 'limite' | 'advertencia' | null;
+}
+
+export interface ApiMisCreditosResumen {
+  planes_activos:    number;
+  planes_pagados:    number;
+  planes_totales:    number;
+  saldo_pendiente:   string;
+  cuotas_pendientes: number;
+  cuotas_vencidas:   number;
+  proxima_cuota: null | {
+    plan_id:           number;
+    numero:            number;
+    monto:             string;
+    mora:              string;
+    fecha_vencimiento: string;
+    estado:            string;
+  };
+}
+
 export const creditoAPI = {
   // Vista previa del plan (sin guardar) para el precio unitario y cantidad dados
   simular: async (precio: number, cantidad = 1): Promise<ApiSimulacionCredito> => {
     const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/simular/?precio=${precio}&cantidad=${cantidad}`, { headers: authHeaders() });
     return handleJson(r);
   },
-  // ¿El cliente está bloqueado por mora?
-  bloqueo: async (clienteId: number): Promise<{ bloqueado: boolean; cuotas_vencidas: number }> => {
+  // ¿El cliente está bloqueado por mora / límite de créditos activos?
+  bloqueo: async (clienteId: number): Promise<ApiBloqueoCredito> => {
     const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/bloqueo/?cliente=${clienteId}`, { headers: authHeaders() });
-    if (!r.ok) return { bloqueado: false, cuotas_vencidas: 0 };
+    if (!r.ok) return { bloqueado: false, cuotas_vencidas: 0, activos: 0, limite: 3, motivo: null };
     return r.json();
   },
-  // Crear un plan de crédito sobre un ítem de venta (detalle)
+  // Crear un plan de crédito sobre un ítem de venta ya existente (uso interno legado)
   crear: async (detalle: number): Promise<ApiPlanCredito> => {
     const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ detalle }),
     });
+    return handleJson(r);
+  },
+  // Walk-in: crédito presencial en /creditos con checklist embebido
+  crearWalkIn: async (payload: CreditoAtomicoPayload): Promise<ApiPlanCredito & { advertencia: string | null }> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/walk-in/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+    return handleJson(r);
+  },
+  // "Al crédito" desde /sales — mismo body, distinto origen (backend)
+  crearDesdeVenta: async (payload: CreditoAtomicoPayload): Promise<ApiPlanCredito & { advertencia: string | null }> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/desde-venta/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+    return handleJson(r);
+  },
+  // Vista del CLIENTE logueado con todos sus créditos + resumen
+  misCreditos: async (): Promise<{ resumen: ApiMisCreditosResumen; planes: ApiPlanCredito[] }> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/mis-creditos/`, { headers: authHeaders() });
     return handleJson(r);
   },
   planes: async (params?: { cliente?: number; estado?: string }): Promise<ApiPlanCredito[]> => {
@@ -1070,7 +1139,7 @@ export const creditoAPI = {
     const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/?${q.toString()}`, { headers: authHeaders() });
     return handlePaginated(r);
   },
-  // Registrar el pago de una cuota
+  // Registrar el pago de una cuota (efectivo, uso interno del backend)
   pagarCuota: async (cuota: number): Promise<ApiPlanCredito> => {
     const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/pagar-cuota/`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -1081,6 +1150,28 @@ export const creditoAPI = {
   // Resumen de la cartera (admin, CU29)
   cartera: async (): Promise<ApiCartera> => {
     const r = await apiFetch(`${API_BASE_URL}/orders/planes-credito/cartera/`, { headers: authHeaders() });
+    return handleJson(r);
+  },
+  // Stripe cuota online (cliente)
+  checkoutCuota: async (cuota: number): Promise<{ url: string; session_id: string }> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/stripe/checkout-cuota/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ cuota }),
+    });
+    return handleJson(r);
+  },
+  confirmarCuota: async (session_id: string): Promise<{ estado_pago: string; plan?: ApiPlanCredito; payment_status?: string }> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/stripe/confirmar-cuota/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ session_id }),
+    });
+    return handleJson(r);
+  },
+  verificarCuotaPendiente: async (cuota: number): Promise<{ estado_pago: string; plan?: ApiPlanCredito; payment_status?: string }> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/stripe/verificar-cuota-pendiente/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ cuota }),
+    });
     return handleJson(r);
   },
 };
