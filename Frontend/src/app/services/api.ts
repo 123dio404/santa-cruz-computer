@@ -227,6 +227,8 @@ export interface ApiVenta {
   descuento_aplicado?: number;
   detalles?: ApiDetalleVenta[];
   pagos?: ApiPago[];
+  es_credito?: boolean;               // CU28/CU29 — true si la venta tiene un plan de crédito asociado
+  credito_plan_id?: number | null;
 }
 
 export interface ApiDetalleVenta {

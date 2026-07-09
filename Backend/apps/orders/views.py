@@ -306,7 +306,7 @@ def enviar_factura_por_correo(venta):
 
 class VentaViewSet(viewsets.ModelViewSet):
     """CRUD de ventas. POST usa VentaCreateSerializer; GET usa VentaSerializer."""
-    queryset          = Venta.objects.prefetch_related('detalles', 'detalles__producto', 'pagos').select_related('cliente', 'usuario')
+    queryset          = Venta.objects.prefetch_related('detalles', 'detalles__producto', 'pagos', 'planes_credito').select_related('cliente', 'usuario')
     serializer_class  = VentaSerializer
     permission_classes = [IsAuthenticatedJWT]
     filter_backends   = [OrderingFilter]

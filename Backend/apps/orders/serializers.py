@@ -65,6 +65,10 @@ class VentaSerializer(serializers.ModelSerializer):
     vendedor      = serializers.IntegerField(source='usuario_id', read_only=True, default=None)
     vendedor_name = serializers.CharField(source='usuario.nombre_completo', read_only=True, default=None)
 
+    # CU28/CU29: marca si la venta esta al credito (para diferenciarla en Mis Pedidos)
+    es_credito     = serializers.SerializerMethodField()
+    credito_plan_id = serializers.SerializerMethodField()
+
     def get_cliente_nombre(self, obj):
         if obj.cliente:
             return f"{obj.cliente.nombre} {obj.cliente.apellido}".strip()
@@ -73,6 +77,14 @@ class VentaSerializer(serializers.ModelSerializer):
     def get_cliente_name(self, obj):
         return self.get_cliente_nombre(obj)
 
+    def get_es_credito(self, obj):
+        # Se calcula perezosamente; con prefetch_related('planes_credito') no genera N+1
+        return obj.planes_credito.exists()
+
+    def get_credito_plan_id(self, obj):
+        p = obj.planes_credito.first()
+        return p.id if p else None
+
     class Meta:
         model  = Venta
         fields = [
@@ -80,6 +92,7 @@ class VentaSerializer(serializers.ModelSerializer):
             'usuario', 'usuario_nombre',
             'fecha_venta', 'monto_total', 'estado', 'estado_entrega',
             'detalles', 'pagos', 'descuento_aplicado',
+            'es_credito', 'credito_plan_id',
             # compat
             'total', 'status', 'fecha', 'cliente_name', 'vendedor', 'vendedor_name',
         ]
