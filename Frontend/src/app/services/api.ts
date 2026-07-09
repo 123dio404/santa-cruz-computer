@@ -989,6 +989,28 @@ export interface ApiCuota {
   fecha_pago: string | null;
   estado: string;            // pendiente | pagada | vencida
   vencida: boolean;
+  metodo_pago: string | null;         // efectivo | stripe | null
+  numero_factura: string | null;      // FCR-YYYY-NNNNNN
+  stripe_payment_intent_id: string | null;
+  stripe_session_pending: string | null;
+}
+export interface ApiChecklistCredito {
+  id: number;
+  tipo_empleo: string;
+  antiguedad_meses: number;
+  ci_solicitante: boolean;
+  ci_conyuge: boolean;
+  factura_servicios: boolean;
+  boletas_pago: boolean;
+  extracto_gestora: boolean;
+  facturas_ultimo_ano: boolean;
+  estados_financieros: boolean;
+  nit: boolean;
+  croquis_domicilio: boolean;
+  croquis_negocio: boolean;
+  respaldos_patrimoniales: boolean;
+  observaciones: string | null;
+  fecha_verificacion: string;
 }
 export interface ApiPlanCredito {
   id: number;
@@ -1009,8 +1031,11 @@ export interface ApiPlanCredito {
   monto_cuota: number;
   saldo: number;
   estado: string;            // vigente | pagado | moroso
+  origen: string | null;             // walk_in | al_credito_sales
+  numero_factura: string | null;     // FCR-YYYY-NNNNNN de la inicial
   fecha: string;
   cuotas: ApiCuota[];
+  checklist: ApiChecklistCredito | null;
   cuotas_pagadas: number;
   total_pagado: number;
   proxima_cuota: string | null;
