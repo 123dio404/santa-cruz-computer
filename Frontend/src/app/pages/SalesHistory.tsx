@@ -58,7 +58,10 @@ interface HistorialData {
   ventas: VentaDetail[];
 }
 
-type Filtro = 'todas' | 'completadas' | 'pendientes' | 'clientes';
+type FiltroVentas = 'todas' | 'completadas' | 'pendientes' | 'clientes';
+type FiltroDevs   = 'todas' | 'aprobadas' | 'rechazadas';
+type Filtro = FiltroVentas | FiltroDevs;
+type Contexto = 'ventas' | 'devoluciones';
 
 export function SalesHistory() {
   const { user } = useAuth();
@@ -71,6 +74,9 @@ export function SalesHistory() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedVenta, setExpandedVenta] = useState<number | null>(null);
+  const [contexto, setContexto] = useState<Contexto>('ventas');
+  const [filtroClienteId, setFiltroClienteId] = useState<number | null>(null);
+  const [mensajeReset, setMensajeReset] = useState<string | null>(null);
   const [filtro, setFiltro] = useState<Filtro>(
     (searchParams.get('filtro') as Filtro) ?? 'todas'
   );
@@ -274,18 +280,69 @@ export function SalesHistory() {
   }
 
   const tabs: { key: Filtro; label: string; activeClass: string }[] = [
-    { key: 'todas',       label: 'Todas',       activeClass: 'bg-blue-600 text-white' },
-    { key: 'completadas', label: 'Completadas',  activeClass: 'bg-green-600 text-white' },
-    { key: 'pendientes',  label: 'Pendientes',   activeClass: 'bg-yellow-600 text-white' },
-    { key: 'clientes',    label: 'Clientes',     activeClass: 'bg-purple-600 text-white' },
-  ];
+    { key: 'todas',       label: 'Todas',       activeClass: 'bg-blue-600 text-white',   contexto: ['ventas', 'devoluciones'] as Contexto[] },
+    { key: 'completadas', label: 'Completadas', activeClass: 'bg-green-600 text-white',  contexto: ['ventas'] as Contexto[] },
+    { key: 'pendientes',  label: 'Pendientes',  activeClass: 'bg-yellow-600 text-white', contexto: ['ventas'] as Contexto[] },
+    { key: 'clientes',    label: 'Clientes',    activeClass: 'bg-purple-600 text-white', contexto: ['ventas'] as Contexto[] },
+    { key: 'aprobadas',   label: 'Aprobadas',   activeClass: 'bg-green-600 text-white',  contexto: ['devoluciones'] as Contexto[] },
+    { key: 'rechazadas',  label: 'Rechazadas',  activeClass: 'bg-red-600 text-white',    contexto: ['devoluciones'] as Contexto[] },
+  ].filter(t => t.contexto.includes(contexto));
 
   const ventasFiltradas = (historialData?.ventas ?? []).filter(venta => {
+    // Filtro por cliente (aplica en cualquier sub-tab)
+    if (filtroClienteId !== null && venta.cliente !== filtroClienteId) return false;
     if (filtro === 'todas')       return true;
     if (filtro === 'completadas') return venta.status === 'completed';
     if (filtro === 'pendientes')  return venta.status === 'pending';
     return true;
   });
+
+  // ── Lista de devoluciones para el contexto Devoluciones ────────────────────
+  const devolucionesLista = (devolucionesReporte ?? []).filter((d: any) => {
+    // Filtro por cliente (aplica en cualquier sub-tab)
+    if (filtroClienteId !== null && d.cliente !== filtroClienteId) return false;
+    if (filtro === 'todas')      return true;
+    if (filtro === 'aprobadas')  return d.estado === 'aprobada';
+    if (filtro === 'rechazadas') return d.estado === 'rechazada';
+    return true;
+  });
+
+  // Cambia el contexto Ventas ⇄ Devoluciones. Resetea el sub-filtro a 'todas'.
+  // Si el cliente elegido no tiene datos en el nuevo contexto, lo resetea y
+  // muestra un mensaje inline por 3 segundos.
+  const cambiarContexto = (nuevo: Contexto) => {
+    if (nuevo === contexto) return;
+    setContexto(nuevo);
+    setFiltro('todas');
+    if (filtroClienteId !== null) {
+      const items = nuevo === 'ventas'
+        ? (historialData?.ventas ?? []).map(v => v.cliente).filter(Boolean)
+        : (devolucionesReporte ?? []).map((d: any) => d.cliente).filter(Boolean);
+      if (!items.includes(filtroClienteId)) {
+        const nombre = clientesConDatos.find(c => c.id === filtroClienteId)?.name || 'ese cliente';
+        setFiltroClienteId(null);
+        setMensajeReset(`${nombre} no tiene ${nuevo} — mostrando todos.`);
+        setTimeout(() => setMensajeReset(null), 3500);
+      }
+    }
+  };
+
+  // ── Clientes con datos según el contexto activo (para el dropdown filtro) ──
+  const clientesConDatos = (() => {
+    const map = new Map<number, { name: string; count: number }>();
+    const items = contexto === 'ventas'
+      ? (historialData?.ventas ?? []).map(v => ({ cliente: v.cliente, name: v.cliente_name }))
+      : (devolucionesReporte ?? []).map((d: any) => ({ cliente: d.cliente, name: d.cliente_nombre }));
+    for (const it of items) {
+      if (!it.cliente || !it.name) continue;
+      const cur = map.get(it.cliente);
+      if (cur) cur.count++;
+      else     map.set(it.cliente, { name: it.name, count: 1 });
+    }
+    return Array.from(map.entries())
+      .map(([id, v]) => ({ id, name: v.name, count: v.count }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  })();
 
   const totalEfectivo      = (historialData?.ventas ?? []).reduce((s, v) => s + v.pagos.filter(p => p.metodo === 'efectivo').reduce((a, p) => a + (Number(p.monto) || 0), 0), 0);
   const totalTarjeta       = (historialData?.ventas ?? []).reduce((s, v) => s + v.pagos.filter(p => p.metodo === 'tarjeta').reduce((a, p) => a + (Number(p.monto) || 0), 0), 0);
@@ -685,14 +742,66 @@ export function SalesHistory() {
         </>
       )}
 
-      {/* Tabs */}
-      <div className="bg-white rounded-xl p-4 border border-gray-200">
-        <div className="flex gap-2 flex-wrap">
+      {/* Toggle Ventas / Devoluciones + filtro Cliente dependiente + sub-tabs */}
+      <div className="bg-white rounded-xl p-4 border border-gray-200 space-y-3">
+        {/* Toggle superior (Ventas / Devoluciones) */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+            <button onClick={() => cambiarContexto('ventas')}
+              className={`px-4 py-2 text-sm font-medium flex items-center gap-2 transition
+                          ${contexto === 'ventas' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+              Ventas
+              <span className={`inline-flex items-center justify-center min-w-[22px] px-1.5 rounded-full text-xs font-bold
+                                ${contexto === 'ventas' ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                {historialData?.ventas.length ?? 0}
+              </span>
+            </button>
+            <button onClick={() => cambiarContexto('devoluciones')}
+              className={`px-4 py-2 text-sm font-medium flex items-center gap-2 transition border-l border-gray-200
+                          ${contexto === 'devoluciones' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+              Devoluciones
+              <span className={`inline-flex items-center justify-center min-w-[22px] px-1.5 rounded-full text-xs font-bold
+                                ${contexto === 'devoluciones' ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                {devolucionesReporte?.length ?? 0}
+              </span>
+            </button>
+          </div>
+
+          {/* Filtro cliente dependiente del contexto */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-600 whitespace-nowrap">Cliente:</label>
+            <select value={filtroClienteId === null ? '' : String(filtroClienteId)}
+              onChange={e => setFiltroClienteId(e.target.value ? Number(e.target.value) : null)}
+              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white min-w-[200px]">
+              <option value="">
+                Todos ({contexto === 'ventas' ? (historialData?.ventas.length ?? 0) : (devolucionesReporte?.length ?? 0)})
+              </option>
+              {clientesConDatos.map(c => (
+                <option key={c.id} value={c.id}>{c.name} ({c.count})</option>
+              ))}
+            </select>
+            {filtroClienteId !== null && (
+              <button onClick={() => setFiltroClienteId(null)}
+                className="text-xs text-red-500 hover:text-red-700 hover:underline">
+                Limpiar
+              </button>
+            )}
+          </div>
+        </div>
+
+        {mensajeReset && (
+          <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5">
+            ℹ️ {mensajeReset}
+          </div>
+        )}
+
+        {/* Sub-tabs adaptativos según contexto */}
+        <div className="flex gap-2 flex-wrap pt-1">
           {tabs.map(tab => (
             <button
               key={tab.key}
-              onClick={() => { setFiltro(tab.key); setClienteFiltrado(null); }}
-              className={`px-4 py-2 rounded-lg transition-colors ${
+              onClick={() => { setFiltro(tab.key as Filtro); setClienteFiltrado(null); }}
+              className={`px-4 py-2 rounded-lg transition-colors text-sm ${
                 filtro === tab.key ? tab.activeClass : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
@@ -703,12 +812,11 @@ export function SalesHistory() {
       </div>
 
       {/* Generar Reporte — 2 filas: (1) filtros, (2) toggle tipo + contador + botones */}
-      {filtro !== 'clientes' && historialData && historialData.ventas.length > 0 && (() => {
+      {!(contexto === 'ventas' && filtro === 'clientes') && historialData && historialData.ventas.length > 0 && (() => {
         const devsEnRango  = devolucionesFiltradas();
         const totalDevs    = devsEnRango.reduce((s: number, d: any) => s + (Number(d.monto_reembolso) || 0), 0);
-        const hayDevs      = devsEnRango.length > 0;
-        // Si no hay devoluciones en el rango y el usuario había elegido esa tab, la forzamos a "ventas"
-        const tipoEfectivo: 'ventas' | 'devoluciones' = (repTipo === 'devoluciones' && !hayDevs) ? 'ventas' : repTipo;
+        // El tipo del reporte se controla desde el toggle superior (contexto).
+        const tipoEfectivo: 'ventas' | 'devoluciones' = contexto;
         const contador     = tipoEfectivo === 'ventas'
           ? `${ventasReporte.length} venta${ventasReporte.length === 1 ? '' : 's'} · Bs ${totalGeneralReporte.toFixed(2)}`
           : `${devsEnRango.length} devolución${devsEnRango.length === 1 ? '' : 'es'} · Bs ${totalDevs.toFixed(2)}`;
@@ -755,35 +863,12 @@ export function SalesHistory() {
               </div>
             </div>
 
-            {/* ── Fila 2 · Toggle tipo + contador + botones ── */}
+            {/* ── Fila 2 · Contador + botones (el tipo lo controla el toggle superior) ── */}
             <div className="p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
-              {/* Toggle Ventas / Devoluciones */}
-              <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
-                <button onClick={() => setRepTipo('ventas')}
-                  className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition
-                              ${tipoEfectivo === 'ventas' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-                  Ventas
-                  <span className={`inline-flex items-center justify-center min-w-[20px] px-1.5 rounded-full text-xs font-bold
-                                    ${tipoEfectivo === 'ventas' ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-700'}`}>
-                    {ventasReporte.length}
-                  </span>
-                </button>
-                <button onClick={() => hayDevs && setRepTipo('devoluciones')}
-                  disabled={!hayDevs}
-                  title={!hayDevs ? 'No hay devoluciones en el rango seleccionado' : ''}
-                  className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition border-l border-gray-200
-                              ${tipoEfectivo === 'devoluciones' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}
-                              ${!hayDevs ? 'opacity-40 cursor-not-allowed' : ''}`}>
-                  Devoluciones
-                  <span className={`inline-flex items-center justify-center min-w-[20px] px-1.5 rounded-full text-xs font-bold
-                                    ${tipoEfectivo === 'devoluciones' ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-700'}`}>
-                    {devsEnRango.length}
-                  </span>
-                </button>
-              </div>
-
-              {/* Contador */}
-              <span className="text-xs text-gray-600 whitespace-nowrap">{contador}</span>
+              <span className="text-sm text-gray-700">
+                Descargando: <strong className="text-gray-900">{tipoEfectivo === 'ventas' ? 'Ventas' : 'Devoluciones'}</strong>
+              </span>
+              <span className="text-xs text-gray-500 whitespace-nowrap">· {contador}</span>
 
               {/* Botones Excel / PDF */}
               <div className="flex items-center gap-2 sm:ml-auto">
@@ -804,7 +889,7 @@ export function SalesHistory() {
       })()}
 
       {/* ── CLIENTES TAB ── */}
-      {filtro === 'clientes' && (
+      {contexto === 'ventas' && filtro === 'clientes' && (
         <div className="space-y-4">
           {clienteFiltrado ? (
             /* Vista filtrada por cliente */
@@ -1033,8 +1118,8 @@ export function SalesHistory() {
         </div>
       )}
 
-      {/* ── VENTAS TABS ── */}
-      {filtro !== 'clientes' && (
+      {/* ── LISTA DE VENTAS (contexto ventas, filtros que no sean 'clientes') ── */}
+      {contexto === 'ventas' && filtro !== 'clientes' && (
         <>
           {loadError ? (
             <div className="bg-red-50 rounded-xl p-8 border border-red-200 text-center">
@@ -1252,6 +1337,80 @@ export function SalesHistory() {
                   No hay ventas con el filtro seleccionado.
                 </div>
               )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── LISTA DE DEVOLUCIONES (contexto devoluciones) ── */}
+      {contexto === 'devoluciones' && (
+        <>
+          {devolucionesLista.length === 0 ? (
+            <div className="bg-white rounded-xl p-12 border border-gray-200 text-center">
+              <RotateCcw className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-600 mb-2">
+                {filtroClienteId !== null || filtro !== 'todas'
+                  ? 'No hay devoluciones con los filtros seleccionados'
+                  : 'No hay devoluciones registradas aún'}
+              </p>
+              <p className="text-sm text-gray-500">
+                Las devoluciones se registran desde el listado de Ventas con el botón "Registrar devolución"
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {devolucionesLista.map((d: any) => (
+                <div key={d.id} className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap mb-2">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium
+                          ${d.estado === 'aprobada'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-red-100 text-red-700'}`}>
+                          {d.estado === 'aprobada' ? 'Aprobada' : 'Rechazada'}
+                        </span>
+                        <p className="font-semibold text-gray-900">
+                          Devolución #{d.id} · Venta #{d.venta}
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-gray-500">Cliente</p>
+                          <p className="font-medium text-gray-900">{d.cliente_nombre || 'General'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Producto</p>
+                          <p className="font-medium text-gray-900 truncate">
+                            {d.producto_nombre || `#${d.producto}`}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Cantidad</p>
+                          <p className="font-medium text-gray-900">{d.cantidad}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Fecha</p>
+                          <p className="font-medium text-gray-900">
+                            {new Date(d.fecha).toLocaleDateString('es-BO')}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 text-sm">
+                        <p className="text-xs text-gray-500 mb-0.5">Motivo</p>
+                        <p className="text-gray-700">{motivoDev(d)}</p>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-xs text-gray-500 mb-0.5">Reembolso</p>
+                      <p className={`text-lg font-bold
+                        ${d.estado === 'aprobada' ? 'text-green-600' : 'text-gray-400'}`}>
+                        {Number(d.monto_reembolso || 0).toFixed(2)} Bs
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </>
