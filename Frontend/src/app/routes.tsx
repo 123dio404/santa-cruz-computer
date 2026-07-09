@@ -43,6 +43,7 @@ import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
 import { PaymentSuccess } from './pages/PaymentSuccess';
 import { Orders } from './pages/Orders';
+import { MisServicios } from './pages/MisServicios';
 import { MisCreditos } from './pages/MisCreditos';
 import { Warranties } from './pages/Warranties';
 import { Reviews } from './pages/Reviews';
@@ -316,6 +317,24 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['client']}>
         <Layout>
           <Orders />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
+
+  /**
+   * /mis-servicios - Mis Servicios (CU25/26/27, vista del cliente)
+   * - Historial de mantenimientos preventivos y correctivos
+   * - 3 subsecciones: Listo para retirar / En proceso / Historial
+   * - Muestra el modelo del equipo vinculado + costo (GRATIS o Bs)
+   * - Acceso: Solo Clientes
+   */
+  {
+    path: '/mis-servicios',
+    element: (
+      <ProtectedRoute allowedRoles={['client']}>
+        <Layout>
+          <MisServicios />
         </Layout>
       </ProtectedRoute>
     )

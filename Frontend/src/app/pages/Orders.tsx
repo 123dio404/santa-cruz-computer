@@ -17,22 +17,9 @@
  *   reclamo queda registrado para que el vendedor/admin lo atienda en tienda.
  */
 import { useState, useEffect } from 'react';
-import { Package, Eye, X, FileText, ShieldCheck, Star, Wrench, RotateCcw } from 'lucide-react';
-
-const SERV_ESTADO: Record<string, { label: string; cls: string }> = {
-  solicitado: { label: 'Solicitado', cls: 'bg-gray-100 text-gray-700' },
-  agendado:   { label: 'Agendado',   cls: 'bg-yellow-100 text-yellow-700' },
-  en_proceso: { label: 'En proceso', cls: 'bg-blue-100 text-blue-700' },
-  finalizado: { label: 'Finalizado', cls: 'bg-green-100 text-green-700' },
-  entregado:  { label: 'Entregado',  cls: 'bg-emerald-100 text-emerald-700' },
-  cancelado:  { label: 'Cancelado',  cls: 'bg-red-100 text-red-600' },
-};
-const formatFechaServ = (iso: string) => {
-  const d = new Date(iso.length === 10 ? iso + 'T00:00:00' : iso);
-  return d.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' });
-};
+import { Package, Eye, X, FileText, ShieldCheck, Star, RotateCcw } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
-import { ventasAPI, garantiasAPI, resenasAPI, servicioTecnicoAPI, devolucionesAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia, ApiResena, ApiOrdenServicio } from '../services/api';
+import { ventasAPI, garantiasAPI, resenasAPI, devolucionesAPI, API_BASE_URL, BACKEND_ROOT_URL, ApiVenta, ApiGarantia, ApiResena } from '../services/api';
 import { StarRating } from '../components/StarRating';
 import { useAuth } from '../context/AuthContext';
 
@@ -41,10 +28,7 @@ export function Orders() {
   const [orders, setOrders] = useState<ApiVenta[]>([]);
   const [garantias, setGarantias] = useState<ApiGarantia[]>([]);
   const [resenas, setResenas] = useState<ApiResena[]>([]);
-  const [servicios, setServicios] = useState<ApiOrdenServicio[]>([]);
   const [devoluciones, setDevoluciones] = useState<any[]>([]);
-  const [servHistorialAbierto, setServHistorialAbierto] = useState(false);
-  const [servDetalle, setServDetalle] = useState<ApiOrdenServicio | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<ApiVenta | null>(null);
 
@@ -74,7 +58,6 @@ export function Orders() {
       ventasAPI.getByCliente(clienteId).then(setOrders).catch(() => setOrders([])),
       cargarGarantias(clienteId),
       cargarResenas(clienteId),
-      servicioTecnicoAPI.ordenes({ cliente: clienteId }).then(setServicios).catch(() => setServicios([])),
       devolucionesAPI.getByCliente(clienteId).then(setDevoluciones).catch(() => setDevoluciones([])),
     ]).finally(() => setLoading(false));
   }, [user]);
@@ -208,130 +191,8 @@ export function Orders() {
         <p className="text-gray-600">Historial de compras, garantías y seguimiento</p>
       </div>
 
-      {/* CU25/26/27: Servicios técnicos agrupados por estado */}
-      {servicios.length > 0 && (() => {
-        const hoy = new Date().toISOString().slice(0, 10);
-        const listos    = servicios.filter(s => s.estado === 'finalizado');
-        const enProceso = servicios.filter(s => ['solicitado', 'agendado', 'en_proceso'].includes(s.estado));
-        const historial = servicios.filter(s => ['entregado', 'cancelado'].includes(s.estado));
-
-        const cardServicio = (s: ApiOrdenServicio) => {
-          const abierto = servDetalle?.id === s.id;
-          const adelantado = s.estado === 'finalizado' && s.fecha_entrega_prevista && s.fecha_entrega_prevista.slice(0, 10) > hoy;
-          const tareasHechas = s.tareas.filter(t => t.realizado);
-          return (
-            <div key={s.id} className="border border-gray-200 rounded-lg p-3 bg-white">
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-gray-900">
-                    #{s.id} · {s.tipo === 'preventivo' ? 'Preventivo' : 'Correctivo'} · {s.equipo}
-                  </p>
-                  {s.estado === 'finalizado' && (
-                    <p className="text-sm text-green-700 font-medium mt-1">
-                      {adelantado
-                        ? `✨ Adelantado — podés retirarlo desde HOY (original: ${formatFechaServ(s.fecha_entrega_prevista!)})`
-                        : 'Listo para retirar HOY'}
-                    </p>
-                  )}
-                  {s.estado === 'agendado' && s.fecha_entrega_prevista && (
-                    <p className="text-sm text-yellow-700 font-medium mt-1">
-                      📅 Retiro previsto: {formatFechaServ(s.fecha_entrega_prevista)}
-                    </p>
-                  )}
-                  {s.estado === 'solicitado' && (
-                    <p className="text-sm text-gray-500 mt-1">Solicitado — el técnico va a asignar fecha pronto</p>
-                  )}
-                  {s.estado === 'en_proceso' && (
-                    <p className="text-sm text-blue-700 mt-1">
-                      ⚙️ En proceso{s.fecha_entrega_prevista ? ` · retiro previsto: ${formatFechaServ(s.fecha_entrega_prevista)}` : ''}
-                    </p>
-                  )}
-                  {s.estado === 'entregado' && s.fecha_entrega_real && (
-                    <p className="text-sm text-gray-500 mt-1">
-                      Entregado el {new Date(s.fecha_entrega_real).toLocaleDateString('es-BO')}
-                    </p>
-                  )}
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${SERV_ESTADO[s.estado]?.cls ?? ''}`}>
-                    {SERV_ESTADO[s.estado]?.label ?? s.estado}
-                  </span>
-                  <p className="text-sm font-bold text-gray-900 mt-1">
-                    {s.es_beneficio ? 'GRATIS' : `Bs ${Number(s.costo_total).toFixed(2)}`}
-                  </p>
-                </div>
-              </div>
-              {/* Detalle expandible: solo en listos (útil para saber qué se hizo antes de retirar) */}
-              {s.estado === 'finalizado' && (s.detalles.length > 0 || tareasHechas.length > 0) && (
-                <div className="mt-2 pt-2 border-t border-gray-100">
-                  <button onClick={() => setServDetalle(abierto ? null : s)}
-                    className="text-xs text-blue-600 hover:underline">
-                    {abierto ? '▼ Ocultar detalle del servicio' : '▶ Ver detalle del servicio'}
-                  </button>
-                  {abierto && (
-                    <div className="mt-2 text-xs text-gray-700 space-y-1">
-                      {s.detalles.length > 0 && (
-                        <div>
-                          <p className="font-semibold">Trabajos realizados:</p>
-                          <ul className="ml-5 list-disc">
-                            {s.detalles.map(d => <li key={d.id}>{d.servicio_nombre}</li>)}
-                            {tareasHechas.map(t => <li key={t.id}>{t.tarea}</li>)}
-                          </ul>
-                        </div>
-                      )}
-                      {s.observaciones && (
-                        <p><span className="font-semibold">Notas del técnico:</span> {s.observaciones}</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        };
-
-        return (
-          <div className="space-y-4">
-            {/* Listo para retirar */}
-            {listos.length > 0 && (
-              <div className="bg-green-50 rounded-xl p-4 border-2 border-green-300">
-                <h2 className="font-semibold text-green-800 mb-3 flex items-center gap-2">
-                  ✅ Listo para retirar ({listos.length})
-                </h2>
-                <div className="space-y-2">{listos.map(cardServicio)}</div>
-              </div>
-            )}
-
-            {/* En proceso */}
-            {enProceso.length > 0 && (
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
-                <h2 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                  <Wrench className="w-5 h-5 text-yellow-600" /> En proceso ({enProceso.length})
-                </h2>
-                <div className="space-y-2">{enProceso.map(cardServicio)}</div>
-              </div>
-            )}
-
-            {/* Historial (colapsable) */}
-            {historial.length > 0 && (
-              <div className="bg-white rounded-xl p-4 border border-gray-200">
-                <button onClick={() => setServHistorialAbierto(!servHistorialAbierto)}
-                  className="w-full flex items-center justify-between text-left">
-                  <h2 className="font-semibold text-gray-700 flex items-center gap-2">
-                    📚 Historial ({historial.length} servicio{historial.length === 1 ? '' : 's'} anterior{historial.length === 1 ? '' : 'es'})
-                  </h2>
-                  <span className="text-blue-600 text-sm">
-                    {servHistorialAbierto ? '▼ Ocultar' : '▶ Ver historial completo'}
-                  </span>
-                </button>
-                {servHistorialAbierto && (
-                  <div className="space-y-2 mt-3">{historial.map(cardServicio)}</div>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })()}
+      {/* Los servicios técnicos ahora viven en /mis-servicios — vista separada
+          y formal del historial de mantenimientos. */}
 
       {orders.length === 0 ? (
         <div className="bg-white rounded-xl p-12 border border-gray-200 text-center">
