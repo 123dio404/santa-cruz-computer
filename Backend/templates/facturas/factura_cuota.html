@@ -1,0 +1,154 @@
+{% comment %}
+factura_cuota.html — Factura HTML del cobro de UNA cuota del crédito
+(CU28/CU29). Se renderiza y se envía por Brevo al marcar la cuota como pagada.
+
+Context esperado:
+  logo_url          → URL absoluta del logo
+  frontend_url      → URL base del frontend
+  fecha_emision     → datetime (default: now)
+  empresa           → dict con nombre, nit, direccion, telefono, correo
+  cliente           → dict con nombre, ci, correo, telefono
+  plan              → PlanCredito (con numero_factura del crédito original)
+  producto_nombre   → string
+  cuota             → Cuota (numero, monto, mora, metodo_pago, numero_factura, ...)
+  total_pagado      → monto + mora (Decimal)
+  cuotas            → queryset ordenado (para el progreso visual)
+  cuotas_pagadas    → int
+  saldo_restante    → Decimal (lo que aún falta del plan)
+  stripe_receipt_url → URL del recibo de Stripe si aplica, sino None
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<title>Recibo cuota {{ cuota.numero }}/{{ plan.n_cuotas }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+<div style="max-width:640px;margin:0 auto;background:#ffffff;">
+
+  <!-- Banda superior -->
+  <div style="background:#065f46;padding:20px 24px;color:#ffffff;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td style="vertical-align:middle;">
+        {% if logo_url %}<img src="{{ logo_url }}" alt="{{ empresa.nombre }}" height="44" style="display:block;"/>{% endif %}
+      </td>
+      <td style="text-align:right;vertical-align:middle;color:#d1fae5;font-size:12px;letter-spacing:2px;">
+        RECIBO DE CUOTA<br/>
+        <span style="font-size:18px;color:#ffffff;font-weight:bold;letter-spacing:0;">{{ cuota.numero_factura }}</span>
+      </td>
+    </tr></table>
+  </div>
+
+  <!-- Datos empresa / cliente -->
+  <div style="padding:20px 24px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#374151;">
+      <tr>
+        <td style="width:50%;vertical-align:top;padding-right:12px;">
+          <p style="margin:0 0 4px;color:#6b7280;font-size:11px;letter-spacing:1px;">EMITE</p>
+          <p style="margin:0;font-weight:bold;color:#111827;">{{ empresa.nombre }}</p>
+          <p style="margin:2px 0 0;">NIT: {{ empresa.nit }}</p>
+          <p style="margin:2px 0 0;">{{ empresa.direccion }}</p>
+        </td>
+        <td style="width:50%;vertical-align:top;padding-left:12px;border-left:1px solid #e5e7eb;">
+          <p style="margin:0 0 4px;color:#6b7280;font-size:11px;letter-spacing:1px;">CLIENTE</p>
+          <p style="margin:0;font-weight:bold;color:#111827;">{{ cliente.nombre }}</p>
+          {% if cliente.ci %}<p style="margin:2px 0 0;">CI: {{ cliente.ci }}</p>{% endif %}
+          {% if cliente.correo %}<p style="margin:2px 0 0;">{{ cliente.correo }}</p>{% endif %}
+        </td>
+      </tr>
+    </table>
+    <p style="margin:16px 0 0;font-size:12px;color:#6b7280;">
+      Fecha de pago: <strong style="color:#111827;">{{ fecha_emision|date:"d/m/Y H:i" }}</strong> ·
+      Crédito original: <strong style="color:#111827;">{{ plan.numero_factura }}</strong>
+    </p>
+  </div>
+
+  <!-- Monto pagado destacado -->
+  <div style="padding:16px 24px 8px;">
+    <div style="background:#ecfdf5;border:2px solid #10b981;border-radius:8px;padding:18px 20px;">
+      <p style="margin:0;font-size:12px;letter-spacing:1px;color:#065f46;">✅ CUOTA {{ cuota.numero }}/{{ plan.n_cuotas }} PAGADA</p>
+      <p style="margin:6px 0 0;font-size:26px;font-weight:bold;color:#065f46;">Bs {{ total_pagado|floatformat:2 }}</p>
+      <p style="margin:4px 0 0;font-size:13px;color:#047857;">
+        Producto: {{ producto_nombre }}
+      </p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;font-size:12px;color:#065f46;">
+        <tr>
+          <td>Monto de la cuota: Bs {{ cuota.monto|floatformat:2 }}</td>
+          <td align="right">
+            Método: {% if cuota.metodo_pago == 'stripe' %}💳 Tarjeta (Stripe){% else %}💵 Efectivo{% endif %}
+          </td>
+        </tr>
+        {% if cuota.mora %}
+        <tr>
+          <td colspan="2" style="color:#b91c1c;padding-top:4px;">
+            Incluye recargo por mora: Bs {{ cuota.mora|floatformat:2 }}
+          </td>
+        </tr>
+        {% endif %}
+      </table>
+      {% if stripe_receipt_url %}
+      <p style="margin:12px 0 0;font-size:12px;">
+        <a href="{{ stripe_receipt_url }}" style="color:#065f46;">Ver comprobante de Stripe</a>
+      </p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Progreso visual -->
+  <div style="padding:16px 24px;">
+    <p style="margin:0 0 8px;font-size:12px;color:#6b7280;letter-spacing:1px;">
+      PROGRESO DEL CRÉDITO ({{ cuotas_pagadas }}/{{ plan.n_cuotas }} pagadas)
+    </p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
+      {% for c in cuotas %}
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;width:32px;text-align:center;">
+          {% if c.estado == 'pagada' %}<span style="color:#059669;font-weight:bold;">✓</span>
+          {% elif c.numero == cuota.numero %}<span style="color:#059669;font-weight:bold;">✓</span>
+          {% elif c.estado == 'vencida' %}<span style="color:#dc2626;font-weight:bold;">!</span>
+          {% else %}<span style="color:#9ca3af;">·</span>{% endif %}
+        </td>
+        <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;">
+          Cuota {{ c.numero }}/{{ plan.n_cuotas }} — vence {{ c.fecha_vencimiento|date:"d/m/Y" }}
+        </td>
+        <td align="right" style="padding:6px 8px;border-bottom:1px solid #f3f4f6;color:{% if c.estado == 'pagada' or c.numero == cuota.numero %}#059669{% elif c.estado == 'vencida' %}#dc2626{% else %}#6b7280{% endif %};">
+          Bs {{ c.monto|floatformat:2 }}{% if c.mora %} + Bs {{ c.mora|floatformat:2 }} mora{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <!-- Saldo restante -->
+  <div style="padding:0 24px 16px;">
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px 16px;">
+      <p style="margin:0;font-size:11px;letter-spacing:1px;color:#1e40af;">SALDO PENDIENTE</p>
+      <p style="margin:6px 0 0;font-size:20px;font-weight:bold;color:#1e40af;">Bs {{ saldo_restante|floatformat:2 }}</p>
+      {% if saldo_restante > 0 %}
+      <p style="margin:4px 0 0;font-size:12px;color:#1e40af;">
+        Te quedan {{ cuotas_restantes }} cuota{{ cuotas_restantes|pluralize }} por pagar.
+      </p>
+      {% else %}
+      <p style="margin:4px 0 0;font-size:12px;color:#065f46;font-weight:bold;">
+        🎉 ¡Terminaste de pagar este crédito!
+      </p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Botón CTA -->
+  <div style="padding:8px 24px 24px;text-align:center;">
+    <a href="{{ frontend_url }}/mis-creditos" style="background:#065f46;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;font-size:14px;display:inline-block;">
+      Ver mis créditos
+    </a>
+  </div>
+
+  <!-- Footer -->
+  <div style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:14px 24px;font-size:11px;color:#6b7280;text-align:center;">
+    {{ empresa.nombre }} · NIT {{ empresa.nit }} · {{ empresa.direccion }}<br/>
+    Guardá este recibo como comprobante del pago de tu cuota.
+  </div>
+
+</div>
+</body>
+</html>

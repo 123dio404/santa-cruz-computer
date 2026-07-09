@@ -1401,6 +1401,37 @@ def _siguiente_numero_factura_credito():
     return f'FCR-{timezone.now().year}-{n:06d}'
 
 
+# Datos fijos de la empresa que aparecen en las facturas HTML. Un cliente
+# real los tendría en la BD; para el proyecto están hardcodeados y se usan
+# tanto en la factura de la inicial como en la de cada cuota.
+EMPRESA_FACTURA = {
+    'nombre':    'Santa Cruz Computer',
+    'nit':       '1234567019',
+    'direccion': 'Av. Cristo Redentor #123, Santa Cruz de la Sierra, Bolivia',
+    'telefono':  '+591 3 344 5566',
+    'correo':    'ventas@santacruzcomputer.bo',
+}
+
+
+def _render_factura_credito(template_name, context):
+    """
+    Renderiza el HTML de una factura del módulo crédito. Encapsula la lógica
+    de tomar `logo_url`, `frontend_url` y los datos de empresa de forma consistente,
+    para que el walk-in y el cobro de cuotas usen los mismos defaults.
+    """
+    from django.conf import settings as _s
+    from django.template.loader import render_to_string
+    from django.utils import timezone
+    ctx = {
+        'logo_url':      f'{_s.FRONTEND_URL}/logo.png',
+        'frontend_url':  _s.FRONTEND_URL,
+        'fecha_emision': timezone.now(),
+        'empresa':       EMPRESA_FACTURA,
+    }
+    ctx.update(context)
+    return render_to_string(template_name, ctx)
+
+
 def _refrescar_moras(plan):
     """
     Marca como 'vencida' las cuotas pendientes cuyo vencimiento ya pasó y les
@@ -1678,51 +1709,33 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
 
     def _notificar_credito_creado(self, plan, producto, cliente):
         """
-        Correo + campana al cliente cuando se le aprueba un crédito walk-in.
-        El template HTML completo se termina de armar en el paso 3 (templates
-        de factura); por ahora enviamos un correo con toda la información clave
-        inline para no bloquear el flujo.
+        Correo (con la factura HTML renderizada) + campana al cliente cuando
+        se le aprueba un crédito walk-in.
         """
         if not (cliente and getattr(cliente, 'correo', '')):
             return
         try:
-            from django.conf import settings as _s
-            from apps.users.views import crear_notificacion, _email_html
-            nombre = f'{cliente.nombre or ""} {cliente.apellido or ""}'.strip() or 'cliente'
-            filas_cuotas = ''.join(
-                f'<tr><td style="padding:4px 8px;border:1px solid #e5e7eb;">{c.numero}</td>'
-                f'<td style="padding:4px 8px;border:1px solid #e5e7eb;">{c.fecha_vencimiento.strftime("%d/%m/%Y")}</td>'
-                f'<td style="padding:4px 8px;border:1px solid #e5e7eb;text-align:right;">Bs {float(c.monto):.2f}</td></tr>'
-                for c in plan.cuotas.order_by('numero')
-            )
-            cuerpo = (
-                f'<p>Confirmamos el <strong>crédito #{plan.id}</strong> por el producto '
-                f'<strong>{producto.nombre}</strong>.</p>'
-                f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px;margin:16px 0;">'
-                f'<p style="margin:0 0 4px;font-size:12px;color:#3730a3;font-weight:bold;letter-spacing:1px;">📄 FACTURA</p>'
-                f'<p style="margin:0;font-size:16px;font-weight:bold;color:#1e40af;">{plan.numero_factura}</p>'
-                f'</div>'
-                f'<p><strong>Resumen financiero</strong><br/>'
-                f'Precio base: Bs {float(plan.precio_base):.2f}<br/>'
-                f'Recargo: +{float(plan.recargo_pct):.0f}% → Total financiado: Bs {float(plan.precio_financiado):.2f}<br/>'
-                f'Inicial pagada hoy: <strong>Bs {float(plan.inicial):.2f}</strong> (efectivo)<br/>'
-                f'Saldo en {plan.n_cuotas} cuotas mensuales de Bs {float(plan.monto_cuota):.2f}.</p>'
-                f'<p><strong>Cronograma de cuotas</strong></p>'
-                f'<table style="border-collapse:collapse;width:100%;font-size:13px;">'
-                f'<thead><tr style="background:#f3f4f6;">'
-                f'<th style="padding:6px 8px;border:1px solid #e5e7eb;text-align:left;">Cuota</th>'
-                f'<th style="padding:6px 8px;border:1px solid #e5e7eb;text-align:left;">Vence</th>'
-                f'<th style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right;">Monto</th>'
-                f'</tr></thead><tbody>{filas_cuotas}</tbody></table>'
-                f'<p style="margin-top:14px;">Podés pagar las cuotas presencialmente en efectivo o online desde <em>Mis Créditos</em>.</p>'
-            )
-            _html = _email_html(nombre, cuerpo, 'Ver mis créditos', f'{_s.FRONTEND_URL}/mis-creditos')
+            from apps.users.views import crear_notificacion
+            # Recargo monetario = financiado - base (para no re-calcularlo en el template)
+            recargo_monto = _2d(Decimal(str(plan.precio_financiado)) - Decimal(str(plan.precio_base)))
+            html = _render_factura_credito('facturas/factura_inicial.html', {
+                'cliente': {
+                    'nombre':   f'{cliente.nombre or ""} {cliente.apellido or ""}'.strip() or 'Cliente',
+                    'ci':       getattr(cliente, 'ci', None) or getattr(cliente, 'documento', None),
+                    'correo':   cliente.correo,
+                    'telefono': getattr(cliente, 'telefono', None),
+                },
+                'plan':            plan,
+                'producto_nombre': producto.nombre,
+                'recargo_monto':   recargo_monto,
+            })
             crear_notificacion(
                 tipo='credito',
                 titulo=f'Crédito aprobado — {plan.numero_factura}',
-                mensaje=f'Crédito #{plan.id} por {producto.nombre}: {plan.n_cuotas} cuotas de Bs {float(plan.monto_cuota):.2f}.',
+                mensaje=(f'Crédito #{plan.id} por {producto.nombre}: '
+                         f'{plan.n_cuotas} cuotas de Bs {float(plan.monto_cuota):.2f}.'),
                 cliente_id=cliente.id, enlace='/mis-creditos',
-                canal='ambos', email=cliente.correo, html=_html,
+                canal='ambos', email=cliente.correo, html=html,
             )
         except Exception:
             pass  # el fallo del correo no debe romper el request
