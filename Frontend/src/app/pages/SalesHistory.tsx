@@ -80,6 +80,7 @@ export function SalesHistory() {
   const [repDesde, setRepDesde] = useState('');
   const [repHasta, setRepHasta] = useState('');
   const [repVendedor, setRepVendedor] = useState<string>(''); // '', 'online' o id en string
+  const [repTipo, setRepTipo] = useState<'ventas' | 'devoluciones'>('ventas');
 
   // Client tab state
   const [clienteFiltrado, setClienteFiltrado] = useState<ApiCliente | null>(null);
@@ -701,88 +702,106 @@ export function SalesHistory() {
         </div>
       </div>
 
-      {/* Generar Reporte: rango de fechas + botones Excel/PDF (solo en tabs de ventas) */}
-      {filtro !== 'clientes' && historialData && historialData.ventas.length > 0 && (
-        <div className="bg-white rounded-xl p-4 border border-gray-200 flex flex-col lg:flex-row items-start lg:items-center gap-3">
-          <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-gray-500" />
-            <span className="text-sm font-medium text-gray-700 whitespace-nowrap">Generar Reporte:</span>
-          </div>
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-500 whitespace-nowrap">Desde</label>
-              <input type="date" value={repDesde} onChange={e => setRepDesde(e.target.value)}
-                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
+      {/* Generar Reporte — 2 filas: (1) filtros, (2) toggle tipo + contador + botones */}
+      {filtro !== 'clientes' && historialData && historialData.ventas.length > 0 && (() => {
+        const devsEnRango  = devolucionesFiltradas();
+        const totalDevs    = devsEnRango.reduce((s: number, d: any) => s + (Number(d.monto_reembolso) || 0), 0);
+        const hayDevs      = devsEnRango.length > 0;
+        // Si no hay devoluciones en el rango y el usuario había elegido esa tab, la forzamos a "ventas"
+        const tipoEfectivo: 'ventas' | 'devoluciones' = (repTipo === 'devoluciones' && !hayDevs) ? 'ventas' : repTipo;
+        const contador     = tipoEfectivo === 'ventas'
+          ? `${ventasReporte.length} venta${ventasReporte.length === 1 ? '' : 's'} · Bs ${totalGeneralReporte.toFixed(2)}`
+          : `${devsEnRango.length} devolución${devsEnRango.length === 1 ? '' : 'es'} · Bs ${totalDevs.toFixed(2)}`;
+        const puedeDescargar = tipoEfectivo === 'ventas' ? ventasReporte.length > 0 : devsEnRango.length > 0;
+        const onExcel = tipoEfectivo === 'ventas' ? descargarExcel : descargarDevExcel;
+        const onPDF   = tipoEfectivo === 'ventas' ? descargarPDF   : descargarDevPDF;
+        return (
+          <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+            {/* ── Fila 1 · Filtros ── */}
+            <div className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <FileText className="w-4 h-4 text-gray-500" />
+                <span className="text-sm font-semibold text-gray-800">Generar reporte</span>
+                {(repDesde || repHasta || repVendedor !== '') && (
+                  <button onClick={() => { setRepDesde(''); setRepHasta(''); setRepVendedor(''); }}
+                    className="ml-auto text-xs text-red-500 hover:text-red-700 hover:underline whitespace-nowrap">
+                    Limpiar filtros
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Desde</label>
+                  <input type="date" value={repDesde} onChange={e => setRepDesde(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Hasta</label>
+                  <input type="date" value={repHasta} onChange={e => setRepHasta(e.target.value)}
+                    min={repDesde}
+                    className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Vendedor</label>
+                  <select value={repVendedor} onChange={e => setRepVendedor(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 bg-white">
+                    <option value="">Todos</option>
+                    <option value="online">Pedidos online</option>
+                    {vendedoresUnicos.map(v => (
+                      <option key={v.id} value={String(v.id)}>{v.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-500 whitespace-nowrap">Hasta</label>
-              <input type="date" value={repHasta} onChange={e => setRepHasta(e.target.value)}
-                min={repDesde}
-                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-500 whitespace-nowrap">Vendedor</label>
-              <select
-                value={repVendedor}
-                onChange={e => setRepVendedor(e.target.value)}
-                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 bg-white min-w-[160px]"
-              >
-                <option value="">Todos</option>
-                <option value="online">Pedidos online</option>
-                {vendedoresUnicos.map(v => (
-                  <option key={v.id} value={String(v.id)}>{v.name}</option>
-                ))}
-              </select>
-            </div>
-            {(repDesde || repHasta || repVendedor !== '') && (
-              <button onClick={() => { setRepDesde(''); setRepHasta(''); setRepVendedor(''); }}
-                className="text-xs text-red-500 hover:text-red-700 hover:underline whitespace-nowrap">
-                Limpiar
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-2 lg:ml-auto">
-            <span className="text-xs text-gray-500 whitespace-nowrap">
-              {ventasReporte.length} venta(s) - Bs {totalGeneralReporte.toFixed(2)}
-            </span>
-            <button
-              onClick={descargarExcel}
-              disabled={ventasReporte.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm font-medium"
-              title="Descargar reporte en formato Excel (CSV)"
-            >
-              <FileSpreadsheet className="w-4 h-4" /> Excel
-            </button>
-            <button
-              onClick={descargarPDF}
-              disabled={ventasReporte.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm font-medium"
-              title="Descargar reporte en formato PDF"
-            >
-              <FileText className="w-4 h-4" /> PDF
-            </button>
-            {devolucionesReporte.length > 0 && (
-              <>
-                <span className="mx-1 hidden sm:inline text-gray-300">|</span>
-                <button
-                  onClick={descargarDevExcel}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-medium"
-                  title="Reporte de devoluciones (Excel)"
-                >
-                  <RotateCcw className="w-4 h-4" /> Dev. Excel
+
+            {/* ── Fila 2 · Toggle tipo + contador + botones ── */}
+            <div className="p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
+              {/* Toggle Ventas / Devoluciones */}
+              <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                <button onClick={() => setRepTipo('ventas')}
+                  className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition
+                              ${tipoEfectivo === 'ventas' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                  Ventas
+                  <span className={`inline-flex items-center justify-center min-w-[20px] px-1.5 rounded-full text-xs font-bold
+                                    ${tipoEfectivo === 'ventas' ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                    {ventasReporte.length}
+                  </span>
                 </button>
-                <button
-                  onClick={descargarDevPDF}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 text-white rounded-lg hover:bg-amber-800 transition-colors text-sm font-medium"
-                  title="Reporte de devoluciones (PDF)"
-                >
-                  <RotateCcw className="w-4 h-4" /> Dev. PDF
+                <button onClick={() => hayDevs && setRepTipo('devoluciones')}
+                  disabled={!hayDevs}
+                  title={!hayDevs ? 'No hay devoluciones en el rango seleccionado' : ''}
+                  className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition border-l border-gray-200
+                              ${tipoEfectivo === 'devoluciones' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}
+                              ${!hayDevs ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                  Devoluciones
+                  <span className={`inline-flex items-center justify-center min-w-[20px] px-1.5 rounded-full text-xs font-bold
+                                    ${tipoEfectivo === 'devoluciones' ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                    {devsEnRango.length}
+                  </span>
                 </button>
-              </>
-            )}
+              </div>
+
+              {/* Contador */}
+              <span className="text-xs text-gray-600 whitespace-nowrap">{contador}</span>
+
+              {/* Botones Excel / PDF */}
+              <div className="flex items-center gap-2 sm:ml-auto">
+                <button onClick={onExcel} disabled={!puedeDescargar}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+                  title={`Descargar ${tipoEfectivo === 'ventas' ? 'ventas' : 'devoluciones'} en Excel`}>
+                  <FileSpreadsheet className="w-4 h-4" /> Excel
+                </button>
+                <button onClick={onPDF} disabled={!puedeDescargar}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+                  title={`Descargar ${tipoEfectivo === 'ventas' ? 'ventas' : 'devoluciones'} en PDF`}>
+                  <FileText className="w-4 h-4" /> PDF
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── CLIENTES TAB ── */}
       {filtro === 'clientes' && (
