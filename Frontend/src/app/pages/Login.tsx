@@ -22,7 +22,7 @@
  * - Funciona tanto para usuarios (tabla usuario) como clientes (tabla cliente)
  */
 import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams, Link } from 'react-router';
 import { useAuth } from '../context/AuthContext';
 import { useAudit } from '../context/AuditContext';
 import { authAPI } from '../services/api';
@@ -290,6 +290,10 @@ export function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-gray-100 p-4">
       <div className="w-full max-w-md">
+        {/* Volver al inicio (landing pública) — visible siempre arriba del card */}
+        <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-blue-700 hover:text-blue-900 mb-3 font-medium">
+          <ArrowLeft className="w-4 h-4" /> Volver al inicio
+        </Link>
         <div className="bg-white rounded-2xl shadow-xl p-8">
           {/* Header */}
           <div className="text-center mb-8">

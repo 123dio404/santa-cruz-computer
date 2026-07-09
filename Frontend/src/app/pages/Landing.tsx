@@ -15,7 +15,7 @@ import {
   MapPin, Phone, Clock, Mail,
   CreditCard, Wrench, Crown, ShieldCheck,
   Banknote, QrCode, Package, Store as StoreIcon,
-  ChevronRight,
+  ChevronRight, Menu, X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { productosAPI, categoriasAPI, ApiProduct, ApiCategoria } from '../services/api';
@@ -58,6 +58,7 @@ export function Landing() {
   const [productos, setProductos] = useState<ApiProduct[]>([]);
   const [categorias, setCategorias] = useState<ApiCategoria[]>([]);
   const [categoriaSel, setCategoriaSel] = useState<number | ''>('');
+  const [menuAbierto, setMenuAbierto] = useState(false);
 
   useEffect(() => {
     Promise.all([productosAPI.getAll(), categoriasAPI.getAll()])
@@ -76,37 +77,71 @@ export function Landing() {
 
   return (
     <div className="bg-white text-gray-900">
-      {/* ── Nav sticky (sin TopBar; los datos de contacto viven en Ubicación + Footer) ── */}
+      {/* ── Nav sticky (con menú hamburguesa en móvil) ─────────────────────── */}
       <nav className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
           <a href="#top" className="flex items-center gap-2">
             <img src="/logo.png" alt="Santa Cruz Computer" className="h-9 w-auto object-contain" />
             <span className="font-bold text-gray-900 hidden sm:inline">Santa Cruz Computer</span>
           </a>
+          {/* Links visibles solo desde md+ */}
           <div className="hidden md:flex items-center gap-6 text-sm">
             <a href="#catalogo" className="text-gray-600 hover:text-blue-700">Catálogo</a>
             <a href="#servicios" className="text-gray-600 hover:text-blue-700">Servicio técnico</a>
             <a href="#creditos" className="text-gray-600 hover:text-blue-700">Créditos</a>
             <a href="#ubicacion" className="text-gray-600 hover:text-blue-700">Ubicación</a>
           </div>
-          {user ? (
-            <Link to={rutaPanel(user.role)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
-              Ir a mi panel <ChevronRight className="w-4 h-4" />
-            </Link>
-          ) : (
-            <div className="flex items-center gap-2">
-              <Link to="/login" state={{ initialView: 'register' }}
-                className="hidden sm:inline-flex items-center px-3 py-2 text-sm text-blue-700 hover:underline font-medium">
-                Crear cuenta
-              </Link>
-              <Link to="/login"
+          <div className="flex items-center gap-2">
+            {user ? (
+              <Link to={rutaPanel(user.role)}
                 className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
-                Iniciar sesión
+                Ir a mi panel <ChevronRight className="w-4 h-4" />
               </Link>
-            </div>
-          )}
+            ) : (
+              <>
+                <Link to="/login" state={{ initialView: 'register' }}
+                  className="hidden sm:inline-flex items-center px-3 py-2 text-sm text-blue-700 hover:underline font-medium">
+                  Crear cuenta
+                </Link>
+                <Link to="/login"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+                  Iniciar sesión
+                </Link>
+              </>
+            )}
+            {/* Botón hamburguesa — solo visible por debajo de md */}
+            <button onClick={() => setMenuAbierto(!menuAbierto)}
+              className="md:hidden p-2 -mr-2 text-gray-600 hover:text-gray-900"
+              aria-label={menuAbierto ? 'Cerrar menú' : 'Abrir menú'}>
+              {menuAbierto ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+          </div>
         </div>
+        {/* Panel del hamburguesa (dropdown) */}
+        {menuAbierto && (
+          <div className="md:hidden border-t border-gray-200 bg-white">
+            <div className="max-w-6xl mx-auto px-4 py-2 flex flex-col">
+              {[
+                ['#catalogo',  'Catálogo'],
+                ['#servicios', 'Servicio técnico'],
+                ['#creditos',  'Créditos'],
+                ['#ubicacion', 'Ubicación'],
+              ].map(([href, label]) => (
+                <a key={href} href={href} onClick={() => setMenuAbierto(false)}
+                  className="py-3 border-b border-gray-100 text-gray-700 hover:text-blue-700 text-sm font-medium">
+                  {label}
+                </a>
+              ))}
+              {!user && (
+                <Link to="/login" state={{ initialView: 'register' }}
+                  onClick={() => setMenuAbierto(false)}
+                  className="py-3 text-blue-700 text-sm font-medium">
+                  Crear cuenta
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
       </nav>
 
       {/* ── Productos destacados (ahora arriba, entrada directa a la tienda) ── */}
@@ -147,10 +182,10 @@ export function Landing() {
               {destacados.map(p => (
                 <Link key={p.id} to={user ? '/store' : '/login'}
                   className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow">
-                  <div className="aspect-square bg-blue-50 flex items-center justify-center overflow-hidden">
+                  <div className="aspect-square bg-white flex items-center justify-center overflow-hidden border-b border-gray-100">
                     {p.imagen_url ? (
                       <img src={p.imagen_url} alt={p.name}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-contain p-2"
                         onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
                     ) : (
                       <Package className="w-16 h-16 text-blue-200" />
