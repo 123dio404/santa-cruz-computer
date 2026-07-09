@@ -96,7 +96,7 @@ export function Sales() {
   const [simulacion,       setSimulacion]       = useState<ApiSimulacionCredito | null>(null);
   const [showChecklist,    setShowChecklist]    = useState(false);
   const [tipoEmpleo,       setTipoEmpleo]       = useState<'dependiente' | 'independiente'>('dependiente');
-  const [antiguedadMeses,  setAntiguedadMeses]  = useState<number>(12);
+  const [cumpleAntiguedad, setCumpleAntiguedad] = useState<boolean>(false);   // Reglamento: 12 meses mínimos
   const [obsCredito,       setObsCredito]       = useState('');
   const [checklistBool,    setChecklistBool]    = useState<ChecklistBool>(checklistVacio());
   const [aprobandoCredito, setAprobandoCredito] = useState(false);
@@ -257,7 +257,7 @@ export function Sales() {
   const abrirChecklistCredito = () => {
     if (!creditoElegible || !simulacion?.elegible) return;
     setTipoEmpleo('dependiente');
-    setAntiguedadMeses(12);
+    setCumpleAntiguedad(false);
     setObsCredito('');
     setChecklistBool(checklistVacio());
     setCreditoError('');
@@ -266,6 +266,7 @@ export function Sales() {
 
   const confirmarCredito = async () => {
     if (!itemUnico || !selectedCustomerId) return;
+    if (!cumpleAntiguedad) { setCreditoError('Falta confirmar que el cliente cumple los 12 meses mínimos de antigüedad laboral.'); return; }
     setCreditoError('');
     setAprobandoCredito(true);
     try {
@@ -274,7 +275,7 @@ export function Sales() {
         producto:         Number(itemUnico.product.id),
         cantidad:         itemUnico.quantity,
         tipo_empleo:      tipoEmpleo,
-        antiguedad_meses: antiguedadMeses,
+        antiguedad_meses: 12,   // Reglamento — el vendedor confirmó con el checkbox
         observaciones:    obsCredito.trim() || undefined,
         checklist:        checklistBool,
       };
@@ -823,10 +824,21 @@ export function Sales() {
               </div>
 
               <div>
-                <label className="block font-medium text-gray-700 mb-1">Antigüedad laboral (meses)</label>
-                <input type="number" min={0} value={antiguedadMeses}
-                  onChange={e => setAntiguedadMeses(Math.max(0, parseInt(e.target.value) || 0))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" checked={cumpleAntiguedad}
+                      onChange={e => setCumpleAntiguedad(e.target.checked)}
+                      className="mt-0.5" />
+                    <span>
+                      <span className="font-medium text-gray-800">
+                        Antigüedad laboral mínima (12 meses)
+                      </span>
+                      <span className="block text-xs text-gray-500">
+                        Requisito por reglamento. El vendedor confirma que el cliente lo cumple.
+                      </span>
+                    </span>
+                  </label>
+                </div>
               </div>
 
               {/* Documentos */}
@@ -902,9 +914,9 @@ export function Sales() {
                 className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">
                 Cancelar
               </button>
-              <button disabled={aprobandoCredito} onClick={confirmarCredito}
+              <button disabled={aprobandoCredito || !cumpleAntiguedad} onClick={confirmarCredito}
                 className="flex-1 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2">
-                {aprobandoCredito ? 'Aprobando…' : <><CheckCircle2 className="w-4 h-4" /> Confirmar y cobrar inicial</>}
+                {aprobandoCredito ? 'Aprobando…' : <><CheckCircle2 className="w-4 h-4" /> Iniciar crédito</>}
               </button>
             </div>
           </div>
