@@ -42,6 +42,7 @@ import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
 import { PaymentSuccess } from './pages/PaymentSuccess';
 import { Orders } from './pages/Orders';
+import { MisCreditos } from './pages/MisCreditos';
 import { Warranties } from './pages/Warranties';
 import { Reviews } from './pages/Reviews';
 import { AdminPanel } from './pages/AdminPanel';
@@ -316,6 +317,24 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['client']}>
         <Layout>
           <Orders />
+        </Layout>
+      </ProtectedRoute>
+    )
+  },
+
+  /**
+   * /mis-creditos - Mis Créditos (CU28/CU29, vista del cliente)
+   * - Todos los créditos del cliente logueado con cronograma
+   * - Pagar cuota online con Stripe + verificar sesiones pendientes
+   * - Comprobantes imprimibles del crédito y de cada cuota pagada
+   * - Acceso: Solo Clientes
+   */
+  {
+    path: '/mis-creditos',
+    element: (
+      <ProtectedRoute allowedRoles={['client']}>
+        <Layout>
+          <MisCreditos />
         </Layout>
       </ProtectedRoute>
     )
