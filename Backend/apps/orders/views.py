@@ -1015,6 +1015,8 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
         return Response(out)
 
     def create(self, request, *args, **kwargs):
+        from django.utils import timezone
+        from datetime import date as _date
         tipo   = request.data.get('tipo')
         origen = request.data.get('origen') or 'externo'
         equipo = request.data.get('equipo') or 'laptop'
@@ -1022,9 +1024,20 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
         cliente_id  = request.data.get('cliente') or None
         garantia_id = request.data.get('garantia') or None
         servicios_ids = request.data.get('servicios') or []
+        fecha_raw = request.data.get('fecha_entrega_prevista')
 
         if tipo not in ('preventivo', 'correctivo'):
             return Response({'error': 'Tipo de servicio inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Fecha de retiro obligatoria — la orden nace directamente 'agendado'
+        if not fecha_raw:
+            return Response({'error': 'La fecha de retiro es obligatoria.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            fecha_entrega = _date.fromisoformat(str(fecha_raw)[:10])
+        except ValueError:
+            return Response({'error': 'Formato de fecha inválido (usar YYYY-MM-DD).'}, status=status.HTTP_400_BAD_REQUEST)
+        if fecha_entrega < timezone.localdate():
+            return Response({'error': 'La fecha de retiro no puede ser en el pasado.'}, status=status.HTTP_400_BAD_REQUEST)
 
         es_beneficio = False
         costo = 0.0
@@ -1058,7 +1071,8 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
                 cliente_id=cliente_id or None, tecnico_id=tecnico_id,
                 garantia_id=(garantia_id if es_beneficio else None),
                 tipo=tipo, origen=origen, equipo=equipo, equipo_descripcion=equipo_desc,
-                es_beneficio=es_beneficio, costo_total=round(costo, 2), estado='solicitado',
+                es_beneficio=es_beneficio, costo_total=round(costo, 2), estado='agendado',
+                fecha_entrega_prevista=fecha_entrega, fecha_agendada=timezone.now(),
             )
             for (sid, precio) in detalles:
                 OrdenDetalle.objects.create(orden_id=orden.id, servicio_id=sid, precio=round(precio, 2))
@@ -1072,11 +1086,15 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
             gratis = ' (GRATIS - beneficio)' if es_beneficio else ''
             log_action(
                 accion='CREATE', modulo='Servicio Técnico',
-                descripcion=f'Se registró la orden de servicio #{orden.id} — {tipo} ({equipo}), costo Bs {orden.costo_total}{gratis}',
+                descripcion=(f'Se registró la orden de servicio #{orden.id} — {tipo} ({equipo}), '
+                             f'retiro {fecha_entrega.isoformat()}, costo Bs {orden.costo_total}{gratis}'),
                 **actor,
             )
         except Exception:
             pass
+        # Correo + campana al cliente con la fecha (si tiene correo registrado)
+        if orden.cliente_id:
+            self._notificar_agendada(orden, es_reagenda=False)
         return Response(OrdenServicioSerializer(orden).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['patch'])

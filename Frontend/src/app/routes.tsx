@@ -38,8 +38,6 @@ import { Suppliers } from './pages/Suppliers';
 import { Promociones } from './pages/Promociones';
 import { Creditos } from './pages/Creditos';
 import { MisTrabajos } from './pages/MisTrabajos';
-import { Agenda } from './pages/Agenda';
-import { Placeholder } from './components/Placeholder';
 import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
 import { PaymentSuccess } from './pages/PaymentSuccess';
@@ -239,16 +237,6 @@ export const router = createBrowserRouter([
       <ProtectedRoute allowedRoles={['tecnico']}>
         <Layout>
           <MisTrabajos />
-        </Layout>
-      </ProtectedRoute>
-    )
-  },
-  {
-    path: '/agenda',
-    element: (
-      <ProtectedRoute allowedRoles={['tecnico']}>
-        <Layout>
-          <Agenda />
         </Layout>
       </ProtectedRoute>
     )
