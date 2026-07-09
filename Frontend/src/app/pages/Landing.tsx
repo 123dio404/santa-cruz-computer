@@ -53,12 +53,32 @@ const shuffle = <T,>(arr: T[]): T[] => {
   return out;
 };
 
+// Calcula el rango de crédito para un precio unitario. Se usa en el modal de
+// detalles para mostrar cuántas cuotas y qué recargo tendría el producto.
+// Rangos duplicados del backend (Backend/apps/orders/views.py::CREDITO_RANGOS).
+const rangoCredito = (precio: number): { cuotas: number; recargo: number } | null => {
+  if (precio <  1)     return null;
+  if (precio <= 5000)  return { cuotas: 6,  recargo: 20 };
+  if (precio <= 10000) return { cuotas: 9,  recargo: 25 };
+  if (precio <= 15000) return { cuotas: 12, recargo: 30 };
+  return null;
+};
+
 export function Landing() {
   const { user } = useAuth();
   const [productos, setProductos] = useState<ApiProduct[]>([]);
   const [categorias, setCategorias] = useState<ApiCategoria[]>([]);
   const [categoriaSel, setCategoriaSel] = useState<number | ''>('');
   const [menuAbierto, setMenuAbierto] = useState(false);
+  const [detalleTarget, setDetalleTarget] = useState<ApiProduct | null>(null);
+
+  // Cierre del modal con Esc
+  useEffect(() => {
+    if (!detalleTarget) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDetalleTarget(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [detalleTarget]);
 
   useEffect(() => {
     Promise.all([productosAPI.getAll(), categoriasAPI.getAll()])
@@ -144,18 +164,12 @@ export function Landing() {
         )}
       </nav>
 
-      {/* ── Productos destacados (ahora arriba, entrada directa a la tienda) ── */}
+      {/* ── Productos (entrada directa; cada card abre modal + botón "Comprar") ── */}
       <section id="catalogo" className="bg-gray-50 border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-4 py-10">
-          <div className="flex items-end justify-between mb-4 gap-4 flex-wrap">
-            <div>
-              <h2 className="text-2xl md:text-3xl font-bold text-gray-900">Productos destacados</h2>
-              <p className="text-gray-600 mt-1">Algo de lo que tenemos en stock ahora mismo.</p>
-            </div>
-            <Link to={user ? '/store' : '/login'}
-              className="inline-flex items-center gap-1 text-blue-700 hover:underline font-medium">
-              Ver catálogo completo <ChevronRight className="w-4 h-4" />
-            </Link>
+          <div className="mb-4">
+            <h2 className="text-2xl md:text-3xl font-bold text-gray-900">Nuestros productos</h2>
+            <p className="text-gray-600 mt-1">Algo de lo que tenemos en stock ahora mismo.</p>
           </div>
 
           {/* Filtro por categoría — mismo patrón que /sales, mucho más limpio que los chips */}
@@ -180,9 +194,12 @@ export function Landing() {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-4">
               {destacados.map(p => (
-                <Link key={p.id} to={user ? '/store' : '/login'}
-                  className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow">
-                  <div className="aspect-square bg-white flex items-center justify-center overflow-hidden border-b border-gray-100">
+                <div key={p.id}
+                  className="bg-white border border-gray-200 rounded-xl overflow-hidden flex flex-col hover:shadow-md transition-shadow">
+                  {/* La imagen abre el modal (patrón e-commerce estándar) */}
+                  <button onClick={() => setDetalleTarget(p)}
+                    className="aspect-square bg-white flex items-center justify-center overflow-hidden border-b border-gray-100 hover:bg-gray-50"
+                    aria-label={`Ver detalles de ${p.name}`}>
                     {p.imagen_url ? (
                       <img src={p.imagen_url} alt={p.name}
                         className="w-full h-full object-contain p-2"
@@ -190,13 +207,23 @@ export function Landing() {
                     ) : (
                       <Package className="w-16 h-16 text-blue-200" />
                     )}
-                  </div>
-                  <div className="p-3">
+                  </button>
+                  <div className="p-3 flex flex-col flex-1">
                     <p className="font-medium text-gray-900 text-sm line-clamp-2 mb-1">{p.name}</p>
-                    <p className="text-xs text-gray-500 mb-2">{p.marca || 'Sin marca'}</p>
-                    <p className="text-lg font-bold text-blue-700">{bs(p.price)}</p>
+                    <p className="text-xs text-gray-500 mb-1">{p.marca || 'Sin marca'}</p>
+                    <p className="text-lg font-bold text-blue-700 mb-3">{bs(p.price)}</p>
+                    <div className="mt-auto space-y-2">
+                      <button onClick={() => setDetalleTarget(p)}
+                        className="w-full text-xs text-blue-700 hover:underline font-medium py-1">
+                        Ver detalles
+                      </button>
+                      <Link to={user ? '/store' : '/login'}
+                        className="block w-full text-center px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+                        Comprar
+                      </Link>
+                    </div>
                   </div>
-                </Link>
+                </div>
               ))}
             </div>
           )}
@@ -415,6 +442,118 @@ export function Landing() {
           </div>
         </div>
       </section>
+
+      {/* ── Modal Ver detalles ─────────────────────────────────────────────── */}
+      {detalleTarget && (() => {
+        const p = detalleTarget;
+        const rango = rangoCredito(Number(p.price));
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            onClick={() => setDetalleTarget(null)}>
+            <div className="bg-white rounded-xl w-full max-w-3xl max-h-[92vh] overflow-y-auto"
+              onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                <h2 className="text-lg font-semibold text-gray-900 line-clamp-1 pr-2">{p.name}</h2>
+                <button onClick={() => setDetalleTarget(null)} className="text-gray-400 hover:text-gray-600 shrink-0" aria-label="Cerrar">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Imagen grande */}
+                <div className="aspect-square bg-white border border-gray-100 rounded-lg flex items-center justify-center overflow-hidden">
+                  {p.imagen_url ? (
+                    <img src={p.imagen_url} alt={p.name}
+                      className="w-full h-full object-contain p-4"
+                      onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                  ) : (
+                    <Package className="w-24 h-24 text-blue-200" />
+                  )}
+                </div>
+
+                {/* Info */}
+                <div className="space-y-3 text-sm">
+                  {p.categoria_nombre && (
+                    <p className="text-xs uppercase tracking-wider text-gray-500">{p.categoria_nombre}</p>
+                  )}
+                  <div className="text-3xl font-bold text-blue-700">{bs(p.price)}</div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-2">
+                    {p.marca && (
+                      <div className="bg-gray-50 rounded-lg px-3 py-2">
+                        <div className="text-xs text-gray-500">Marca</div>
+                        <div className="font-medium text-gray-900">{p.marca}</div>
+                      </div>
+                    )}
+                    {p.modelo && (
+                      <div className="bg-gray-50 rounded-lg px-3 py-2">
+                        <div className="text-xs text-gray-500">Modelo</div>
+                        <div className="font-medium text-gray-900">{p.modelo}</div>
+                      </div>
+                    )}
+                    {p.anio && (
+                      <div className="bg-gray-50 rounded-lg px-3 py-2">
+                        <div className="text-xs text-gray-500">Año</div>
+                        <div className="font-medium text-gray-900">{p.anio}</div>
+                      </div>
+                    )}
+                    {p.stock !== null && p.stock !== undefined && (
+                      <div className={`rounded-lg px-3 py-2 ${p.stock <= 3 ? 'bg-orange-50' : 'bg-gray-50'}`}>
+                        <div className="text-xs text-gray-500">Stock disponible</div>
+                        <div className={`font-medium ${p.stock <= 3 ? 'text-orange-700' : 'text-gray-900'}`}>
+                          {p.stock <= 3 ? `Últimas ${p.stock} unidades` : `${p.stock} unidades`}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Beneficios rápidos */}
+                  <div className="border-t border-gray-100 pt-3 space-y-1.5">
+                    {p.meses_garantia > 0 && (
+                      <p className="text-sm text-gray-700 flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                        Garantía: {p.meses_garantia} meses
+                      </p>
+                    )}
+                    <p className="text-sm text-gray-700 flex items-center gap-2">
+                      <StoreIcon className="w-4 h-4 text-blue-600 shrink-0" />
+                      Retiro en tienda
+                    </p>
+                    {rango && (
+                      <p className="text-sm text-gray-700 flex items-center gap-2">
+                        <CreditCard className="w-4 h-4 text-indigo-600 shrink-0" />
+                        Disponible al crédito: {rango.cuotas} cuotas (+{rango.recargo}%)
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Descripción */}
+              {p.descripcion && (
+                <div className="px-4 md:px-6 pb-4">
+                  <div className="border-t border-gray-100 pt-4">
+                    <h3 className="text-sm font-semibold text-gray-900 mb-2">Descripción</h3>
+                    <p className="text-sm text-gray-700 whitespace-pre-line">{p.descripcion}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Footer con acciones */}
+              <div className="flex gap-2 p-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
+                <button onClick={() => setDetalleTarget(null)}
+                  className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white font-medium">
+                  Cerrar
+                </button>
+                <Link to={user ? '/store' : '/login'}
+                  className="flex-1 text-center py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+                  Comprar
+                </Link>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Footer ─────────────────────────────────────────────────────────── */}
       <footer className="bg-blue-900 text-blue-100 text-sm">
