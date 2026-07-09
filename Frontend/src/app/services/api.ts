@@ -846,6 +846,8 @@ export interface ApiOrdenServicio {
   fecha_solicitud: string;
   fecha_agendada: string | null;
   fecha_finalizacion: string | null;
+  fecha_entrega_prevista: string | null;
+  fecha_entrega_real: string | null;
   detalles: { id: number; servicio: number; servicio_nombre: string; precio: number }[];
   tareas: { id: number; tarea: string; realizado: boolean }[];
 }
@@ -883,6 +885,20 @@ export const servicioTecnicoAPI = {
     const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/estado/`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(data),
+    });
+    return handleJson(r);
+  },
+  agendar: async (id: number, fecha_entrega_prevista: string): Promise<ApiOrdenServicio> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/agendar/`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ fecha_entrega_prevista }),
+    });
+    return handleJson(r);
+  },
+  entregar: async (id: number): Promise<ApiOrdenServicio> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/${id}/entregar/`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: '{}',
     });
     return handleJson(r);
   },

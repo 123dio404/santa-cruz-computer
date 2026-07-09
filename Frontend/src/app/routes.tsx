@@ -38,6 +38,7 @@ import { Suppliers } from './pages/Suppliers';
 import { Promociones } from './pages/Promociones';
 import { Creditos } from './pages/Creditos';
 import { MisTrabajos } from './pages/MisTrabajos';
+import { Agenda } from './pages/Agenda';
 import { Placeholder } from './components/Placeholder';
 import { Store } from './pages/Store';
 import { Cart } from './pages/Cart';
@@ -247,7 +248,7 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute allowedRoles={['tecnico']}>
         <Layout>
-          <Placeholder title="Agenda" descripcion="Aquí verás tu calendario de servicios agendados. (Próximamente)" />
+          <Agenda />
         </Layout>
       </ProtectedRoute>
     )

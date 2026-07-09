@@ -5,7 +5,7 @@
  * clientes de la tienda o externos), con su checklist y estados.
  */
 import { useState, useEffect } from 'react';
-import { Wrench, Plus, X, CheckCircle } from 'lucide-react';
+import { Wrench, Plus, X, CheckCircle, Calendar, PackageCheck } from 'lucide-react';
 import {
   servicioTecnicoAPI, clientesAPI,
   ApiOrdenServicio, ApiServicioCatalogo, ApiElegibilidad, ApiCliente,
@@ -17,9 +17,23 @@ const ESTADOS: Record<string, { label: string; cls: string }> = {
   agendado:   { label: 'Agendado',   cls: 'bg-yellow-100 text-yellow-700' },
   en_proceso: { label: 'En proceso', cls: 'bg-blue-100 text-blue-700' },
   finalizado: { label: 'Finalizado', cls: 'bg-green-100 text-green-700' },
+  entregado:  { label: 'Entregado',  cls: 'bg-emerald-100 text-emerald-700' },
   cancelado:  { label: 'Cancelado',  cls: 'bg-red-100 text-red-600' },
 };
-const FILTROS = ['todas', 'solicitado', 'agendado', 'en_proceso', 'finalizado'];
+const FILTROS = ['todas', 'solicitado', 'agendado', 'en_proceso', 'finalizado', 'entregado'];
+
+// Fecha por defecto sugerida al abrir el modal de agendar (hoy + N días)
+const fechaSugerida = (dias: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + dias);
+  return d.toISOString().slice(0, 10);
+};
+const fechaHoy = () => new Date().toISOString().slice(0, 10);
+const formatFechaCorta = (iso: string | null) => {
+  if (!iso) return '—';
+  const d = new Date(iso.length === 10 ? iso + 'T00:00:00' : iso);
+  return d.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
 
 export function MisTrabajos() {
   const [ordenes, setOrdenes]   = useState<ApiOrdenServicio[]>([]);
@@ -45,6 +59,20 @@ export function MisTrabajos() {
   // Modal detalle
   const [detalle, setDetalle] = useState<ApiOrdenServicio | null>(null);
   useEscapeKey(!!detalle, () => setDetalle(null));
+
+  // Modal agendar (con date picker)
+  const [agendarTarget, setAgendarTarget] = useState<ApiOrdenServicio | null>(null);
+  const [fechaEntrega, setFechaEntrega]   = useState('');
+  const [agendando, setAgendando]         = useState(false);
+  const [agendarError, setAgendarError]   = useState('');
+  useEscapeKey(!!agendarTarget, () => setAgendarTarget(null));
+
+  // Toast de confirmación
+  const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
+  const mostrarToast = (ok: boolean, text: string) => {
+    setToast({ ok, text });
+    setTimeout(() => setToast(null), 4000);
+  };
 
   const cargar = () => {
     setLoading(true);
@@ -105,10 +133,57 @@ export function MisTrabajos() {
   const cambiarEstado = async (o: ApiOrdenServicio, estado: string) => {
     try {
       const upd = await servicioTecnicoAPI.cambiarEstado(o.id, { estado });
-      setDetalle(upd);
+      setDetalle(null);
       cargar();
+      const msgs: Record<string, string> = {
+        en_proceso: `Orden #${upd.id} iniciada.`,
+        finalizado: `Orden #${upd.id} finalizada. Correo enviado al cliente.`,
+        cancelado:  `Orden #${upd.id} cancelada.`,
+      };
+      mostrarToast(true, msgs[estado] || `Orden #${upd.id} actualizada.`);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'No se pudo actualizar.');
+      mostrarToast(false, e instanceof Error ? e.message : 'No se pudo actualizar.');
+    }
+  };
+
+  const abrirAgendar = (o: ApiOrdenServicio) => {
+    setAgendarTarget(o);
+    // Si ya tenía fecha (reagendar), la precargamos; si no, sugerimos +3 días
+    setFechaEntrega(o.fecha_entrega_prevista || fechaSugerida(3));
+    setAgendarError('');
+  };
+
+  const guardarAgendar = async () => {
+    if (!agendarTarget) return;
+    if (!fechaEntrega) { setAgendarError('Elige una fecha de retiro.'); return; }
+    if (fechaEntrega < fechaHoy()) { setAgendarError('La fecha no puede ser en el pasado.'); return; }
+    setAgendando(true);
+    setAgendarError('');
+    try {
+      const upd = await servicioTecnicoAPI.agendar(agendarTarget.id, fechaEntrega);
+      const esReagenda = agendarTarget.estado === 'agendado';
+      setAgendarTarget(null);
+      setDetalle(null);
+      cargar();
+      mostrarToast(true,
+        (esReagenda ? 'Orden reagendada' : 'Orden agendada') +
+        `. Retiro: ${formatFechaCorta(upd.fecha_entrega_prevista)}. Correo enviado al cliente.`);
+    } catch (e) {
+      setAgendarError(e instanceof Error ? e.message : 'No se pudo agendar.');
+    } finally {
+      setAgendando(false);
+    }
+  };
+
+  const marcarEntregado = async (o: ApiOrdenServicio) => {
+    if (!confirm(`¿Marcar la orden #${o.id} como entregada al cliente?`)) return;
+    try {
+      const upd = await servicioTecnicoAPI.entregar(o.id);
+      setDetalle(null);
+      cargar();
+      mostrarToast(true, `Orden #${upd.id} marcada como entregada.`);
+    } catch (e) {
+      mostrarToast(false, e instanceof Error ? e.message : 'No se pudo entregar.');
     }
   };
 
@@ -318,6 +393,22 @@ export function MisTrabajos() {
                 <p><span className="text-gray-500">Cliente:</span> {detalle.cliente_nombre}</p>
                 <p><span className="text-gray-500">Origen:</span> {detalle.origen}</p>
                 <p><span className="text-gray-500">Costo:</span> {detalle.es_beneficio ? 'GRATIS' : `Bs ${Number(detalle.costo_total).toFixed(2)}`}</p>
+                {detalle.fecha_entrega_prevista && (
+                  <p className="col-span-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-blue-600" />
+                    <span className="text-blue-900">
+                      Retiro previsto: <strong>{formatFechaCorta(detalle.fecha_entrega_prevista)}</strong>
+                    </span>
+                  </p>
+                )}
+                {detalle.fecha_entrega_real && (
+                  <p className="col-span-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-center gap-2">
+                    <PackageCheck className="w-4 h-4 text-emerald-600" />
+                    <span className="text-emerald-900">
+                      Entregado al cliente: <strong>{new Date(detalle.fecha_entrega_real).toLocaleString('es-BO')}</strong>
+                    </span>
+                  </p>
+                )}
               </div>
 
               {/* Servicios */}
@@ -344,10 +435,17 @@ export function MisTrabajos() {
               )}
             </div>
             {/* Acciones de estado */}
-            {detalle.estado !== 'finalizado' && detalle.estado !== 'cancelado' && (
+            {detalle.estado !== 'entregado' && detalle.estado !== 'cancelado' && (
               <div className="flex gap-2 p-4 border-t border-gray-200 flex-wrap">
                 {detalle.estado === 'solicitado' && (
-                  <button onClick={() => cambiarEstado(detalle, 'agendado')} className="flex-1 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 text-sm font-medium">Agendar</button>
+                  <button onClick={() => abrirAgendar(detalle)} className="flex-1 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 text-sm font-medium flex items-center justify-center gap-1">
+                    <Calendar className="w-4 h-4" /> Agendar
+                  </button>
+                )}
+                {detalle.estado === 'agendado' && (
+                  <button onClick={() => abrirAgendar(detalle)} className="px-3 py-2 border border-yellow-400 text-yellow-700 rounded-lg hover:bg-yellow-50 text-sm font-medium flex items-center gap-1">
+                    <Calendar className="w-4 h-4" /> Reagendar
+                  </button>
                 )}
                 {(detalle.estado === 'solicitado' || detalle.estado === 'agendado') && (
                   <button onClick={() => cambiarEstado(detalle, 'en_proceso')} className="flex-1 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">Iniciar</button>
@@ -357,10 +455,73 @@ export function MisTrabajos() {
                     <CheckCircle className="w-4 h-4" /> Finalizar
                   </button>
                 )}
-                <button onClick={() => cambiarEstado(detalle, 'cancelado')} className="px-3 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 text-sm font-medium">Cancelar</button>
+                {detalle.estado === 'finalizado' && (
+                  <button onClick={() => marcarEntregado(detalle)} className="flex-1 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium flex items-center justify-center gap-1">
+                    <PackageCheck className="w-4 h-4" /> Marcar entregado
+                  </button>
+                )}
+                {detalle.estado !== 'finalizado' && (
+                  <button onClick={() => cambiarEstado(detalle, 'cancelado')} className="px-3 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 text-sm font-medium">Cancelar</button>
+                )}
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── MODAL AGENDAR (date picker) ── */}
+      {agendarTarget && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setAgendarTarget(null)}>
+          <div className="bg-white rounded-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-yellow-500" />
+                {agendarTarget.estado === 'agendado' ? 'Reagendar' : 'Agendar'} orden #{agendarTarget.id}
+              </h2>
+              <button onClick={() => setAgendarTarget(null)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Define la fecha en la que el cliente puede venir a retirar su equipo.
+                Se le enviará un correo con esa fecha.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Fecha de retiro</label>
+                <input type="date" value={fechaEntrega} min={fechaHoy()}
+                  onChange={e => setFechaEntrega(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              {agendarError && (
+                <div className="text-sm bg-red-50 text-red-700 border border-red-200 rounded-lg px-3 py-2">
+                  {agendarError}
+                </div>
+              )}
+              <div className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-lg px-3 py-2">
+                💡 Al confirmar, el cliente recibirá un correo con la fecha comprometida
+                y una notificación en la campana.
+              </div>
+            </div>
+            <div className="flex gap-2 p-4 border-t border-gray-200">
+              <button onClick={() => setAgendarTarget(null)}
+                className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">
+                Cancelar
+              </button>
+              <button disabled={agendando} onClick={guardarAgendar}
+                className="flex-1 py-2.5 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium disabled:opacity-50">
+                {agendando ? 'Enviando...' : (agendarTarget.estado === 'agendado' ? 'Reagendar' : 'Agendar')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── TOAST (feedback flotante) ── */}
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-[60] max-w-sm rounded-lg shadow-lg border px-4 py-3 text-sm font-medium
+                        ${toast.ok
+                          ? 'bg-green-50 border-green-200 text-green-800'
+                          : 'bg-red-50 border-red-200 text-red-700'}`}>
+          {toast.text}
         </div>
       )}
     </div>
