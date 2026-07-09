@@ -22,9 +22,9 @@ import {
   ChevronDown, ChevronUp, Search, X, Banknote, UserPlus, Package,
 } from 'lucide-react';
 import {
-  creditoAPI, clientesAPI, productosAPI,
+  creditoAPI, clientesAPI, productosAPI, categoriasAPI,
   ApiCartera, ApiPlanCredito, ApiSimulacionCredito,
-  ApiCliente, ApiProduct, ApiBloqueoCredito, CreditoAtomicoPayload,
+  ApiCliente, ApiProduct, ApiCategoria, ApiBloqueoCredito, CreditoAtomicoPayload,
 } from '../services/api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
@@ -77,7 +77,7 @@ export function Creditos() {
         </button>
         <button onClick={() => setTab('walkin')}
           className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${tab === 'walkin' ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          + Nuevo crédito presencial
+          + Nuevo crédito
         </button>
       </div>
 
@@ -103,6 +103,7 @@ function Cartera({ onToast }: { onToast: (ok: boolean, text: string) => void }) 
   const [cobroTarget, setCobroTarget] = useState<{ planId: number; cuotaId: number; numero: number; monto: number; mora: number } | null>(null);
   const [cobrando, setCobrando]   = useState(false);
   const [filtro, setFiltro]   = useState<'todos' | 'vigente' | 'moroso' | 'pagado'>('todos');
+  const [proyeccionExpandida, setProyeccionExpandida] = useState(false);
   useEscapeKey(!!cobroTarget, () => setCobroTarget(null));
 
   const cargar = () => {
@@ -181,22 +182,37 @@ function Cartera({ onToast }: { onToast: (ok: boolean, text: string) => void }) 
         </div>
       )}
 
-      {/* Proyección de cobros */}
-      {data.proyeccion.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
-            <TrendingUp className="w-4 h-4 text-indigo-600" /> Proyección de cobros (cuotas pendientes)
-          </h3>
-          <div className="flex gap-3 overflow-x-auto pb-1">
-            {data.proyeccion.map(p => (
-              <div key={p.mes} className="min-w-[110px] bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 text-center">
-                <div className="text-xs text-indigo-500">{p.mes}</div>
-                <div className="font-bold text-indigo-700 text-sm">{bs(p.monto)}</div>
-              </div>
-            ))}
+      {/* Proyección de cobros — por default 6 meses, expandible cuando hay más */}
+      {data.proyeccion.length > 0 && (() => {
+        const total       = data.proyeccion.length;
+        const mostrados   = proyeccionExpandida ? total : Math.min(6, total);
+        const hayMasCortos = total > 6;
+        return (
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+              <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-indigo-600" /> Proyección de cobros (cuotas pendientes)
+              </h3>
+              {hayMasCortos && (
+                <button onClick={() => setProyeccionExpandida(!proyeccionExpandida)}
+                  className="text-xs text-indigo-600 hover:underline font-medium">
+                  {proyeccionExpandida
+                    ? `▲ Mostrar solo próximos 6`
+                    : `▼ Ver todos (${total} meses)`}
+                </button>
+              )}
+            </div>
+            <div className="flex gap-3 overflow-x-auto pb-1">
+              {data.proyeccion.slice(0, mostrados).map(p => (
+                <div key={p.mes} className="min-w-[110px] bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 text-center">
+                  <div className="text-xs text-indigo-500">{p.mes}</div>
+                  <div className="font-bold text-indigo-700 text-sm">{bs(p.monto)}</div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Filtro + lista de planes */}
       <div className="flex gap-2 flex-wrap">
@@ -356,14 +372,19 @@ function Dato({ label, val }: { label: string; val: string }) {
   );
 }
 
-// ── Pestaña: Nuevo crédito presencial (walk-in) — CU28 ──────────────────────
+// ── Pestaña: Nuevo crédito (walk-in) — CU28 ────────────────────────────────
+// Requisito de reglamento: 12 meses mínimo de antigüedad laboral del solicitante.
+const ANTIGUEDAD_MINIMA_MESES = 12;
+
 function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
   const [clientes, setClientes] = useState<ApiCliente[]>([]);
   const [productos, setProductos] = useState<ApiProduct[]>([]);
+  const [categorias, setCategorias] = useState<ApiCategoria[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [buscaCli, setBuscaCli]   = useState('');
   const [buscaProd, setBuscaProd] = useState('');
+  const [categoriaId, setCategoriaId] = useState<number | ''>('');
   const [clienteId, setClienteId] = useState<number | null>(null);
   const [productoId, setProductoId] = useState<number | null>(null);
   const [cantidad, setCantidad]   = useState(1);
@@ -372,7 +393,7 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
   const [sim, setSim]                 = useState<ApiSimulacionCredito | null>(null);
   const [showChecklist, setShowChecklist] = useState(false);
   const [tipoEmpleo, setTipoEmpleo]   = useState<'dependiente' | 'independiente'>('dependiente');
-  const [antiguedad, setAntiguedad]   = useState(12);
+  const [cumpleAntiguedad, setCumpleAntiguedad] = useState(false);
   const [obs, setObs]                 = useState('');
   const [checklist, setChecklist]     = useState<ChecklistBool>(checklistVacio());
   const [aprobando, setAprobando]     = useState(false);
@@ -380,8 +401,8 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
   useEscapeKey(showChecklist, () => setShowChecklist(false));
 
   useEffect(() => {
-    Promise.all([clientesAPI.getAll(), productosAPI.getAll()])
-      .then(([cs, ps]) => { setClientes(cs); setProductos(ps); })
+    Promise.all([clientesAPI.getAll(), productosAPI.getAll(), categoriasAPI.getAll()])
+      .then(([cs, ps, cats]) => { setClientes(cs); setProductos(ps); setCategorias(cats); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -419,6 +440,8 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
     .filter(p => {
       const pu = parseFloat(String(p.price));
       if (pu < 1 || pu > 15000) return false;
+      // Filtro por categoría cuando el vendedor la eligió
+      if (categoriaId !== '' && p.categoria !== categoriaId) return false;
       if (!buscaProd.trim()) return true;
       const t = buscaProd.toLowerCase();
       return p.name.toLowerCase().includes(t)
@@ -430,7 +453,7 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
   const abrirChecklist = () => {
     if (!elegibleBasico || !sim?.elegible) return;
     setTipoEmpleo('dependiente');
-    setAntiguedad(12);
+    setCumpleAntiguedad(false);
     setObs('');
     setChecklist(checklistVacio());
     setError('');
@@ -439,6 +462,7 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
 
   const confirmar = async () => {
     if (!clienteId || !productoId) return;
+    if (!cumpleAntiguedad) { setError(`Falta confirmar que el cliente cumple los ${ANTIGUEDAD_MINIMA_MESES} meses mínimos de antigüedad laboral.`); return; }
     setError('');
     setAprobando(true);
     try {
@@ -447,7 +471,7 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
         producto:         productoId,
         cantidad,
         tipo_empleo:      tipoEmpleo,
-        antiguedad_meses: antiguedad,
+        antiguedad_meses: ANTIGUEDAD_MINIMA_MESES,
         observaciones:    obs.trim() || undefined,
         checklist,
       };
@@ -458,7 +482,7 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
       onToast(true, msg);
       // Reset del formulario y refresco de stock
       setClienteId(null); setProductoId(null); setCantidad(1);
-      setBuscaCli(''); setBuscaProd(''); setSim(null); setBloqueo(null);
+      setCategoriaId(''); setBuscaCli(''); setBuscaProd(''); setSim(null); setBloqueo(null);
       productosAPI.getAll().then(setProductos).catch(() => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo aprobar el crédito.');
@@ -471,12 +495,6 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
 
   return (
     <div className="space-y-4">
-      <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-3 text-sm text-indigo-800">
-        Crédito <strong>walk-in</strong>: el cliente vino a la tienda. Elegí cliente + producto,
-        armamos el plan y cobramos la inicial en efectivo — todo en un solo paso.
-        Al confirmar se le envía la factura al cliente por correo.
-      </div>
-
       <div className="grid md:grid-cols-2 gap-4">
         {/* Columna cliente */}
         <div className="bg-white border border-gray-200 rounded-xl p-4">
@@ -544,6 +562,15 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
           <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
             <Package className="w-4 h-4 text-indigo-600" /> 2. Producto
           </h3>
+          {/* Filtro por categoría — obligatorio ver primero por qué buscamos */}
+          <select value={categoriaId}
+            onChange={e => { setCategoriaId(e.target.value ? parseInt(e.target.value) : ''); setProductoId(null); }}
+            className="w-full mb-2 px-3 py-2 border border-gray-300 rounded-lg text-sm">
+            <option value="">Todas las categorías</option>
+            {categorias.map(c => (
+              <option key={c.id} value={c.id}>{c.nombre}</option>
+            ))}
+          </select>
           <div className="relative">
             <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input value={buscaProd} onChange={e => setBuscaProd(e.target.value)}
@@ -650,11 +677,20 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
                 </div>
               </div>
 
-              <div>
-                <label className="block font-medium text-gray-700 mb-1">Antigüedad laboral (meses)</label>
-                <input type="number" min={0} value={antiguedad}
-                  onChange={e => setAntiguedad(Math.max(0, parseInt(e.target.value) || 0))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input type="checkbox" checked={cumpleAntiguedad}
+                    onChange={e => setCumpleAntiguedad(e.target.checked)}
+                    className="mt-0.5" />
+                  <span>
+                    <span className="font-medium text-gray-800">
+                      Antigüedad laboral mínima ({ANTIGUEDAD_MINIMA_MESES} meses)
+                    </span>
+                    <span className="block text-xs text-gray-500">
+                      Requisito por reglamento. El vendedor confirma que el cliente lo cumple.
+                    </span>
+                  </span>
+                </label>
               </div>
 
               <div className="space-y-1.5">
@@ -728,9 +764,9 @@ function WalkIn({ onToast }: { onToast: (ok: boolean, text: string) => void }) {
                 className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">
                 Cancelar
               </button>
-              <button disabled={aprobando} onClick={confirmar}
+              <button disabled={aprobando || !cumpleAntiguedad} onClick={confirmar}
                 className="flex-1 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2">
-                {aprobando ? 'Aprobando…' : <><CheckCircle className="w-4 h-4" /> Cobrar inicial y crear crédito</>}
+                {aprobando ? 'Aprobando…' : <><CheckCircle className="w-4 h-4" /> Iniciar crédito</>}
               </button>
             </div>
           </div>
