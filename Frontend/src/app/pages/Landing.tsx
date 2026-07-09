@@ -65,26 +65,18 @@ export function Landing() {
       .catch(() => {});
   }, []);
 
-  // Cuando no hay categoría → 6 aleatorios de todo el stock.
-  // Cuando hay categoría → 6 aleatorios dentro de esa categoría.
+  // Cuando no hay categoría → 10 aleatorios de todo el stock.
+  // Cuando hay categoría → 10 aleatorios dentro de esa categoría.
+  // 10 llena 2 filas de 5 en desktop XL, o 2.5 filas en laptop (grid-cols-4).
   const destacados = useMemo(() => {
     const conStock = productos.filter(p => (p.stock ?? 0) > 0);
     const pool = categoriaSel === '' ? conStock : conStock.filter(p => p.categoria === categoriaSel);
-    return shuffle(pool).slice(0, 6);
+    return shuffle(pool).slice(0, 10);
   }, [productos, categoriaSel]);
 
   return (
     <div className="bg-white text-gray-900">
-      {/* ── TopBar ─────────────────────────────────────────────────────────── */}
-      <div className="bg-blue-900 text-blue-50 text-xs">
-        <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-6 gap-y-1">
-          <span className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5" /> {EMPRESA.direccion}</span>
-          <span className="flex items-center gap-1.5"><Phone className="w-3.5 h-3.5" /> {EMPRESA.telefono}</span>
-          <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> {EMPRESA.horario}</span>
-        </div>
-      </div>
-
-      {/* ── Nav sticky ─────────────────────────────────────────────────────── */}
+      {/* ── Nav sticky (sin TopBar; los datos de contacto viven en Ubicación + Footer) ── */}
       <nav className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-gray-200">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
           <a href="#top" className="flex items-center gap-2">
@@ -117,89 +109,9 @@ export function Landing() {
         </div>
       </nav>
 
-      {/* ── Hero (compacto) ────────────────────────────────────────────────── */}
-      <section id="top" className="bg-gradient-to-br from-blue-800 via-blue-700 to-blue-500 text-white">
-        <div className="max-w-6xl mx-auto px-4 py-10 md:py-14 text-center">
-          <img src="/logo.png" alt="" className="h-16 md:h-20 w-auto object-contain mx-auto mb-3 opacity-95" />
-          <h1 className="text-3xl md:text-4xl font-bold mb-2">Santa Cruz Computer</h1>
-          <p className="text-base md:text-lg text-blue-100 mb-6">
-            Tecnología, servicio técnico y crédito propio en Santa Cruz de la Sierra.
-          </p>
-          <div className="flex flex-wrap gap-3 justify-center">
-            <a href="#catalogo"
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-blue-700 rounded-lg hover:bg-blue-50 font-semibold">
-              <Package className="w-5 h-5" /> Ver catálogo
-            </a>
-            {user ? (
-              <Link to={rutaPanel(user.role)}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-900 text-white rounded-lg hover:bg-blue-950 font-semibold border border-blue-400">
-                Ir a mi panel <ChevronRight className="w-4 h-4" />
-              </Link>
-            ) : (
-              <>
-                <Link to="/login"
-                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-900 text-white rounded-lg hover:bg-blue-950 font-semibold border border-blue-400">
-                  Iniciar sesión
-                </Link>
-                <Link to="/login" state={{ initialView: 'register' }}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 text-blue-100 hover:text-white font-medium underline underline-offset-4">
-                  Crear cuenta
-                </Link>
-              </>
-            )}
-          </div>
-          {/* Trust badges — 1 sola línea con separadores */}
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs md:text-sm text-blue-100">
-            {[
-              'Crédito propio (sin banco)',
-              'Retiro en tienda',
-              'Garantía en todo el catálogo',
-              'Servicio técnico integrado',
-            ].map((txt, i) => (
-              <span key={txt} className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5 text-blue-300" /> {txt}</span>
-                {i < 3 && <span className="text-blue-400/70">•</span>}
-              </span>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── 4 diferenciales ────────────────────────────────────────────────── */}
-      <section className="max-w-6xl mx-auto px-4 py-14">
-        <div className="text-center mb-8">
-          <h2 className="text-2xl md:text-3xl font-bold text-gray-900">Por qué comprar acá</h2>
-          <p className="text-gray-600 mt-1">Cuatro cosas que nos hacen distintos.</p>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[
-            { icon: CreditCard,  color: 'text-indigo-600', bg: 'bg-indigo-50',
-              titulo: 'Crédito propio',
-              texto:  'Compra en hasta 12 cuotas sin banco. Aprobamos en la tienda con tu CI y documentos básicos.' },
-            { icon: Wrench,      color: 'text-emerald-600', bg: 'bg-emerald-50',
-              titulo: 'Servicio técnico',
-              texto:  'Mantenimiento preventivo y correctivo con checklist. Si tu equipo tiene garantía vigente, hay usos GRATIS.' },
-            { icon: Crown,       color: 'text-amber-600', bg: 'bg-amber-50',
-              titulo: 'Programa VIP',
-              texto:  'Cada Bs 200 de consumo suman descuento para tu próxima compra. Automático, sin trámite.' },
-            { icon: StoreIcon,   color: 'text-blue-600', bg: 'bg-blue-50',
-              titulo: 'Compra online y retiro',
-              texto:  'Pagá con tarjeta desde tu perfil y retirá el producto en la tienda cuando te llegue el aviso.' },
-          ].map(b => (
-            <div key={b.titulo} className="bg-white border border-gray-200 rounded-xl p-5">
-              <div className={`w-11 h-11 rounded-lg ${b.bg} ${b.color} flex items-center justify-center mb-3`}>
-                <b.icon className="w-6 h-6" />
-              </div>
-              <h3 className="font-semibold text-gray-900 mb-1">{b.titulo}</h3>
-              <p className="text-sm text-gray-600">{b.texto}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Productos destacados ───────────────────────────────────────────── */}
-      <section id="catalogo" className="bg-gray-50 border-y border-gray-200">
-        <div className="max-w-6xl mx-auto px-4 py-14">
+      {/* ── Productos destacados (ahora arriba, entrada directa a la tienda) ── */}
+      <section id="catalogo" className="bg-gray-50 border-b border-gray-200">
+        <div className="max-w-6xl mx-auto px-4 py-10">
           <div className="flex items-end justify-between mb-4 gap-4 flex-wrap">
             <div>
               <h2 className="text-2xl md:text-3xl font-bold text-gray-900">Productos destacados</h2>
@@ -231,7 +143,7 @@ export function Landing() {
               No hay productos disponibles en esta categoría por ahora.
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-4">
               {destacados.map(p => (
                 <Link key={p.id} to={user ? '/store' : '/login'}
                   className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow">
@@ -253,6 +165,38 @@ export function Landing() {
               ))}
             </div>
           )}
+        </div>
+      </section>
+
+      {/* ── 4 diferenciales (ahora debajo de productos como refuerzo) ─────── */}
+      <section className="max-w-6xl mx-auto px-4 py-14">
+        <div className="text-center mb-8">
+          <h2 className="text-2xl md:text-3xl font-bold text-gray-900">Por qué comprar acá</h2>
+          <p className="text-gray-600 mt-1">Cuatro cosas que nos hacen distintos.</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { icon: CreditCard,  color: 'text-indigo-600', bg: 'bg-indigo-50',
+              titulo: 'Crédito propio',
+              texto:  'Compra en hasta 12 cuotas sin banco. Aprobamos en la tienda con tu CI y documentos básicos.' },
+            { icon: Wrench,      color: 'text-emerald-600', bg: 'bg-emerald-50',
+              titulo: 'Servicio técnico',
+              texto:  'Mantenimiento preventivo y correctivo con checklist. Si tu equipo tiene garantía vigente, hay usos GRATIS.' },
+            { icon: Crown,       color: 'text-amber-600', bg: 'bg-amber-50',
+              titulo: 'Programa VIP',
+              texto:  'Cada Bs 200 de consumo suman descuento para tu próxima compra. Automático, sin trámite.' },
+            { icon: StoreIcon,   color: 'text-blue-600', bg: 'bg-blue-50',
+              titulo: 'Compra online y retiro',
+              texto:  'Pagá con tarjeta desde tu perfil y retirá el producto en la tienda cuando te llegue el aviso.' },
+          ].map(b => (
+            <div key={b.titulo} className="bg-white border border-gray-200 rounded-xl p-5">
+              <div className={`w-11 h-11 rounded-lg ${b.bg} ${b.color} flex items-center justify-center mb-3`}>
+                <b.icon className="w-6 h-6" />
+              </div>
+              <h3 className="font-semibold text-gray-900 mb-1">{b.titulo}</h3>
+              <p className="text-sm text-gray-600">{b.texto}</p>
+            </div>
+          ))}
         </div>
       </section>
 
