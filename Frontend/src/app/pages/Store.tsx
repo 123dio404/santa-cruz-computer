@@ -236,7 +236,7 @@ export function Store() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
         {filtered.map(product => {
           const price = parseFloat(String(product.precio_venta ?? product.price));
           const enPromo = product.precio_promocional != null && product.promo_porcentaje != null;
