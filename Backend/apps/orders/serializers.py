@@ -25,7 +25,7 @@ from rest_framework import serializers
 from .models import (
     Venta, DetalleVenta, PagoVenta, Factura, Garantia, Resena, Devolucion,
     ServicioCatalogo, OrdenServicio, OrdenDetalle, TareaServicio,
-    PlanCredito, Cuota,
+    PlanCredito, Cuota, ChecklistCredito,
 )
 
 
@@ -228,7 +228,9 @@ class CuotaSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Cuota
         fields = ['id', 'numero', 'monto', 'mora', 'total',
-                  'fecha_vencimiento', 'fecha_pago', 'estado', 'vencida']
+                  'fecha_vencimiento', 'fecha_pago', 'estado', 'vencida',
+                  'metodo_pago', 'numero_factura',
+                  'stripe_payment_intent_id', 'stripe_session_pending']
 
     def get_total(self, obj):
         return round(float(obj.monto) + float(obj.mora), 2)
@@ -237,8 +239,20 @@ class CuotaSerializer(serializers.ModelSerializer):
         return obj.estado == 'vencida'
 
 
+class ChecklistCreditoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = ChecklistCredito
+        fields = ['id', 'tipo_empleo', 'antiguedad_meses',
+                  'ci_solicitante', 'ci_conyuge', 'factura_servicios',
+                  'boletas_pago', 'extracto_gestora',
+                  'facturas_ultimo_ano', 'estados_financieros', 'nit',
+                  'croquis_domicilio', 'croquis_negocio', 'respaldos_patrimoniales',
+                  'observaciones', 'fecha_verificacion']
+
+
 class PlanCreditoSerializer(serializers.ModelSerializer):
     cuotas          = CuotaSerializer(many=True, read_only=True)
+    checklist       = ChecklistCreditoSerializer(read_only=True)
     cliente_nombre  = serializers.SerializerMethodField()
     producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
     cuotas_pagadas  = serializers.SerializerMethodField()
@@ -251,8 +265,8 @@ class PlanCreditoSerializer(serializers.ModelSerializer):
                   'cliente', 'cliente_nombre', 'usuario',
                   'precio_unitario', 'cantidad', 'precio_base', 'recargo_pct',
                   'precio_financiado', 'inicial', 'n_cuotas', 'monto_cuota',
-                  'saldo', 'estado', 'fecha',
-                  'cuotas', 'cuotas_pagadas', 'total_pagado', 'proxima_cuota']
+                  'saldo', 'estado', 'origen', 'numero_factura', 'fecha',
+                  'cuotas', 'checklist', 'cuotas_pagadas', 'total_pagado', 'proxima_cuota']
 
     def get_cliente_nombre(self, obj):
         c = obj.cliente

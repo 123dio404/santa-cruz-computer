@@ -427,6 +427,9 @@ class PlanCredito(models.Model):
     monto_cuota       = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     saldo             = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     estado            = models.CharField(max_length=20, default='vigente')  # vigente | pagado | moroso
+    # Refinamiento CU28/CU29 (SQL 010) — origen del plan y factura de la inicial
+    origen            = models.CharField(max_length=20, null=True, blank=True)   # walk_in | al_credito_sales
+    numero_factura    = models.CharField(max_length=20, null=True, blank=True)   # ej. FCR-2026-000142
     fecha             = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -452,6 +455,11 @@ class Cuota(models.Model):
     usuario_cobro     = models.ForeignKey(
         Usuario, on_delete=models.DO_NOTHING, null=True, blank=True,
         db_column='idusuario_cobro', related_name='cuotas_cobradas')
+    # Refinamiento CU28/CU29 (SQL 010) — Stripe online + metodo + factura de la cuota
+    stripe_payment_intent_id = models.CharField(max_length=120, null=True, blank=True)
+    stripe_session_pending   = models.CharField(max_length=120, null=True, blank=True)
+    metodo_pago              = models.CharField(max_length=20, null=True, blank=True)  # efectivo | stripe
+    numero_factura           = models.CharField(max_length=20, null=True, blank=True)
 
     class Meta:
         managed  = False
@@ -460,3 +468,41 @@ class Cuota(models.Model):
 
     def __str__(self):
         return f"Cuota {self.numero} — Plan #{self.plan_id} ({self.estado})"
+
+
+class ChecklistCredito(models.Model):
+    """
+    Checklist de documentos verificados al aprobar un plan de crédito.
+    Se llena en el flujo walk-in de /creditos (o cuando el vendedor arma el
+    plan desde /sales con metodo 'Al crédito'). 1:1 con PlanCredito.
+    Tabla creada por SQL manual (managed=False): 010_checklist_credito.sql
+    """
+    id                       = models.AutoField(primary_key=True, db_column='idchecklist')
+    plan                     = models.OneToOneField(
+        PlanCredito, on_delete=models.CASCADE, db_column='idplan', related_name='checklist')
+    tipo_empleo              = models.CharField(max_length=20)   # dependiente | independiente
+    antiguedad_meses         = models.IntegerField(default=0)
+    # Documentos comunes
+    ci_solicitante           = models.BooleanField(default=False)
+    ci_conyuge               = models.BooleanField(default=False)
+    factura_servicios        = models.BooleanField(default=False)
+    # Documentos dependiente
+    boletas_pago             = models.BooleanField(default=False)
+    extracto_gestora         = models.BooleanField(default=False)
+    # Documentos independiente
+    facturas_ultimo_ano      = models.BooleanField(default=False)
+    estados_financieros      = models.BooleanField(default=False)
+    nit                      = models.BooleanField(default=False)
+    croquis_domicilio        = models.BooleanField(default=False)
+    croquis_negocio          = models.BooleanField(default=False)
+    respaldos_patrimoniales  = models.BooleanField(default=False)
+    observaciones            = models.TextField(null=True, blank=True)
+    fecha_verificacion       = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed  = False
+        db_table = 'checklist_credito'
+        ordering = ['-id']
+
+    def __str__(self):
+        return f"Checklist #{self.id} — Plan #{self.plan_id} ({self.tipo_empleo})"
