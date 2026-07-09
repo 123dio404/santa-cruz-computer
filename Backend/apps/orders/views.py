@@ -1513,6 +1513,62 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
         return Response({'elegible': True, **{k: (str(v) if isinstance(v, Decimal) else v)
                                               for k, v in plan.items() if k != 'montos_cuotas'}})
 
+    @action(detail=False, methods=['get'], url_path='mis-creditos')
+    def mis_creditos(self, request):
+        """
+        Vista del CLIENTE: devuelve solo los planes de crédito del cliente
+        logueado (según JWT). Trae cuotas, checklist, resumen y el próximo
+        vencimiento para armar la pantalla `Mis Créditos`.
+
+        401 si no hay JWT válido, 403 si el rol no es 'cliente' (los admins
+        pueden usar /planes-credito/ estándar).
+        """
+        if not request.auth:
+            return Response({'error': 'No autenticado.'}, status=status.HTTP_401_UNAUTHORIZED)
+        role = request.auth.get('role', '')
+        if role != 'cliente':
+            return Response({'error': 'Este endpoint es solo para clientes.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        cliente_id = request.auth.get('user_id')
+
+        # Refrescamos moras antes de responder (perezoso, sin cron)
+        planes = list(PlanCredito.objects.filter(cliente_id=cliente_id)
+                      .select_related('producto').prefetch_related('cuotas', 'checklist'))
+        for p in planes:
+            _refrescar_moras(p)
+
+        # Resumen del cliente para la pantalla
+        activos_qs = [p for p in planes if p.estado in ('vigente', 'moroso')]
+        total_saldo = sum((Decimal(str(p.saldo)) for p in activos_qs), Decimal('0'))
+        cuotas_pendientes = [
+            c for p in activos_qs for c in p.cuotas.all()
+            if c.estado in ('pendiente', 'vencida')
+        ]
+        cuotas_vencidas = [c for c in cuotas_pendientes if c.estado == 'vencida']
+        proxima = min(cuotas_pendientes, key=lambda c: c.fecha_vencimiento, default=None)
+
+        data = PlanCreditoSerializer(
+            sorted(planes, key=lambda x: x.id, reverse=True), many=True).data
+        return Response({
+            'resumen': {
+                'planes_activos':  len(activos_qs),
+                'planes_pagados':  sum(1 for p in planes if p.estado == 'pagado'),
+                'planes_totales':  len(planes),
+                'saldo_pendiente': str(_2d(total_saldo)),
+                'cuotas_pendientes': len(cuotas_pendientes),
+                'cuotas_vencidas':   len(cuotas_vencidas),
+                'proxima_cuota': ({
+                    'plan_id':           proxima.plan_id,
+                    'numero':            proxima.numero,
+                    'monto':             str(proxima.monto),
+                    'mora':              str(proxima.mora),
+                    'fecha_vencimiento': proxima.fecha_vencimiento.isoformat(),
+                    'estado':            proxima.estado,
+                } if proxima else None),
+            },
+            'planes': data,
+        })
+
     @action(detail=False, methods=['get'])
     def bloqueo(self, request):
         """¿El cliente está bloqueado para nuevos créditos? (tiene cuotas vencidas o llegó al tope)."""
