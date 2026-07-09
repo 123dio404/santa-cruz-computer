@@ -27,6 +27,7 @@
 
 import { createBrowserRouter, Navigate } from 'react-router';
 import { useAuth } from './context/AuthContext';
+import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { Products } from './pages/Products';
@@ -51,10 +52,11 @@ import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 
 /**
- * HomeRedirect - Redirige la raíz "/" al inicio que corresponde a cada rol.
- * Mantiene la misma tabla que Login.tsx post-login para que ambos caminos
- * (login directo y aterrizaje en la raíz) lleven al mismo lugar.
+ * HomeRedirect - Redirige por rol. Ya no se usa en `/` (esa ruta es la Landing
+ * pública). Queda disponible por si algún día se necesita en otro punto del
+ * flujo (por ejemplo, un botón "Volver al inicio" post-login).
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function HomeRedirect() {
   const { user } = useAuth();
   const destino =
@@ -83,21 +85,18 @@ export const router = createBrowserRouter([
     element: <Login />
   },
 
-  // ============ RUTAS PROTEGIDAS (requieren estar logueado) ============
-
   /**
-   * / - Ruta raíz (página de inicio)
-   * - Redirige al inicio que corresponde al rol del usuario
-   *   (admin → dashboard, empleado → inventario, técnico → mis trabajos, cliente → tienda)
+   * / - Landing pública
+   * - La ve todo el mundo (logueado o no).
+   * - Presenta la propuesta de la tienda: catálogo, crédito, servicio técnico, ubicación.
+   * - Si el usuario está logueado, el hero muestra un CTA "Ir a mi panel" a su ruta natural.
    */
   {
     path: '/',
-    element: (
-      <ProtectedRoute>
-        <HomeRedirect />
-      </ProtectedRoute>
-    )
+    element: <Landing />
   },
+
+  // ============ RUTAS PROTEGIDAS (requieren estar logueado) ============
 
   /**
    * /dashboard - Panel Principal
