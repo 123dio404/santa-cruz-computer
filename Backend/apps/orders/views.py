@@ -1457,7 +1457,7 @@ def _notificar_cuota_pagada(cuota, stripe_receipt_url=None):
         html = _render_factura_credito('facturas/factura_cuota.html', {
             'cliente': {
                 'nombre':   f'{cliente.nombre or ""} {cliente.apellido or ""}'.strip() or 'Cliente',
-                'ci':       getattr(cliente, 'ci', None) or getattr(cliente, 'documento', None),
+                'ci':       getattr(cliente, 'nit_ci', None),
                 'correo':   cliente.correo,
                 'telefono': getattr(cliente, 'telefono', None),
             },
@@ -1703,7 +1703,7 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
                             status=status.HTTP_400_BAD_REQUEST)
 
         # El precio unitario del producto tiene que caer en el rango habilitado
-        pu = Decimal(str(producto.precio or 0))
+        pu = Decimal(str(producto.precio_actual or 0))
         calc = calcular_credito(pu, cantidad)
         if not calc:
             return Response({'error': 'El producto no califica a crédito (precio unitario fuera de Bs 1–15.000).'},
@@ -1846,7 +1846,7 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
             html = _render_factura_credito('facturas/factura_inicial.html', {
                 'cliente': {
                     'nombre':   f'{cliente.nombre or ""} {cliente.apellido or ""}'.strip() or 'Cliente',
-                    'ci':       getattr(cliente, 'ci', None) or getattr(cliente, 'documento', None),
+                    'ci':       getattr(cliente, 'nit_ci', None),
                     'correo':   cliente.correo,
                     'telefono': getattr(cliente, 'telefono', None),
                 },
