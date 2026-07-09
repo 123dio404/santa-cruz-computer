@@ -9,13 +9,13 @@
  *   • Logueado: además del catálogo, "Ir a mi panel" a la ruta que
  *     corresponda al rol (admin/employee/tecnico/client).
  */
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router';
 import {
   MapPin, Phone, Clock, Mail,
   CreditCard, Wrench, Crown, ShieldCheck,
   Banknote, QrCode, Package, Store as StoreIcon,
-  ChevronRight, Menu, X,
+  ChevronDown, Menu, X, UserCircle, LogOut,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { productosAPI, categoriasAPI, ApiProduct, ApiCategoria } from '../services/api';
@@ -65,12 +65,15 @@ const rangoCredito = (precio: number): { cuotas: number; recargo: number } | nul
 };
 
 export function Landing() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [productos, setProductos] = useState<ApiProduct[]>([]);
   const [categorias, setCategorias] = useState<ApiCategoria[]>([]);
   const [categoriaSel, setCategoriaSel] = useState<number | ''>('');
   const [menuAbierto, setMenuAbierto] = useState(false);
+  const [userMenuAbierto, setUserMenuAbierto] = useState(false);
   const [detalleTarget, setDetalleTarget] = useState<ApiProduct | null>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   // Cierre del modal con Esc
   useEffect(() => {
@@ -79,6 +82,25 @@ export function Landing() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [detalleTarget]);
+
+  // Cierre del user menu al hacer click fuera
+  useEffect(() => {
+    if (!userMenuAbierto) return;
+    const onClick = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuAbierto(false);
+      }
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, [userMenuAbierto]);
+
+  const cerrarSesion = () => {
+    logout();
+    setUserMenuAbierto(false);
+    setMenuAbierto(false);
+    navigate('/');
+  };
 
   useEffect(() => {
     Promise.all([productosAPI.getAll(), categoriasAPI.getAll()])
@@ -113,10 +135,27 @@ export function Landing() {
           </div>
           <div className="flex items-center gap-2">
             {user ? (
-              <Link to={rutaPanel(user.role)}
-                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
-                Ir a mi panel <ChevronRight className="w-4 h-4" />
-              </Link>
+              <div className="relative" ref={userMenuRef}>
+                <button onClick={() => setUserMenuAbierto(!userMenuAbierto)}
+                  className="inline-flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg hover:bg-blue-100 text-sm font-medium">
+                  <UserCircle className="w-4 h-4" />
+                  <span className="max-w-[120px] truncate">{user.name || 'Mi cuenta'}</span>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${userMenuAbierto ? 'rotate-180' : ''}`} />
+                </button>
+                {userMenuAbierto && (
+                  <div className="absolute right-0 top-full mt-1 w-52 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-40">
+                    <Link to={rutaPanel(user.role)}
+                      onClick={() => setUserMenuAbierto(false)}
+                      className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                      <UserCircle className="w-4 h-4 text-gray-500" /> Mi cuenta
+                    </Link>
+                    <button onClick={cerrarSesion}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
+                      <LogOut className="w-4 h-4" /> Cerrar sesión
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
               <>
                 <Link to="/login" state={{ initialView: 'register' }}
@@ -158,6 +197,18 @@ export function Landing() {
                   className="py-3 text-blue-700 text-sm font-medium">
                   Crear cuenta
                 </Link>
+              )}
+              {user && (
+                <>
+                  <Link to={rutaPanel(user.role)} onClick={() => setMenuAbierto(false)}
+                    className="py-3 border-t border-gray-100 flex items-center gap-2 text-gray-700 text-sm font-medium">
+                    <UserCircle className="w-4 h-4 text-gray-500" /> Mi cuenta
+                  </Link>
+                  <button onClick={cerrarSesion}
+                    className="py-3 flex items-center gap-2 text-red-600 text-sm font-medium text-left">
+                    <LogOut className="w-4 h-4" /> Cerrar sesión
+                  </button>
+                </>
               )}
             </div>
           </div>
