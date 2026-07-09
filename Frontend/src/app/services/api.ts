@@ -840,6 +840,10 @@ export interface ApiOrdenServicio {
   origen: string;
   equipo: string;
   equipo_descripcion: string | null;
+  // Refinamiento CU25/CU26 (SQL 013) — modelo del catálogo vinculado
+  producto_referencia: number | null;
+  producto_referencia_nombre: string | null;
+  producto_referencia_marca:  string | null;
   es_beneficio: boolean;
   diagnostico: string | null;
   observaciones: string | null;
@@ -855,6 +859,16 @@ export interface ApiOrdenServicio {
 }
 export interface ApiElegibilidad {
   garantia_id: number; producto: string; fecha_fin: string; usos_disponibles: number;
+}
+export interface ApiProductoCliente {
+  garantia_id: number;
+  producto_id: number;
+  producto: string;
+  marca: string | null;
+  modelo: string | null;
+  fecha_fin: string;
+  garantia_vigente: boolean;
+  usos_disponibles: number;
 }
 
 export const servicioTecnicoAPI = {
@@ -873,6 +887,13 @@ export const servicioTecnicoAPI = {
   },
   elegibilidad: async (clienteId: number): Promise<ApiElegibilidad[]> => {
     const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/elegibilidad/?cliente=${clienteId}`, { headers: authHeaders() });
+    if (!r.ok) return [];
+    return r.json();
+  },
+  // Equipos que el cliente compró en la tienda, filtrados por tipo (laptop | escritorio).
+  // Se usa en el wizard cuando el técnico responde "Sí, es de tienda".
+  productosCliente: async (clienteId: number, equipo: 'laptop' | 'escritorio'): Promise<ApiProductoCliente[]> => {
+    const r = await apiFetch(`${API_BASE_URL}/orders/ordenes-servicio/productos-cliente/?cliente=${clienteId}&equipo=${equipo}`, { headers: authHeaders() });
     if (!r.ok) return [];
     return r.json();
   },
