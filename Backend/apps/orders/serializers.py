@@ -215,11 +215,17 @@ class OrdenServicioSerializer(serializers.ModelSerializer):
     tecnico_nombre = serializers.SerializerMethodField()
     detalles       = OrdenDetalleServicioSerializer(many=True, read_only=True)
     tareas         = TareaServicioSerializer(many=True, read_only=True)
+    # Producto de referencia — para mostrar "MSI Bravo 15" en la card sin
+    # tener que re-consultar productosAPI.
+    producto_referencia_nombre = serializers.SerializerMethodField()
+    producto_referencia_marca  = serializers.CharField(
+        source='producto_referencia.marca', read_only=True, default=None)
 
     class Meta:
         model  = OrdenServicio
         fields = ['id', 'cliente', 'cliente_nombre', 'tecnico', 'tecnico_nombre',
                   'garantia', 'tipo', 'origen', 'equipo', 'equipo_descripcion',
+                  'producto_referencia', 'producto_referencia_nombre', 'producto_referencia_marca',
                   'es_beneficio', 'diagnostico', 'observaciones', 'costo_total',
                   'estado', 'fecha_solicitud', 'fecha_agendada', 'fecha_finalizacion',
                   'fecha_entrega_prevista', 'fecha_entrega_real',
@@ -231,6 +237,10 @@ class OrdenServicioSerializer(serializers.ModelSerializer):
 
     def get_tecnico_nombre(self, obj):
         return obj.tecnico.username if obj.tecnico else '—'
+
+    def get_producto_referencia_nombre(self, obj):
+        p = obj.producto_referencia
+        return p.nombre if p else None
 
 
 # ── Venta a crédito / Cartera (CU28/CU29) ────────────────────────────────────────

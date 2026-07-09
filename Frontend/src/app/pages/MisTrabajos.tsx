@@ -7,12 +7,23 @@
  * (Iniciar / Finalizar / Marcar entregado) sin abrir modal.
  */
 import { useState, useEffect } from 'react';
-import { Wrench, Plus, X, CheckCircle, Calendar, PackageCheck } from 'lucide-react';
 import {
-  servicioTecnicoAPI, clientesAPI,
-  ApiOrdenServicio, ApiServicioCatalogo, ApiElegibilidad, ApiCliente,
+  Wrench, Plus, X, CheckCircle, Calendar, PackageCheck,
+  CheckCircle2, Search, Package,
+} from 'lucide-react';
+import {
+  servicioTecnicoAPI, clientesAPI, productosAPI,
+  ApiOrdenServicio, ApiServicioCatalogo, ApiCliente,
+  ApiProductoCliente, ApiProduct,
 } from '../services/api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+
+// Categorías consideradas "laptop" (mismo criterio que el backend _es_categoria_laptop)
+const _cats = (s: string | undefined) => (s || '').toLowerCase();
+const esLaptopCat = (nombre: string | undefined) => {
+  const n = _cats(nombre);
+  return n.includes('laptop') || n.includes('notebook') || n.includes('portátil') || n.includes('portatil');
+};
 
 const ESTADOS: Record<string, { label: string; cls: string }> = {
   solicitado: { label: 'Solicitado', cls: 'bg-gray-100 text-gray-700' },
@@ -76,16 +87,21 @@ export function MisTrabajos() {
   const [loading, setLoading]   = useState(true);
   const [filtro, setFiltro]     = useState('agendado');
 
-  // Modal registrar
+  // ── Modal registrar — wizard con divulgación progresiva vertical ──
   const [openReg, setOpenReg] = useState(false);
-  const [tipo, setTipo]       = useState<'preventivo' | 'correctivo'>('preventivo');
-  const [origen, setOrigen]   = useState<'tienda' | 'externo'>('externo');
-  const [equipo, setEquipo]   = useState<'laptop' | 'escritorio'>('laptop');
-  const [clienteId, setClienteId]     = useState('');
-  const [equipoDesc, setEquipoDesc]   = useState('');
-  const [elegib, setElegib]           = useState<ApiElegibilidad[]>([]);
-  const [garantiaSel, setGarantiaSel] = useState('');
+  const [tipo, setTipo]       = useState<'preventivo' | 'correctivo' | null>(null);
+  const [clienteId, setClienteId] = useState('');
+  const [equipo, setEquipo]   = useState<'laptop' | 'escritorio' | null>(null);
+  const [esDeTienda, setEsDeTienda] = useState<'si' | 'no' | null>(null);
+  // Productos comprados por el cliente (si es de tienda), filtrados por equipo
+  const [productosCliente, setProductosCliente] = useState<ApiProductoCliente[]>([]);
+  // Catálogo entero (para el caso externo). Se filtra por equipo al vuelo.
+  const [catalogoProductos, setCatalogoProductos] = useState<ApiProduct[]>([]);
+  const [buscaProd, setBuscaProd] = useState('');
+  const [productoRefId, setProductoRefId] = useState<number | null>(null);
+  const [garantiaSel, setGarantiaSel] = useState('');           // garantía elegida en preventivo+tienda+laptop
   const [serviciosSel, setServiciosSel] = useState<Set<number>>(new Set());
+  const [equipoDesc, setEquipoDesc]   = useState('');           // descripción opcional adicional
   const [fechaRetiro, setFechaRetiro] = useState('');
   const [saving, setSaving] = useState(false);
   const [regError, setRegError] = useState('');
@@ -118,43 +134,92 @@ export function MisTrabajos() {
   };
   useEffect(cargar, []);
 
+  // Cuando el cliente + equipo + "sí es de tienda" están definidos, consultamos
+  // los equipos que compró filtrados por tipo. El técnico elige uno.
   useEffect(() => {
-    if (origen === 'tienda' && clienteId) {
-      servicioTecnicoAPI.elegibilidad(Number(clienteId)).then(setElegib).catch(() => setElegib([]));
+    if (esDeTienda === 'si' && clienteId && equipo) {
+      servicioTecnicoAPI.productosCliente(Number(clienteId), equipo)
+        .then(setProductosCliente)
+        .catch(() => setProductosCliente([]));
     } else {
-      setElegib([]); setGarantiaSel('');
+      setProductosCliente([]);
     }
-  }, [origen, clienteId]);
+    // Reset del producto elegido y garantía al cambiar cualquier condicion
+    setProductoRefId(null);
+    setGarantiaSel('');
+  }, [esDeTienda, clienteId, equipo]);
+
+  // Catálogo entero (para el caso externo). Se carga una vez al abrir el modal.
+  useEffect(() => {
+    if (!openReg) return;
+    if (catalogoProductos.length > 0) return;
+    productosAPI.getAll().then(setCatalogoProductos).catch(() => setCatalogoProductos([]));
+  }, [openReg, catalogoProductos.length]);
 
   const preventivos = catalogo.filter(s => s.tipo === 'preventivo');
   const correctivos = catalogo.filter(s => s.tipo === 'correctivo');
   const precioPrev  = Number(preventivos.find(s => s.equipo === equipo)?.precio ?? 0);
-  const garantiaElegida = elegib.find(g => String(g.garantia_id) === garantiaSel);
-  const esGratis = tipo === 'preventivo' && origen === 'tienda' && equipo === 'laptop'
-    && !!garantiaElegida && garantiaElegida.usos_disponibles > 0;
+  const productoClienteElegido = productosCliente.find(p => p.producto_id === productoRefId);
+  // GRATIS solo aplica en preventivo+laptop+tienda con garantía vigente y usos disponibles
+  const esGratis = tipo === 'preventivo' && esDeTienda === 'si' && equipo === 'laptop'
+    && !!productoClienteElegido && productoClienteElegido.garantia_vigente
+    && productoClienteElegido.usos_disponibles > 0;
 
   const costoPreview = tipo === 'preventivo'
     ? (esGratis ? 0 : precioPrev)
     : correctivos.filter(s => serviciosSel.has(s.id)).reduce((sum, s) => sum + Number(s.precio), 0);
 
+  // Productos del catálogo filtrados por equipo elegido (para caso externo)
+  const catalogoFiltrado = catalogoProductos.filter(p => {
+    const laptop = esLaptopCat(p.categoria_nombre || undefined);
+    if (equipo === 'laptop' && !laptop) return false;
+    if (equipo === 'escritorio' && laptop) return false;
+    if (!buscaProd.trim()) return true;
+    const t = buscaProd.toLowerCase();
+    return p.name.toLowerCase().includes(t)
+        || (p.marca || '').toLowerCase().includes(t)
+        || (p.modelo || '').toLowerCase().includes(t);
+  }).slice(0, 40);
+
   const abrirReg = () => {
-    setTipo('preventivo'); setOrigen('externo'); setEquipo('laptop');
-    setClienteId(''); setEquipoDesc(''); setGarantiaSel(''); setServiciosSel(new Set());
+    setTipo(null); setClienteId(''); setEquipo(null); setEsDeTienda(null);
+    setProductoRefId(null); setGarantiaSel(''); setServiciosSel(new Set());
+    setEquipoDesc(''); setBuscaProd('');
     setFechaRetiro(fechaSugerida(3));
     setRegError(''); setOpenReg(true);
   };
 
   const guardar = async () => {
-    if (tipo === 'correctivo' && serviciosSel.size === 0) { setRegError('Elige al menos un servicio correctivo.'); return; }
-    if (origen === 'tienda' && !clienteId) { setRegError('Elige el cliente.'); return; }
-    if (origen === 'externo' && !equipoDesc.trim()) { setRegError('Describe el equipo (marca/modelo).'); return; }
+    // Validaciones progresivas — cada paso las suyas
+    if (!tipo)         { setRegError('Elige el tipo de servicio.'); return; }
+    if (!clienteId)    { setRegError('Elige el cliente.'); return; }
+    if (!equipo)       { setRegError('Elige el equipo.'); return; }
+    if (tipo === 'preventivo') {
+      if (esDeTienda === null) { setRegError('Indica si el equipo es de la tienda.'); return; }
+      if (esDeTienda === 'si' && !productoRefId) { setRegError('Elige cuál de los equipos comprados es.'); return; }
+      if (esDeTienda === 'no' && !productoRefId) { setRegError('Elige el modelo del equipo desde el catálogo.'); return; }
+    }
+    if (tipo === 'correctivo' && serviciosSel.size === 0) {
+      setRegError('Elige al menos un servicio correctivo.'); return;
+    }
     if (!fechaRetiro) { setRegError('Define la fecha de retiro.'); return; }
     if (fechaRetiro < fechaHoy()) { setRegError('La fecha de retiro no puede ser en el pasado.'); return; }
+
     setSaving(true); setRegError('');
-    const data: any = { tipo, origen, equipo, fecha_entrega_prevista: fechaRetiro };
-    if (origen === 'tienda' && clienteId) data.cliente = Number(clienteId);
-    if (origen === 'externo') data.equipo_descripcion = equipoDesc.trim();
-    if (tipo === 'preventivo' && esGratis && garantiaSel) data.garantia = Number(garantiaSel);
+    // En el nuevo flujo TODOS los servicios tienen cliente registrado.
+    // El campo `origen` sigue siendo trazabilidad histórica: 'tienda' si compró
+    // acá, 'externo' si trajo un equipo de otra tienda.
+    const origen = (tipo === 'preventivo' && esDeTienda === 'si') ? 'tienda' : 'externo';
+    const data: any = {
+      tipo, origen, equipo,
+      cliente: Number(clienteId),
+      fecha_entrega_prevista: fechaRetiro,
+    };
+    if (productoRefId) data.producto_referencia = productoRefId;
+    if (equipoDesc.trim()) data.equipo_descripcion = equipoDesc.trim();
+    if (tipo === 'preventivo' && esGratis && productoClienteElegido) {
+      data.garantia = productoClienteElegido.garantia_id;
+    }
     if (tipo === 'correctivo') data.servicios = Array.from(serviciosSel);
     try {
       const nueva = await servicioTecnicoAPI.crear(data);
@@ -259,7 +324,7 @@ export function MisTrabajos() {
               {ESTADOS[o.estado]?.label ?? o.estado}
             </span>
             <p className="font-semibold text-gray-900">
-              #{o.id} · {o.tipo === 'preventivo' ? 'Preventivo' : 'Correctivo'} · {o.equipo}
+              #{o.id} · {o.tipo === 'preventivo' ? 'Preventivo' : 'Correctivo'} · {o.producto_referencia_nombre || o.equipo}
             </p>
             {o.fecha_entrega_prevista && (
               <span className="text-xs text-gray-500 flex items-center gap-1">
@@ -358,129 +423,240 @@ export function MisTrabajos() {
         </div>
       )}
 
-      {/* ── MODAL REGISTRAR ── */}
+      {/* ── MODAL REGISTRAR — wizard con divulgación progresiva vertical ── */}
       {openReg && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setOpenReg(false)}>
-          <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+          <div className="bg-white rounded-xl w-full max-w-2xl max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
               <h2 className="text-lg font-semibold text-gray-900">Registrar servicio</h2>
               <button onClick={() => setOpenReg(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-4 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de servicio</label>
-                <div className="flex gap-2">
+
+              {/* ─── PASO 1 · Tipo de servicio ─── */}
+              <WizardStep num={1} label="Tipo de servicio" done={!!tipo}>
+                <div className="grid grid-cols-2 gap-3">
                   {(['preventivo', 'correctivo'] as const).map(t => (
                     <button key={t} onClick={() => setTipo(t)}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium border ${tipo === t ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 text-gray-600'}`}>
-                      {t === 'preventivo' ? 'Preventivo' : 'Correctivo'}
+                      className={`py-3 px-3 rounded-lg text-sm font-medium border-2 transition
+                        ${tipo === t ? 'bg-blue-50 border-blue-500 text-blue-900' : 'bg-white border-gray-200 text-gray-700 hover:border-gray-300'}`}>
+                      {t === 'preventivo' ? '🧰 Preventivo' : '🛠️ Correctivo'}
                     </button>
                   ))}
                 </div>
-              </div>
+              </WizardStep>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">¿Quién trae el equipo?</label>
-                <div className="flex gap-2">
-                  {(['tienda', 'externo'] as const).map(o => (
-                    <button key={o} onClick={() => setOrigen(o)}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium border ${origen === o ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 text-gray-600'}`}>
-                      {o === 'tienda' ? 'Cliente de tienda' : 'Externo'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Equipo</label>
-                <div className="flex gap-2">
-                  {(['laptop', 'escritorio'] as const).map(e => (
-                    <button key={e} onClick={() => setEquipo(e)}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium border ${equipo === e ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 text-gray-600'}`}>
-                      {e === 'laptop' ? 'Laptop' : 'Escritorio'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {origen === 'tienda' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Cliente</label>
+              {/* ─── PASO 2 · Cliente ─── */}
+              {tipo && (
+                <WizardStep num={2} label="Cliente" done={!!clienteId}>
                   <select value={clienteId} onChange={e => setClienteId(e.target.value)}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                    <option value="">— Elige un cliente —</option>
-                    {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre} {c.apellido}</option>)}
+                    <option value="">— Elige un cliente registrado —</option>
+                    {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre} {c.apellido}{c.nit_ci ? ` · CI ${c.nit_ci}` : ''}</option>)}
                   </select>
-                  {tipo === 'preventivo' && equipo === 'laptop' && clienteId && (
-                    <div className="mt-2 space-y-1">
-                      {elegib.length === 0 && <p className="text-xs text-gray-400">Sin garantías vigentes → se cobra.</p>}
-                      {elegib.map(g => (
-                        <label key={g.garantia_id} className="flex items-center gap-2 text-sm">
-                          <input type="radio" name="gar" checked={garantiaSel === String(g.garantia_id)}
-                            onChange={() => setGarantiaSel(String(g.garantia_id))} />
-                          {g.producto} · {g.usos_disponibles > 0
-                            ? <span className="text-green-600 font-medium">{g.usos_disponibles} uso(s) gratis</span>
-                            : <span className="text-gray-400">sin usos gratis</span>}
-                        </label>
-                      ))}
-                    </div>
+                  {!clienteId && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Si es un cliente nuevo, pedile que se registre desde <strong>Iniciar sesión → Crear cuenta</strong> antes de continuar.
+                    </p>
                   )}
-                </div>
+                </WizardStep>
               )}
 
-              {origen === 'externo' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Descripción del equipo</label>
-                  <input value={equipoDesc} onChange={e => setEquipoDesc(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Marca / modelo / serie" />
-                </div>
+              {/* ─── PASO 3 · Equipo ─── */}
+              {tipo && clienteId && (
+                <WizardStep num={3} label="Equipo" done={!!equipo}>
+                  <div className="grid grid-cols-2 gap-3">
+                    {(['laptop', 'escritorio'] as const).map(eq => (
+                      <button key={eq} onClick={() => setEquipo(eq)}
+                        className={`py-3 px-3 rounded-lg text-sm font-medium border-2 transition
+                          ${equipo === eq ? 'bg-blue-50 border-blue-500 text-blue-900' : 'bg-white border-gray-200 text-gray-700 hover:border-gray-300'}`}>
+                        {eq === 'laptop' ? '💻 Laptop' : '🖥️ Escritorio'}
+                      </button>
+                    ))}
+                  </div>
+                </WizardStep>
               )}
 
-              {tipo === 'correctivo' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Servicios</label>
-                  <div className="space-y-1">
+              {/* ─── PASO 4 (PREVENTIVO) · ¿Es de tienda? ─── */}
+              {tipo === 'preventivo' && clienteId && equipo && (
+                <WizardStep num={4} label="¿El equipo es de nuestra tienda?" done={esDeTienda !== null}>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button onClick={() => setEsDeTienda('si')}
+                      className={`py-3 px-3 rounded-lg text-sm font-medium border-2 transition
+                        ${esDeTienda === 'si' ? 'bg-emerald-50 border-emerald-500 text-emerald-900' : 'bg-white border-gray-200 text-gray-700 hover:border-gray-300'}`}>
+                      ✅ Sí, lo compró acá
+                    </button>
+                    <button onClick={() => setEsDeTienda('no')}
+                      className={`py-3 px-3 rounded-lg text-sm font-medium border-2 transition
+                        ${esDeTienda === 'no' ? 'bg-orange-50 border-orange-500 text-orange-900' : 'bg-white border-gray-200 text-gray-700 hover:border-gray-300'}`}>
+                      ❌ No, lo trae de afuera
+                    </button>
+                  </div>
+                </WizardStep>
+              )}
+
+              {/* ─── PASO 4 (CORRECTIVO) · Servicios ─── */}
+              {tipo === 'correctivo' && clienteId && equipo && (
+                <WizardStep num={4} label="Servicios a realizar" done={serviciosSel.size > 0}>
+                  <div className="space-y-1.5">
                     {correctivos.map(s => (
-                      <label key={s.id} className="flex items-center justify-between gap-2 text-sm border border-gray-200 rounded-lg px-3 py-2">
+                      <label key={s.id} className={`flex items-center justify-between gap-2 text-sm border rounded-lg px-3 py-2 cursor-pointer transition
+                                                      ${serviciosSel.has(s.id) ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
                         <span className="flex items-center gap-2">
                           <input type="checkbox" checked={serviciosSel.has(s.id)}
                             onChange={e => {
                               const next = new Set(serviciosSel);
-                              e.target.checked ? next.add(s.id) : next.delete(s.id);
+                              if (e.target.checked) next.add(s.id); else next.delete(s.id);
                               setServiciosSel(next);
                             }} />
                           {s.nombre}
                         </span>
-                        <span className="text-gray-500">Bs {Number(s.precio).toFixed(0)}</span>
+                        <span className="text-gray-500 font-medium">Bs {Number(s.precio).toFixed(0)}</span>
                       </label>
                     ))}
                   </div>
+                  {serviciosSel.size > 0 && (
+                    <div className="mt-2 text-sm text-gray-700 flex justify-between font-medium">
+                      <span>{serviciosSel.size} servicio(s) seleccionado(s)</span>
+                      <span>Total: Bs {costoPreview.toFixed(2)}</span>
+                    </div>
+                  )}
+                </WizardStep>
+              )}
+
+              {/* ─── PASO 5 (PREVENTIVO + SÍ tienda) · Cuál equipo comprado ─── */}
+              {tipo === 'preventivo' && esDeTienda === 'si' && equipo && (
+                <WizardStep num={5} label={`Elegí el ${equipo} del cliente`} done={!!productoRefId}>
+                  {productosCliente.length === 0 ? (
+                    <div className="text-sm bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-yellow-900">
+                      Este cliente no tiene {equipo}s comprados en la tienda con garantía registrada.
+                      Verificá con él si compró acá o marcá "No, lo trae de afuera".
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {productosCliente.map(p => {
+                        const seleccionado = productoRefId === p.producto_id;
+                        const gratisDisp = equipo === 'laptop' && p.garantia_vigente && p.usos_disponibles > 0;
+                        return (
+                          <button key={p.producto_id}
+                            onClick={() => setProductoRefId(p.producto_id)}
+                            className={`w-full text-left border-2 rounded-lg p-3 transition
+                              ${seleccionado ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="font-semibold text-gray-900">{p.producto}</p>
+                                <p className="text-xs text-gray-500">
+                                  {[p.marca, p.modelo].filter(Boolean).join(' · ') || 'Sin datos'}
+                                </p>
+                              </div>
+                              <div className="text-right shrink-0">
+                                {gratisDisp ? (
+                                  <>
+                                    <span className="inline-block bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-0.5 rounded-full">GRATIS</span>
+                                    <p className="text-xs text-emerald-700 mt-1">{p.usos_disponibles} uso(s) disponibles</p>
+                                  </>
+                                ) : p.garantia_vigente ? (
+                                  <span className="text-xs text-gray-500">Garantía vigente</span>
+                                ) : (
+                                  <span className="text-xs text-red-500">Garantía vencida</span>
+                                )}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </WizardStep>
+              )}
+
+              {/* ─── PASO 5 (PREVENTIVO + NO tienda) · Elegir modelo del catálogo ─── */}
+              {tipo === 'preventivo' && esDeTienda === 'no' && equipo && (
+                <WizardStep num={5} label="Elegí el modelo del equipo (catálogo)" done={!!productoRefId}>
+                  <div className="relative mb-2">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input value={buscaProd} onChange={e => setBuscaProd(e.target.value)}
+                      placeholder={`Buscar ${equipo} por nombre, marca o modelo…`}
+                      className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                  </div>
+                  {catalogoFiltrado.length === 0 ? (
+                    <div className="text-sm text-gray-500 text-center py-6">
+                      No hay {equipo}s en el catálogo que coincidan.
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {catalogoFiltrado.map(p => {
+                        const seleccionado = productoRefId === p.id;
+                        const sinStock = (p.stock ?? 0) === 0;
+                        return (
+                          <button key={p.id}
+                            onClick={() => setProductoRefId(p.id)}
+                            className={`w-full text-left border rounded-lg p-2.5 transition
+                              ${seleccionado ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                            <div className="flex items-center gap-2">
+                              <Package className="w-4 h-4 text-gray-400 shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <p className="font-medium text-gray-900 text-sm truncate">{p.name}</p>
+                                <p className="text-xs text-gray-500 truncate">
+                                  {p.marca || 'Sin marca'}{p.modelo ? ` · ${p.modelo}` : ''}
+                                </p>
+                              </div>
+                              {sinStock && (
+                                <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full shrink-0">Descontinuado</span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 mt-2">
+                    Nota: el precio del equipo NO afecta al servicio — solo se usa como referencia de modelo.
+                  </p>
+                </WizardStep>
+              )}
+
+              {/* ─── Descripción adicional (opcional) — solo si ya se eligió modelo ─── */}
+              {(productoRefId || (tipo === 'correctivo' && serviciosSel.size > 0)) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Notas del equipo <span className="text-gray-400 font-normal">(opcional)</span>
+                  </label>
+                  <input value={equipoDesc} onChange={e => setEquipoDesc(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    placeholder="N° de serie, color, RAM, etc." />
                 </div>
               )}
 
-              {/* Fecha de retiro (obligatoria — la orden nace agendada) */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-blue-600" /> Fecha de retiro
-                </label>
-                <input type="date" value={fechaRetiro} min={fechaHoy()}
-                  onChange={e => setFechaRetiro(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
-                <p className="text-xs text-gray-500 mt-1">
-                  Al confirmar, la orden queda agendada y se envía correo al cliente con esta fecha.
-                </p>
-              </div>
+              {/* ─── PASO FINAL · Fecha de retiro ─── */}
+              {((tipo === 'preventivo' && productoRefId)
+                || (tipo === 'correctivo' && serviciosSel.size > 0)) && (
+                <WizardStep num={tipo === 'correctivo' ? 5 : 6} label="Fecha de retiro" done={!!fechaRetiro}>
+                  <input type="date" value={fechaRetiro} min={fechaHoy()}
+                    onChange={e => setFechaRetiro(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Al confirmar, la orden queda agendada y se envía correo al cliente con esta fecha.
+                  </p>
 
-              <div className={`rounded-lg p-3 text-sm ${esGratis ? 'bg-green-50 border border-green-200' : 'bg-blue-50 border border-blue-200'}`}>
-                Costo: <strong>{esGratis ? 'GRATIS (beneficio)' : `Bs ${costoPreview.toFixed(2)}`}</strong>
-              </div>
+                  <div className={`mt-3 rounded-lg p-3 text-sm ${esGratis ? 'bg-emerald-50 border border-emerald-200 text-emerald-900' : 'bg-blue-50 border border-blue-200 text-blue-900'}`}>
+                    Costo: <strong>{esGratis ? 'GRATIS (beneficio de garantía)' : `Bs ${costoPreview.toFixed(2)}`}</strong>
+                  </div>
+                </WizardStep>
+              )}
 
-              {regError && <div className="text-sm bg-red-50 text-red-700 border border-red-200 rounded-lg px-3 py-2">{regError}</div>}
+              {regError && (
+                <div className="text-sm bg-red-50 text-red-700 border border-red-200 rounded-lg px-3 py-2">{regError}</div>
+              )}
             </div>
-            <div className="flex gap-2 p-4 border-t border-gray-200">
-              <button onClick={() => setOpenReg(false)} className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">Cancelar</button>
-              <button disabled={saving} onClick={guardar} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50">
-                {saving ? 'Guardando...' : 'Registrar y agendar'}
+            <div className="flex gap-2 p-4 border-t border-gray-200 sticky bottom-0 bg-white">
+              <button onClick={() => setOpenReg(false)}
+                className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">
+                Cancelar
+              </button>
+              <button disabled={saving} onClick={guardar}
+                className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2">
+                {saving ? 'Guardando…' : <><CheckCircle2 className="w-4 h-4" /> Registrar y agendar</>}
               </button>
             </div>
           </div>
@@ -621,6 +797,33 @@ export function MisTrabajos() {
           {toast.text}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * WizardStep — bloque de paso del formulario con divulgación progresiva.
+ * Número circular a la izquierda (verde si done=true), título arriba
+ * y el contenido del paso adentro. Se apila verticalmente en el modal.
+ */
+function WizardStep({ num, label, done, children }: {
+  num: number;
+  label: string;
+  done: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-3">
+      <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-colors
+                        ${done
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-blue-100 text-blue-700 border-2 border-blue-500'}`}>
+        {done ? <CheckCircle2 className="w-5 h-5" /> : num}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-gray-900 mb-2">{label}</p>
+        {children}
+      </div>
     </div>
   );
 }

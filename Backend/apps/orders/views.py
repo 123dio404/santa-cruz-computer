@@ -1016,6 +1016,55 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
             })
         return Response(out)
 
+    @action(detail=False, methods=['get'], url_path='productos-cliente')
+    def productos_cliente(self, request):
+        """
+        Equipos que el cliente compró en la tienda, filtrables por tipo (laptop
+        o escritorio). Se usa en el wizard "Registrar servicio" cuando el
+        técnico responde "Sí, es de tienda". Devuelve, para cada producto:
+          · id del producto (para vincular via producto_referencia)
+          · id de la garantía (para el beneficio GRATIS si aplica)
+          · si la garantía está vigente
+          · cuántos usos GRATIS le quedan (solo laptop + preventivo)
+        Params: ?cliente=<id> [&equipo=laptop|escritorio]
+        """
+        from django.utils import timezone
+        cliente_id = request.query_params.get('cliente')
+        equipo     = (request.query_params.get('equipo') or 'laptop').lower()
+        if not cliente_id:
+            return Response([])
+        hoy = timezone.localdate()
+        gs = (Garantia.objects
+              .select_related('producto', 'producto__categoria')
+              .filter(cliente_id=cliente_id))
+        out = []
+        for g in gs:
+            if not g.producto:
+                continue
+            cat = g.producto.categoria.nombre if g.producto.categoria else ''
+            es_laptop = _es_categoria_laptop(cat)
+            # Filtro por tipo del equipo elegido en el paso 3
+            if equipo == 'laptop' and not es_laptop:
+                continue
+            if equipo == 'escritorio' and es_laptop:
+                continue
+            vigente = g.fecha_fin >= hoy
+            usos_disponibles = 0
+            if vigente and equipo == 'laptop':
+                usados = OrdenServicio.objects.filter(garantia_id=g.id, es_beneficio=True).count()
+                usos_disponibles = max(0, 2 - usados)
+            out.append({
+                'garantia_id':      g.id,
+                'producto_id':      g.producto_id,
+                'producto':         g.producto.nombre,
+                'marca':            g.producto.marca,
+                'modelo':           g.producto.modelo,
+                'fecha_fin':        g.fecha_fin,
+                'garantia_vigente': vigente,
+                'usos_disponibles': usos_disponibles,
+            })
+        return Response(out)
+
     def create(self, request, *args, **kwargs):
         from django.utils import timezone
         from datetime import date as _date
@@ -1025,11 +1074,18 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
         equipo_desc = (request.data.get('equipo_descripcion') or '').strip() or None
         cliente_id  = request.data.get('cliente') or None
         garantia_id = request.data.get('garantia') or None
+        producto_ref_id = request.data.get('producto_referencia') or None
         servicios_ids = request.data.get('servicios') or []
         fecha_raw = request.data.get('fecha_entrega_prevista')
 
         if tipo not in ('preventivo', 'correctivo'):
             return Response({'error': 'Tipo de servicio inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validar que el producto de referencia exista si viene en el payload
+        if producto_ref_id:
+            if not Producto.objects.filter(pk=producto_ref_id).exists():
+                return Response({'error': 'El producto de referencia no existe.'},
+                                status=status.HTTP_400_BAD_REQUEST)
 
         # Fecha de retiro obligatoria — la orden nace directamente 'agendado'
         if not fecha_raw:
@@ -1072,6 +1128,7 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
             orden = OrdenServicio.objects.create(
                 cliente_id=cliente_id or None, tecnico_id=tecnico_id,
                 garantia_id=(garantia_id if es_beneficio else None),
+                producto_referencia_id=producto_ref_id or None,
                 tipo=tipo, origen=origen, equipo=equipo, equipo_descripcion=equipo_desc,
                 es_beneficio=es_beneficio, costo_total=round(costo, 2), estado='agendado',
                 fecha_entrega_prevista=fecha_entrega, fecha_agendada=timezone.now(),
