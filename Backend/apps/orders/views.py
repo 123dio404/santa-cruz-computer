@@ -1534,34 +1534,17 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
                        None),
         })
 
-    @action(detail=False, methods=['post'], url_path='walk-in')
-    def walk_in(self, request):
+    def _crear_credito_atomico(self, request, origen):
         """
-        Crea un crédito walk-in de forma atómica: venta + detalle + pago inicial +
-        plan + checklist + cuotas + numero_factura. Todo en una sola transacción.
+        Lógica compartida entre walk-in y desde-venta. Crea de forma atómica:
+        venta + detalle + pago inicial + plan + checklist + N cuotas +
+        numero_factura, y notifica al cliente por correo/campana.
 
-        Body:
-          {
-            "cliente":            123,
-            "producto":           45,
-            "cantidad":           1,           # opcional, default 1
-            "tipo_empleo":        "dependiente" | "independiente",
-            "antiguedad_meses":   24,
-            "observaciones":      "…",         # opcional
-            "checklist": {                     # booleans según tipo_empleo
-              "ci_solicitante":         true,
-              "ci_conyuge":             false,
-              "factura_servicios":      true,
-              "boletas_pago":           true,  # dependiente
-              "extracto_gestora":       true,  # dependiente
-              "facturas_ultimo_ano":    false, # independiente
-              "estados_financieros":    false, # independiente
-              "nit":                    false, # independiente
-              "croquis_domicilio":      false, # independiente
-              "croquis_negocio":        false, # independiente
-              "respaldos_patrimoniales": false # independiente
-            }
-          }
+        `origen` debe ser 'walk_in' o 'al_credito_sales'. Cambia el campo
+        `plan_credito.origen` y el texto de bitácora, pero el flujo es idéntico.
+
+        Devuelve un rest_framework.Response con el payload del plan (201) o el
+        error (400/404). Nunca lanza excepción hacia arriba.
         """
         from django.db import transaction
         from django.utils import timezone
@@ -1656,7 +1639,7 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
                     precio_financiado=calc['precio_financiado'], inicial=calc['inicial'],
                     n_cuotas=calc['n_cuotas'], monto_cuota=calc['monto_cuota'],
                     saldo=calc['saldo'], estado='vigente',
-                    origen='walk_in', numero_factura=nro_factura,
+                    origen=origen, numero_factura=nro_factura,
                 )
                 # 7) Checklist
                 ChecklistCredito.objects.create(
@@ -1683,14 +1666,15 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
                         fecha_vencimiento=_add_months(hoy, i), estado='pendiente',
                     )
         except Exception as e:
-            return Response({'error': f'No se pudo crear el crédito walk-in: {e}'},
+            return Response({'error': f'No se pudo crear el crédito: {e}'},
                             status=status.HTTP_400_BAD_REQUEST)
 
         # ---- Post-transacción: bitácora + notificación al cliente ---------------
+        origen_lbl = 'walk-in' if origen == 'walk_in' else 'desde Sales'
         try:
             log_action(
                 accion='CREATE', modulo='Crédito',
-                descripcion=(f'Crédito walk-in #{plan.id} — {producto.nombre} '
+                descripcion=(f'Crédito {origen_lbl} #{plan.id} — {producto.nombre} '
                              f'({plan.n_cuotas} cuotas +{plan.recargo_pct}%), '
                              f'inicial Bs {plan.inicial} efectivo, factura {nro_factura}'),
                 **actor,
@@ -1701,11 +1685,45 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
         self._notificar_credito_creado(plan, producto, cliente)
 
         plan.refresh_from_db()
-        # Advertencia: si ahora quedó con 3 activos, el siguiente estará bloqueado
         payload = PlanCreditoSerializer(plan).data
-        payload['advertencia'] = 'Con este crédito el cliente llega al tope de 3 créditos activos. El próximo será rechazado.' \
-            if (activos + 1) >= 3 else None
+        # Advertencia: si ahora quedó con 3 activos, el próximo estará bloqueado
+        payload['advertencia'] = ('Con este crédito el cliente llega al tope de 3 créditos activos. '
+                                  'El próximo será rechazado.') if (activos + 1) >= 3 else None
         return Response(payload, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='walk-in')
+    def walk_in(self, request):
+        """
+        Crea un crédito walk-in de forma atómica (venta + detalle + pago inicial +
+        plan + checklist + cuotas + numero_factura). Se usa desde /creditos cuando
+        el cliente viene físicamente y no hay una venta previa en curso.
+
+        Body:
+          {
+            "cliente":            123,
+            "producto":           45,
+            "cantidad":           1,        # opcional, default 1
+            "tipo_empleo":        "dependiente" | "independiente",
+            "antiguedad_meses":   24,
+            "observaciones":      "…",      # opcional
+            "checklist": { ...booleans según tipo_empleo... }
+          }
+        """
+        return self._crear_credito_atomico(request, origen='walk_in')
+
+    @action(detail=False, methods=['post'], url_path='desde-venta')
+    def desde_venta(self, request):
+        """
+        Crea el crédito atómico cuando el vendedor elige el método de pago
+        "Al crédito" en /sales. Recibe exactamente el mismo body que walk-in
+        y el flujo es idéntico — la única diferencia es que `origen` se guarda
+        como 'al_credito_sales' para trazabilidad.
+
+        (Antes del refactor este flujo era: crear venta al contado y después
+        "convertirla" en crédito. Ahora se hace todo de una para no dejar
+        estados intermedios inconsistentes si el vendedor abandona a mitad.)
+        """
+        return self._crear_credito_atomico(request, origen='al_credito_sales')
 
     def _notificar_credito_creado(self, plan, producto, cliente):
         """
