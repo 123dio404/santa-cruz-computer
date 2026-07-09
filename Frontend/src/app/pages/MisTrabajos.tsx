@@ -274,8 +274,9 @@ export function MisTrabajos() {
         </button>
         <div className="flex gap-2 flex-shrink-0 flex-wrap">
           {(o.estado === 'agendado' || o.estado === 'solicitado') && (
-            <button onClick={() => cambiarEstado(o, 'en_proceso')}
-              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+            <button onClick={() => setDetalle(o)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+              title="Abrir orden para revisar el checklist antes de iniciar">
               <Wrench className="w-4 h-4" /> Iniciar
             </button>
           )}
