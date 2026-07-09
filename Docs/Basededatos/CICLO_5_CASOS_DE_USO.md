@@ -158,11 +158,57 @@ Nuevo **rol Técnico** (4º actor). El técnico **registra Y ejecuta** todas las
 
 **CU26 — Correctivo:** catálogo fijo (virus 100, formateo 150, recuperación 300/450/1000), cualquier equipo, se pueden sumar varios.
 
-**Órdenes:** estados solicitado→agendado→en_proceso→finalizado/cancelado (página **Mis Trabajos** del técnico: registrar + lista + detalle + checklist). Al **finalizar** avisa al cliente (CU21 "tu equipo está listo"). Todo en bitácora (módulo "Servicio Técnico").
+**Órdenes:** estados solicitado→agendado→en_proceso→finalizado→entregado (o cancelado en cualquier momento). Página **Mis Trabajos** del técnico: registrar + lista + detalle + checklist. Todo en bitácora (módulo "Servicio Técnico").
 
 **CU27 — Ficha/historial:** el cliente ve su historial de servicios en **Mis Pedidos** (sección "Servicio técnico de mis equipos"); el técnico ve las órdenes por cliente en Mis Trabajos.
 
-Commits: 57912f2c (rol Técnico), 927495c9 (backend), 2e4ee5f5 (frontend técnico), + CU27.
+## Mejoras del ciclo 5 (2026-07-09)
+
+Se rediseñó el flujo para que el cliente supiera cuándo puede venir a retirar su equipo. Los cambios NO afectan diagramas del CU25/CU26 más allá de agregar el estado **entregado** al diagrama de estados.
+
+**1. Fechas de retiro y estado "entregado"** (SQL `012_orden_fechas_entrega.sql`):
+- Nuevas columnas en `orden_servicio`:
+  - `fecha_entrega_prevista` (DATE): día acordado con el cliente para el retiro.
+  - `fecha_entrega_real` (TIMESTAMP): momento exacto en que el cliente vino a retirar.
+- Nuevo estado `entregado` (valor del enum `estado`, VARCHAR libre — no requiere ALTER de esquema).
+- Flujo final: **solicitado → agendado (con fecha) → en_proceso → finalizado → entregado**.
+
+**2. Modal "Agendar" con date picker** (`MisTrabajos.tsx`):
+- El técnico ya no toca "Agendar" y salta directo al siguiente estado — ahora se abre un modal donde elige la fecha de retiro.
+- Botón **"Reagendar"** aparece si ya estaba agendada (precarga la fecha actual).
+- Endpoint `PATCH /ordenes-servicio/{id}/agendar/` que valida fecha ≥ hoy y no permite agendar órdenes finalizadas/entregadas/canceladas.
+- Correo al cliente con la fecha destacada en caja azul + ubicación + costo. En caso de reagenda el correo dice "Actualizamos la fecha...".
+
+**3. Botón "Marcar entregado"** (`MisTrabajos.tsx`):
+- Aparece solo en órdenes finalizadas. Pide confirmación.
+- Endpoint `PATCH /ordenes-servicio/{id}/entregar/` graba `fecha_entrega_real=now`. **NO envía correo** (el cliente está en tienda al retirar).
+
+**4. Correo al finalizar con texto ADAPTATIVO** (3 escenarios):
+- **Adelantado** (finalización < prevista): *"¡Buenas noticias! Tu equipo está listo antes de lo previsto"* — caja verde con "podés retirarlo desde HOY".
+- **En fecha** (finalización = prevista): *"Como te habíamos dicho, tu equipo está listo HOY"* — caja azul confirmando la fecha original.
+- **Retrasado** (finalización > prevista): *"Tu equipo ya está listo. Disculpá el retraso"* — caja roja con la fecha original + "podés retirarlo desde HOY".
+- Los tres incluyen los **trabajos realizados** (checklist marcado + servicios cotizados) y notas del técnico.
+
+**5. Vista `/agenda` real** (nueva página `Agenda.tsx`, reemplaza el Placeholder):
+- Órdenes **agendadas** y **en proceso** agrupadas por día (fecha_entrega_prevista), ordenadas cronológicamente.
+- El día de hoy queda destacado con "📌 HOY".
+- Botones inline "Iniciar" (agendado → en proceso) y "Finalizar" (en proceso → finalizado) sin necesidad de abrir el detalle.
+- Feedback con toast al éxito.
+
+**6. Vista del cliente en "Mis Pedidos" reagrupada** (`Orders.tsx`):
+- La sección "Servicio técnico de mis equipos" pasa a mostrar **3 subsecciones** en vez de una sola lista mezclada:
+  1. **✅ Listo para retirar** (verde destacado): órdenes finalizadas. Muestra "✨ Adelantado — podés retirarlo desde HOY" si aplica. Card expandible con detalle de trabajos realizados.
+  2. **⚙️ En proceso** (blanco): solicitado/agendado/en_proceso. Muestra la fecha de retiro prevista cuando aplica.
+  3. **📚 Historial** (colapsado por default con "Ver historial completo"): entregado/cancelado.
+- Estado `entregado` agregado al mapa de badges (color esmeralda).
+- Contadores en cada título de sección (ej. "En proceso (3)").
+- Secciones sin ítems no se muestran (no ocupa espacio vacío).
+
+**7. Feedback UX en las acciones del técnico:**
+- Todas las acciones (agendar, iniciar, finalizar, entregar, cancelar) ahora **cierran el modal detalle** y muestran un **toast** de confirmación (verde) o error (rojo).
+- Antes el modal quedaba abierto y no daba feedback claro, era confuso.
+
+Commits: 57912f2c (rol Técnico), 927495c9 (backend), 2e4ee5f5 (frontend técnico), c3f67ab1 (CU27 vista cliente base), b42b7659 (fechas de retiro + estado entregado + agenda real + vista cliente reagrupada + correo adaptativo).
 
 # Venta a crédito / Cartera (CU28 · CU29) ✅ COMPLETADO
 Financiamiento **POR PRODUCTO** según su precio unitario. SQL `009_credito.sql`
