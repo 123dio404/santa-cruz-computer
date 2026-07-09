@@ -38,6 +38,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.audit.utils import log_action, actor_from_request
+from apps.users.permissions import IsAuthenticatedJWT
 
 from .serializers import VentaCreateSerializer, VentaSerializer
 
@@ -302,3 +303,262 @@ class ConfirmCheckoutView(APIView):
         _enviar_recibo_pago(venta)
 
         return Response(VentaSerializer(venta).data, status=status.HTTP_201_CREATED)
+
+
+# ── CU28/CU29: pago ONLINE de una cuota de crédito ─────────────────────────────
+# El cliente inicia el pago desde /mis-creditos. Si cierra la pestaña, se puede
+# recuperar con el botón "¿Ya pagaste?" que llama a VerificarCuotaPendienteView
+# (idempotente). No usamos webhook.
+
+def _marcar_cuota_pagada_desde_stripe(cuota, session):
+    """
+    Marca una cuota como pagada procesando una CheckoutSession de Stripe ya
+    confirmada. Actualiza saldo del plan, refresca moras, emite numero_factura
+    y delega el envío del correo/campana al helper _notificar_cuota_pagada
+    (compartido con el cobro presencial en efectivo). Es IDEMPOTENTE.
+
+    Devuelve el PlanCredito refrescado (para serializar la respuesta).
+    """
+    from decimal import Decimal
+    from django.utils import timezone
+    from .views import (
+        _2d, _siguiente_numero_factura_credito,
+        _refrescar_moras, _notificar_cuota_pagada,
+    )
+
+    plan = cuota.plan
+
+    # Idempotencia: cuota ya cerrada — solo refrescamos y salimos.
+    if cuota.estado == 'pagada':
+        _refrescar_moras(plan)
+        plan.refresh_from_db()
+        return plan
+
+    # Cierre de la cuota
+    payment_intent_id = session.get('payment_intent') or ''
+    cuota.estado                  = 'pagada'
+    cuota.fecha_pago              = timezone.now()
+    cuota.metodo_pago             = 'stripe'
+    cuota.stripe_payment_intent_id = payment_intent_id
+    cuota.stripe_session_pending  = None   # ya confirmada
+    if not cuota.numero_factura:
+        cuota.numero_factura = _siguiente_numero_factura_credito()
+    cuota.save(update_fields=[
+        'estado', 'fecha_pago', 'metodo_pago',
+        'stripe_payment_intent_id', 'stripe_session_pending', 'numero_factura',
+    ])
+
+    # Bajar el saldo del plan (solo el capital; la mora no baja saldo)
+    nuevo_saldo = _2d(Decimal(str(plan.saldo)) - Decimal(str(cuota.monto)))
+    plan.saldo = nuevo_saldo if nuevo_saldo > 0 else Decimal('0.00')
+    plan.save(update_fields=['saldo'])
+    _refrescar_moras(plan)   # 'pagado' si todas cerradas, sino 'vigente'/'moroso'
+    plan.refresh_from_db()
+
+    # Recupero receipt_url de Stripe (opcional) para incluirlo en el correo
+    stripe_receipt_url = None
+    try:
+        if payment_intent_id:
+            pi = _stripe().PaymentIntent.retrieve(payment_intent_id, expand=['latest_charge'])
+            charge = pi.get('latest_charge') or {}
+            stripe_receipt_url = charge.get('receipt_url')
+    except Exception:
+        pass
+
+    _notificar_cuota_pagada(cuota, stripe_receipt_url=stripe_receipt_url)
+    return plan
+
+
+def _cliente_id_del_jwt(request):
+    """Devuelve el cliente_id si el JWT es de un cliente, sino None."""
+    if not request.auth:
+        return None
+    if request.auth.get('role') != 'cliente':
+        return None
+    return request.auth.get('user_id')
+
+
+class CheckoutCuotaView(APIView):
+    """POST /orders/stripe/checkout-cuota/
+
+    Body: { "cuota": <id> }
+    El cliente logueado inicia el pago online de UNA cuota de su crédito. Se
+    valida que la cuota le pertenezca y que no esté pagada. Se crea una
+    CheckoutSession por (monto + mora) y se guarda su id en
+    `cuota.stripe_session_pending` para la recuperación posterior.
+
+    Devuelve: { "url": "<url de pago>", "session_id": "cs_..." }
+    """
+    permission_classes = [IsAuthenticatedJWT]
+
+    def post(self, request):
+        if not settings.STRIPE_SECRET_KEY:
+            return Response({'error': 'Stripe no está configurado (falta STRIPE_SECRET_KEY).'},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        cliente_id = _cliente_id_del_jwt(request)
+        if not cliente_id:
+            return Response({'error': 'Este pago es solo para clientes autenticados.'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        cuota_id = request.data.get('cuota')
+        if not cuota_id:
+            return Response({'error': 'Falta el id de la cuota.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .models import Cuota as _Cuota
+        try:
+            cuota = _Cuota.objects.select_related('plan', 'plan__producto').get(pk=cuota_id)
+        except _Cuota.DoesNotExist:
+            return Response({'error': 'La cuota no existe.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if cuota.plan.cliente_id != int(cliente_id):
+            return Response({'error': 'Esta cuota no pertenece al cliente autenticado.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        if cuota.estado == 'pagada':
+            return Response({'error': 'La cuota ya está pagada.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Monto a cobrar = capital + mora (si la cuota venció)
+        monto = float(cuota.monto or 0) + float(cuota.mora or 0)
+        if monto <= 0:
+            return Response({'error': 'Monto de cuota inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+        amount_cents = int(round(monto * 100))
+
+        producto_nombre = cuota.plan.producto.nombre if cuota.plan.producto else 'Crédito'
+        try:
+            session = _stripe().checkout.Session.create(
+                mode='payment',
+                line_items=[{
+                    'price_data': {
+                        'currency': settings.STRIPE_CURRENCY,
+                        'product_data': {
+                            'name': f'Cuota {cuota.numero}/{cuota.plan.n_cuotas} — {producto_nombre}',
+                            'description': f'Crédito {cuota.plan.numero_factura or f"#{cuota.plan_id}"}',
+                        },
+                        'unit_amount': amount_cents,
+                    },
+                    'quantity': 1,
+                }],
+                success_url=f"{settings.FRONTEND_URL}/mis-creditos?cuota_confirm={{CHECKOUT_SESSION_ID}}",
+                cancel_url=f"{settings.FRONTEND_URL}/mis-creditos",
+                metadata={
+                    'cuota_id':   str(cuota.id),
+                    'plan_id':    str(cuota.plan_id),
+                    'cliente_id': str(cuota.plan.cliente_id),
+                },
+            )
+        except Exception as e:
+            return Response({'error': f'Error al crear la sesión de pago: {e}'},
+                            status=status.HTTP_502_BAD_GATEWAY)
+
+        # Guardamos la sesión pendiente para el fallback "¿Ya pagaste?"
+        cuota.stripe_session_pending = session.id
+        cuota.save(update_fields=['stripe_session_pending'])
+
+        return Response({'url': session.url, 'session_id': session.id})
+
+
+def _confirmar_pago_cuota_por_session(session_id, request_cliente_id=None):
+    """
+    Verifica una CheckoutSession y, si está pagada, cierra la cuota. Es
+    idempotente y usable tanto por el return-URL como por el botón
+    "¿Ya pagaste?". Devuelve un Response listo para retornar.
+    """
+    from .models import Cuota as _Cuota
+    from .views import _refrescar_moras
+    from .serializers import PlanCreditoSerializer as _PlanSerializer
+    try:
+        session = _stripe().checkout.Session.retrieve(session_id)
+    except Exception as e:
+        return Response({'error': f'No se pudo recuperar la sesión de pago: {e}'},
+                        status=status.HTTP_502_BAD_GATEWAY)
+    metadata = session.get('metadata') or {}
+    try:
+        cuota_id = int(metadata.get('cuota_id'))
+    except (TypeError, ValueError):
+        return Response({'error': 'La sesión no corresponde a una cuota de crédito.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    try:
+        cuota = _Cuota.objects.select_related('plan', 'plan__cliente', 'plan__producto').get(pk=cuota_id)
+    except _Cuota.DoesNotExist:
+        return Response({'error': 'La cuota no existe.'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Autorización: si viene un cliente_id (JWT del cliente), la cuota debe ser suya
+    if request_cliente_id is not None and cuota.plan.cliente_id != int(request_cliente_id):
+        return Response({'error': 'Esta cuota no pertenece al cliente autenticado.'},
+                        status=status.HTTP_403_FORBIDDEN)
+
+    if session.get('payment_status') != 'paid':
+        # Idempotencia: cuota ya cerrada — devolvemos el plan aunque Stripe no confirme
+        if cuota.estado == 'pagada':
+            _refrescar_moras(cuota.plan)
+            cuota.plan.refresh_from_db()
+            return Response({'estado_pago': 'ya_pagada',
+                             'plan': _PlanSerializer(cuota.plan).data})
+        return Response({'estado_pago': 'pendiente',
+                         'payment_status': session.get('payment_status')},
+                        status=status.HTTP_200_OK)
+
+    plan = _marcar_cuota_pagada_desde_stripe(cuota, session)
+    return Response({'estado_pago': 'confirmada',
+                     'plan': _PlanSerializer(plan).data})
+
+
+class ConfirmarCuotaView(APIView):
+    """POST /orders/stripe/confirmar-cuota/
+
+    Body: { "session_id": "cs_..." }
+    Se llama al volver del return-URL de Stripe. Verifica y marca la cuota
+    pagada. Idempotente: si el cliente recarga la página se responde con
+    `estado_pago='ya_pagada'` sin efectos secundarios.
+    """
+    permission_classes = [IsAuthenticatedJWT]
+
+    def post(self, request):
+        if not settings.STRIPE_SECRET_KEY:
+            return Response({'error': 'Stripe no está configurado (falta STRIPE_SECRET_KEY).'},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        session_id = request.data.get('session_id')
+        if not session_id:
+            return Response({'error': 'Falta session_id.'}, status=status.HTTP_400_BAD_REQUEST)
+        return _confirmar_pago_cuota_por_session(session_id,
+                                                  request_cliente_id=_cliente_id_del_jwt(request))
+
+
+class VerificarCuotaPendienteView(APIView):
+    """POST /orders/stripe/verificar-cuota-pendiente/
+
+    Body: { "cuota": <id> }
+    Botón "¿Ya pagaste? Verificar" en /mis-creditos. Cuando una cuota tiene
+    `stripe_session_pending` (porque el cliente cerró la pestaña sin volver
+    al return-URL), este endpoint consulta a Stripe y cierra la cuota si el
+    pago fue exitoso.
+    """
+    permission_classes = [IsAuthenticatedJWT]
+
+    def post(self, request):
+        if not settings.STRIPE_SECRET_KEY:
+            return Response({'error': 'Stripe no está configurado (falta STRIPE_SECRET_KEY).'},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        cliente_id = _cliente_id_del_jwt(request)
+        if not cliente_id:
+            return Response({'error': 'Solo clientes autenticados.'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        cuota_id = request.data.get('cuota')
+        from .models import Cuota as _Cuota
+        try:
+            cuota = _Cuota.objects.select_related('plan').get(pk=cuota_id)
+        except _Cuota.DoesNotExist:
+            return Response({'error': 'La cuota no existe.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if cuota.plan.cliente_id != int(cliente_id):
+            return Response({'error': 'Esta cuota no pertenece al cliente autenticado.'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        if not cuota.stripe_session_pending:
+            return Response({'error': 'Esta cuota no tiene un pago Stripe pendiente por verificar.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        return _confirmar_pago_cuota_por_session(cuota.stripe_session_pending,
+                                                  request_cliente_id=cliente_id)

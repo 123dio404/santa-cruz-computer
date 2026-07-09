@@ -345,9 +345,15 @@ export function Orders() {
             <div key={order.id} className="bg-white rounded-xl p-6 border border-gray-200">
               <div className="flex flex-col md:flex-row md:items-center justify-between mb-4">
                 <div>
-                  <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-center gap-3 mb-2 flex-wrap">
                     <h3 className="font-semibold text-gray-900">Pedido #{order.id}</h3>
                     {getStatusBadge(order.status)}
+                    {order.es_credito && (
+                      <a href="/mis-creditos"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700 hover:bg-indigo-200">
+                        💳 Al crédito · Ver en Mis Créditos
+                      </a>
+                    )}
                   </div>
                   <p className="text-sm text-gray-600">
                     Fecha: {new Date(order.fecha).toLocaleDateString('es-BO')}

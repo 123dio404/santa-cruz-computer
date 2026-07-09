@@ -212,9 +212,10 @@ export function Layout({ children }: LayoutProps) {
     ];
 
     const clientItems = [
-      { path: '/store', icon: Store, label: 'Tienda' },
-      { path: '/cart', icon: ShoppingCart, label: 'Carrito' },
-      { path: '/orders', icon: Package, label: 'Mis Pedidos' }
+      { path: '/store',        icon: Store,         label: 'Tienda' },
+      { path: '/cart',         icon: ShoppingCart,  label: 'Carrito' },
+      { path: '/orders',       icon: Package,       label: 'Mis Pedidos' },
+      { path: '/mis-creditos', icon: CreditCard,    label: 'Mis Créditos' },
     ];
 
     const tecnicoItems = [

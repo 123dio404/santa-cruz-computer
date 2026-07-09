@@ -44,7 +44,7 @@ from rest_framework.filters import OrderingFilter
 from .models import (
     Venta, DetalleVenta, PagoVenta, Factura, EstadoSiat, Garantia, Resena, Devolucion,
     ServicioCatalogo, OrdenServicio, OrdenDetalle, TareaServicio,
-    PlanCredito, Cuota,
+    PlanCredito, Cuota, ChecklistCredito,
 )
 from .serializers import (
     VentaSerializer, VentaCreateSerializer,
@@ -54,6 +54,8 @@ from .serializers import (
 )
 from apps.audit.utils import log_action, actor_from_request
 from apps.users.permissions import IsAuthenticatedJWT
+from apps.users.models import Cliente
+from apps.products.models import Producto
 from utils import get_client_ip
 
 
@@ -304,7 +306,7 @@ def enviar_factura_por_correo(venta):
 
 class VentaViewSet(viewsets.ModelViewSet):
     """CRUD de ventas. POST usa VentaCreateSerializer; GET usa VentaSerializer."""
-    queryset          = Venta.objects.prefetch_related('detalles', 'detalles__producto', 'pagos').select_related('cliente', 'usuario')
+    queryset          = Venta.objects.prefetch_related('detalles', 'detalles__producto', 'pagos', 'planes_credito').select_related('cliente', 'usuario')
     serializer_class  = VentaSerializer
     permission_classes = [IsAuthenticatedJWT]
     filter_backends   = [OrderingFilter]
@@ -1385,6 +1387,102 @@ def calcular_credito(precio_unitario, cantidad):
     }
 
 
+def _siguiente_numero_factura_credito():
+    """
+    Devuelve el siguiente correlativo de factura del módulo crédito con formato
+    FCR-{año}-{correlativo:06d}. La secuencia PostgreSQL `factura_credito_seq`
+    garantiza unicidad global aunque haya varios inserts en paralelo.
+    """
+    from django.db import connection
+    from django.utils import timezone
+    with connection.cursor() as cur:
+        cur.execute("SELECT nextval('factura_credito_seq')")
+        n = cur.fetchone()[0]
+    return f'FCR-{timezone.now().year}-{n:06d}'
+
+
+# Datos fijos de la empresa que aparecen en las facturas HTML. Un cliente
+# real los tendría en la BD; para el proyecto están hardcodeados y se usan
+# tanto en la factura de la inicial como en la de cada cuota.
+EMPRESA_FACTURA = {
+    'nombre':    'Santa Cruz Computer',
+    'nit':       '1234567019',
+    'direccion': 'Av. Cristo Redentor #123, Santa Cruz de la Sierra, Bolivia',
+    'telefono':  '+591 3 344 5566',
+    'correo':    'ventas@santacruzcomputer.bo',
+}
+
+
+def _render_factura_credito(template_name, context):
+    """
+    Renderiza el HTML de una factura del módulo crédito. Encapsula la lógica
+    de tomar `logo_url`, `frontend_url` y los datos de empresa de forma consistente,
+    para que el walk-in y el cobro de cuotas usen los mismos defaults.
+    """
+    from django.conf import settings as _s
+    from django.template.loader import render_to_string
+    from django.utils import timezone
+    ctx = {
+        'logo_url':      f'{_s.FRONTEND_URL}/logo.png',
+        'frontend_url':  _s.FRONTEND_URL,
+        'fecha_emision': timezone.now(),
+        'empresa':       EMPRESA_FACTURA,
+    }
+    ctx.update(context)
+    return render_to_string(template_name, ctx)
+
+
+def _notificar_cuota_pagada(cuota, stripe_receipt_url=None):
+    """
+    Envía la factura de la cuota al cliente por correo (Brevo) + campana.
+    Se usa desde el cobro presencial en efectivo (PATCH /pagar-cuota/) y también
+    desde el cobro Stripe (return-URL / verificar-pendiente). El template es
+    el mismo (facturas/factura_cuota.html); solo cambia `stripe_receipt_url`
+    cuando aplica.
+
+    Espera que la cuota YA esté cerrada (estado='pagada', numero_factura seteado,
+    saldo del plan actualizado). No modifica nada aquí.
+    """
+    plan = cuota.plan
+    cliente = plan.cliente
+    if not (cliente and getattr(cliente, 'correo', '')):
+        return
+    try:
+        from apps.users.views import crear_notificacion
+        cuotas_ordenadas = list(plan.cuotas.order_by('numero'))
+        cuotas_pagadas = sum(1 for c in cuotas_ordenadas if c.estado == 'pagada')
+        cuotas_restantes = plan.n_cuotas - cuotas_pagadas
+        total_pagado = _2d(Decimal(str(cuota.monto)) + Decimal(str(cuota.mora)))
+        producto = plan.producto
+        html = _render_factura_credito('facturas/factura_cuota.html', {
+            'cliente': {
+                'nombre':   f'{cliente.nombre or ""} {cliente.apellido or ""}'.strip() or 'Cliente',
+                'ci':       getattr(cliente, 'ci', None) or getattr(cliente, 'documento', None),
+                'correo':   cliente.correo,
+                'telefono': getattr(cliente, 'telefono', None),
+            },
+            'plan':               plan,
+            'producto_nombre':    producto.nombre if producto else '—',
+            'cuota':              cuota,
+            'cuotas':             cuotas_ordenadas,
+            'cuotas_pagadas':     cuotas_pagadas,
+            'cuotas_restantes':   cuotas_restantes,
+            'total_pagado':       total_pagado,
+            'saldo_restante':     plan.saldo,
+            'stripe_receipt_url': stripe_receipt_url,
+        })
+        crear_notificacion(
+            tipo='credito',
+            titulo=f'Pago de cuota confirmado — {cuota.numero_factura or "sin factura"}',
+            mensaje=(f'Cobramos la cuota {cuota.numero}/{plan.n_cuotas} de tu crédito '
+                     f'({plan.numero_factura}) por Bs {float(total_pagado):.2f}.'),
+            cliente_id=cliente.id, enlace='/mis-creditos',
+            canal='ambos', email=cliente.correo, html=html,
+        )
+    except Exception:
+        pass  # el fallo del correo no debe romper el request
+
+
 def _refrescar_moras(plan):
     """
     Marca como 'vencida' las cuotas pendientes cuyo vencimiento ya pasó y les
@@ -1466,16 +1564,306 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
         return Response({'elegible': True, **{k: (str(v) if isinstance(v, Decimal) else v)
                                               for k, v in plan.items() if k != 'montos_cuotas'}})
 
+    @action(detail=False, methods=['get'], url_path='mis-creditos')
+    def mis_creditos(self, request):
+        """
+        Vista del CLIENTE: devuelve solo los planes de crédito del cliente
+        logueado (según JWT). Trae cuotas, checklist, resumen y el próximo
+        vencimiento para armar la pantalla `Mis Créditos`.
+
+        401 si no hay JWT válido, 403 si el rol no es 'cliente' (los admins
+        pueden usar /planes-credito/ estándar).
+        """
+        if not request.auth:
+            return Response({'error': 'No autenticado.'}, status=status.HTTP_401_UNAUTHORIZED)
+        role = request.auth.get('role', '')
+        if role != 'cliente':
+            return Response({'error': 'Este endpoint es solo para clientes.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        cliente_id = request.auth.get('user_id')
+
+        # Refrescamos moras antes de responder (perezoso, sin cron)
+        planes = list(PlanCredito.objects.filter(cliente_id=cliente_id)
+                      .select_related('producto').prefetch_related('cuotas', 'checklist'))
+        for p in planes:
+            _refrescar_moras(p)
+
+        # Resumen del cliente para la pantalla
+        activos_qs = [p for p in planes if p.estado in ('vigente', 'moroso')]
+        total_saldo = sum((Decimal(str(p.saldo)) for p in activos_qs), Decimal('0'))
+        cuotas_pendientes = [
+            c for p in activos_qs for c in p.cuotas.all()
+            if c.estado in ('pendiente', 'vencida')
+        ]
+        cuotas_vencidas = [c for c in cuotas_pendientes if c.estado == 'vencida']
+        proxima = min(cuotas_pendientes, key=lambda c: c.fecha_vencimiento, default=None)
+
+        data = PlanCreditoSerializer(
+            sorted(planes, key=lambda x: x.id, reverse=True), many=True).data
+        return Response({
+            'resumen': {
+                'planes_activos':  len(activos_qs),
+                'planes_pagados':  sum(1 for p in planes if p.estado == 'pagado'),
+                'planes_totales':  len(planes),
+                'saldo_pendiente': str(_2d(total_saldo)),
+                'cuotas_pendientes': len(cuotas_pendientes),
+                'cuotas_vencidas':   len(cuotas_vencidas),
+                'proxima_cuota': ({
+                    'plan_id':           proxima.plan_id,
+                    'numero':            proxima.numero,
+                    'monto':             str(proxima.monto),
+                    'mora':              str(proxima.mora),
+                    'fecha_vencimiento': proxima.fecha_vencimiento.isoformat(),
+                    'estado':            proxima.estado,
+                } if proxima else None),
+            },
+            'planes': data,
+        })
+
     @action(detail=False, methods=['get'])
     def bloqueo(self, request):
-        """¿El cliente está bloqueado para nuevos créditos? (tiene cuotas vencidas)."""
+        """¿El cliente está bloqueado para nuevos créditos? (tiene cuotas vencidas o llegó al tope)."""
         cliente_id = request.query_params.get('cliente')
         if not cliente_id:
-            return Response({'bloqueado': False, 'cuotas_vencidas': 0})
+            return Response({'bloqueado': False, 'cuotas_vencidas': 0, 'activos': 0, 'limite': 3})
         for plan in PlanCredito.objects.filter(cliente_id=cliente_id).prefetch_related('cuotas'):
             _refrescar_moras(plan)
         venc = Cuota.objects.filter(plan__cliente_id=cliente_id, estado='vencida').count()
-        return Response({'bloqueado': venc > 0, 'cuotas_vencidas': venc})
+        activos = PlanCredito.objects.filter(cliente_id=cliente_id, estado__in=['vigente', 'moroso']).count()
+        return Response({
+            'bloqueado': venc > 0 or activos >= 3,
+            'cuotas_vencidas': venc,
+            'activos': activos,
+            'limite': 3,
+            'motivo': ('mora'         if venc > 0 else
+                       'limite'       if activos >= 3 else
+                       'advertencia'  if activos == 2 else
+                       None),
+        })
+
+    def _crear_credito_atomico(self, request, origen):
+        """
+        Lógica compartida entre walk-in y desde-venta. Crea de forma atómica:
+        venta + detalle + pago inicial + plan + checklist + N cuotas +
+        numero_factura, y notifica al cliente por correo/campana.
+
+        `origen` debe ser 'walk_in' o 'al_credito_sales'. Cambia el campo
+        `plan_credito.origen` y el texto de bitácora, pero el flujo es idéntico.
+
+        Devuelve un rest_framework.Response con el payload del plan (201) o el
+        error (400/404). Nunca lanza excepción hacia arriba.
+        """
+        from django.db import transaction
+        from django.utils import timezone
+
+        cliente_id       = request.data.get('cliente')
+        producto_id      = request.data.get('producto')
+        cantidad         = int(request.data.get('cantidad') or 1)
+        tipo_empleo      = (request.data.get('tipo_empleo') or '').strip()
+        antiguedad_meses = int(request.data.get('antiguedad_meses') or 0)
+        observaciones    = (request.data.get('observaciones') or '').strip() or None
+        checklist        = request.data.get('checklist') or {}
+
+        # ---- Validaciones básicas ------------------------------------------------
+        if not cliente_id:
+            return Response({'error': 'Cliente obligatorio.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not producto_id:
+            return Response({'error': 'Producto obligatorio.'}, status=status.HTTP_400_BAD_REQUEST)
+        if cantidad < 1:
+            return Response({'error': 'La cantidad debe ser al menos 1.'}, status=status.HTTP_400_BAD_REQUEST)
+        if tipo_empleo not in ('dependiente', 'independiente'):
+            return Response({'error': 'tipo_empleo debe ser "dependiente" o "independiente".'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # Cliente existe
+        try:
+            cliente = Cliente.objects.get(pk=cliente_id)
+        except Cliente.DoesNotExist:
+            return Response({'error': 'Cliente no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Producto existe con stock suficiente
+        try:
+            producto = Producto.objects.get(pk=producto_id)
+        except Producto.DoesNotExist:
+            return Response({'error': 'Producto no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+        if int(getattr(producto, 'stock_fisico', 0) or 0) < cantidad:
+            return Response({'error': 'Stock insuficiente para armar el crédito.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # No bloqueado por mora ni por límite de créditos activos
+        for plan in PlanCredito.objects.filter(cliente_id=cliente.id).prefetch_related('cuotas'):
+            _refrescar_moras(plan)
+        venc = Cuota.objects.filter(plan__cliente_id=cliente.id, estado='vencida').count()
+        if venc > 0:
+            return Response({'error': f'El cliente tiene {venc} cuota(s) vencida(s). Regularizar antes de otorgar nuevos créditos.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        activos = PlanCredito.objects.filter(cliente_id=cliente.id, estado__in=['vigente', 'moroso']).count()
+        if activos >= 3:
+            return Response({'error': f'El cliente ya tiene {activos} créditos activos (máximo 3). Esperar a que cancele alguno.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # El precio unitario del producto tiene que caer en el rango habilitado
+        pu = Decimal(str(producto.precio or 0))
+        calc = calcular_credito(pu, cantidad)
+        if not calc:
+            return Response({'error': 'El producto no califica a crédito (precio unitario fuera de Bs 1–15.000).'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # ---- Actor + creación atómica -------------------------------------------
+        actor = actor_from_request(request)
+        usuario_id = actor.get('usuario_id') if actor.get('usuario_rol') in ('admin', 'vendedor') else None
+
+        try:
+            with transaction.atomic():
+                # 1) Venta cabecera — presencial (pedido_online=False)
+                venta = Venta.objects.create(
+                    cliente_id=cliente.id, usuario_id=usuario_id,
+                    pedido_online=False, descuento_aplicado=0,
+                )
+                # 2) Detalle — los triggers descuentan stock y actualizan monto_total
+                detalle = DetalleVenta.objects.create(
+                    venta_id=venta.id, producto_id=producto.id,
+                    cantidad=cantidad, precio_unitario=pu,
+                )
+                # 3) Pago inicial en efectivo
+                PagoVenta.objects.create(
+                    venta_id=venta.id, monto=calc['inicial'], metodo='efectivo',
+                )
+                # 4) Como el producto SE ENTREGA al firmar el crédito, forzamos
+                #    completed/entregado — el resto se cobra por cuotas (tabla cuota),
+                #    no por más PagoVenta.
+                Venta.objects.filter(pk=venta.id).update(estado='completed', estado_entrega='entregado')
+
+                # 5) Número de factura para la inicial
+                nro_factura = _siguiente_numero_factura_credito()
+
+                # 6) Plan de crédito
+                plan = PlanCredito.objects.create(
+                    venta_id=venta.id, detalle_id=detalle.id, producto_id=producto.id,
+                    cliente_id=cliente.id, usuario_id=usuario_id,
+                    precio_unitario=calc['precio_unitario'], cantidad=calc['cantidad'],
+                    precio_base=calc['precio_base'], recargo_pct=calc['recargo_pct'],
+                    precio_financiado=calc['precio_financiado'], inicial=calc['inicial'],
+                    n_cuotas=calc['n_cuotas'], monto_cuota=calc['monto_cuota'],
+                    saldo=calc['saldo'], estado='vigente',
+                    origen=origen, numero_factura=nro_factura,
+                )
+                # 7) Checklist
+                ChecklistCredito.objects.create(
+                    plan_id=plan.id,
+                    tipo_empleo=tipo_empleo, antiguedad_meses=antiguedad_meses,
+                    ci_solicitante         = bool(checklist.get('ci_solicitante')),
+                    ci_conyuge             = bool(checklist.get('ci_conyuge')),
+                    factura_servicios      = bool(checklist.get('factura_servicios')),
+                    boletas_pago           = bool(checklist.get('boletas_pago')),
+                    extracto_gestora       = bool(checklist.get('extracto_gestora')),
+                    facturas_ultimo_ano    = bool(checklist.get('facturas_ultimo_ano')),
+                    estados_financieros    = bool(checklist.get('estados_financieros')),
+                    nit                    = bool(checklist.get('nit')),
+                    croquis_domicilio      = bool(checklist.get('croquis_domicilio')),
+                    croquis_negocio        = bool(checklist.get('croquis_negocio')),
+                    respaldos_patrimoniales= bool(checklist.get('respaldos_patrimoniales')),
+                    observaciones          = observaciones,
+                )
+                # 8) Cuotas
+                hoy = timezone.localdate()
+                for i, monto in enumerate(calc['montos_cuotas'], start=1):
+                    Cuota.objects.create(
+                        plan_id=plan.id, numero=i, monto=monto, mora=0,
+                        fecha_vencimiento=_add_months(hoy, i), estado='pendiente',
+                    )
+        except Exception as e:
+            return Response({'error': f'No se pudo crear el crédito: {e}'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # ---- Post-transacción: bitácora + notificación al cliente ---------------
+        origen_lbl = 'walk-in' if origen == 'walk_in' else 'desde Sales'
+        try:
+            log_action(
+                accion='CREATE', modulo='Crédito',
+                descripcion=(f'Crédito {origen_lbl} #{plan.id} — {producto.nombre} '
+                             f'({plan.n_cuotas} cuotas +{plan.recargo_pct}%), '
+                             f'inicial Bs {plan.inicial} efectivo, factura {nro_factura}'),
+                **actor,
+            )
+        except Exception:
+            pass
+
+        self._notificar_credito_creado(plan, producto, cliente)
+
+        plan.refresh_from_db()
+        payload = PlanCreditoSerializer(plan).data
+        # Advertencia: si ahora quedó con 3 activos, el próximo estará bloqueado
+        payload['advertencia'] = ('Con este crédito el cliente llega al tope de 3 créditos activos. '
+                                  'El próximo será rechazado.') if (activos + 1) >= 3 else None
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='walk-in')
+    def walk_in(self, request):
+        """
+        Crea un crédito walk-in de forma atómica (venta + detalle + pago inicial +
+        plan + checklist + cuotas + numero_factura). Se usa desde /creditos cuando
+        el cliente viene físicamente y no hay una venta previa en curso.
+
+        Body:
+          {
+            "cliente":            123,
+            "producto":           45,
+            "cantidad":           1,        # opcional, default 1
+            "tipo_empleo":        "dependiente" | "independiente",
+            "antiguedad_meses":   24,
+            "observaciones":      "…",      # opcional
+            "checklist": { ...booleans según tipo_empleo... }
+          }
+        """
+        return self._crear_credito_atomico(request, origen='walk_in')
+
+    @action(detail=False, methods=['post'], url_path='desde-venta')
+    def desde_venta(self, request):
+        """
+        Crea el crédito atómico cuando el vendedor elige el método de pago
+        "Al crédito" en /sales. Recibe exactamente el mismo body que walk-in
+        y el flujo es idéntico — la única diferencia es que `origen` se guarda
+        como 'al_credito_sales' para trazabilidad.
+
+        (Antes del refactor este flujo era: crear venta al contado y después
+        "convertirla" en crédito. Ahora se hace todo de una para no dejar
+        estados intermedios inconsistentes si el vendedor abandona a mitad.)
+        """
+        return self._crear_credito_atomico(request, origen='al_credito_sales')
+
+    def _notificar_credito_creado(self, plan, producto, cliente):
+        """
+        Correo (con la factura HTML renderizada) + campana al cliente cuando
+        se le aprueba un crédito walk-in.
+        """
+        if not (cliente and getattr(cliente, 'correo', '')):
+            return
+        try:
+            from apps.users.views import crear_notificacion
+            # Recargo monetario = financiado - base (para no re-calcularlo en el template)
+            recargo_monto = _2d(Decimal(str(plan.precio_financiado)) - Decimal(str(plan.precio_base)))
+            html = _render_factura_credito('facturas/factura_inicial.html', {
+                'cliente': {
+                    'nombre':   f'{cliente.nombre or ""} {cliente.apellido or ""}'.strip() or 'Cliente',
+                    'ci':       getattr(cliente, 'ci', None) or getattr(cliente, 'documento', None),
+                    'correo':   cliente.correo,
+                    'telefono': getattr(cliente, 'telefono', None),
+                },
+                'plan':            plan,
+                'producto_nombre': producto.nombre,
+                'recargo_monto':   recargo_monto,
+            })
+            crear_notificacion(
+                tipo='credito',
+                titulo=f'Crédito aprobado — {plan.numero_factura}',
+                mensaje=(f'Crédito #{plan.id} por {producto.nombre}: '
+                         f'{plan.n_cuotas} cuotas de Bs {float(plan.monto_cuota):.2f}.'),
+                cliente_id=cliente.id, enlace='/mis-creditos',
+                canal='ambos', email=cliente.correo, html=html,
+            )
+        except Exception:
+            pass  # el fallo del correo no debe romper el request
 
     def create(self, request, *args, **kwargs):
         from django.utils import timezone
@@ -1544,11 +1932,16 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['patch'], url_path='pagar-cuota')
     def pagar_cuota(self, request):
-        """Registrar el pago de una cuota (marca pagada, baja el saldo del plan)."""
+        """
+        Registrar el cobro PRESENCIAL en EFECTIVO de una cuota. Marca la cuota
+        pagada, actualiza el saldo del plan, emite `numero_factura` desde la
+        SEQUENCE, guarda `metodo_pago='efectivo'` y envía la factura al cliente
+        (correo Brevo + campana) con el template `facturas/factura_cuota.html`.
+        """
         from django.utils import timezone
         cuota_id = request.data.get('cuota')
         try:
-            cuota = Cuota.objects.select_related('plan').get(pk=cuota_id)
+            cuota = Cuota.objects.select_related('plan', 'plan__cliente', 'plan__producto').get(pk=cuota_id)
         except Cuota.DoesNotExist:
             return Response({'error': 'La cuota no existe.'}, status=status.HTTP_404_NOT_FOUND)
         if cuota.estado == 'pagada':
@@ -1559,10 +1952,15 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
         usuario_id = actor.get('usuario_id') if actor.get('usuario_rol') in ('admin', 'vendedor') else None
 
         pagado_total = _2d(Decimal(str(cuota.monto)) + Decimal(str(cuota.mora)))
-        cuota.estado = 'pagada'
-        cuota.fecha_pago = timezone.now()
+        cuota.estado           = 'pagada'
+        cuota.fecha_pago       = timezone.now()
         cuota.usuario_cobro_id = usuario_id
-        cuota.save(update_fields=['estado', 'fecha_pago', 'usuario_cobro'])
+        cuota.metodo_pago      = 'efectivo'
+        if not cuota.numero_factura:
+            cuota.numero_factura = _siguiente_numero_factura_credito()
+        cuota.save(update_fields=[
+            'estado', 'fecha_pago', 'usuario_cobro', 'metodo_pago', 'numero_factura',
+        ])
 
         # Bajar el saldo del plan (solo el capital de la cuota, la mora es recargo aparte)
         nuevo_saldo = _2d(Decimal(str(plan.saldo)) - Decimal(str(cuota.monto)))
@@ -1573,12 +1971,17 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
         try:
             log_action(
                 accion='UPDATE', modulo='Crédito',
-                descripcion=(f'Cobro de la cuota {cuota.numero}/{plan.n_cuotas} del plan #{plan.id} — '
-                             f'Bs {pagado_total}' + (f' (incluye mora Bs {cuota.mora})' if cuota.mora else '')),
+                descripcion=(f'Cobro EFECTIVO cuota {cuota.numero}/{plan.n_cuotas} del plan #{plan.id} — '
+                             f'Bs {pagado_total}, factura {cuota.numero_factura}'
+                             + (f' (incluye mora Bs {cuota.mora})' if cuota.mora else '')),
                 **actor,
             )
         except Exception:
             pass
+
+        # Correo con factura + campana al cliente
+        _notificar_cuota_pagada(cuota)
+
         plan.refresh_from_db()
         return Response(PlanCreditoSerializer(plan).data)
 

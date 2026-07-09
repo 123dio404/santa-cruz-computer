@@ -1,0 +1,143 @@
+{% comment %}
+factura_inicial.html — Factura HTML del pago INICIAL de un crédito walk-in
+(CU28/CU29). Se renderiza y se envía por Brevo al aprobar el crédito.
+
+Context esperado:
+  logo_url          → URL absoluta del logo (ej. https://.../logo.png)
+  frontend_url      → URL base del frontend (para el botón)
+  fecha_emision     → datetime (default: now)
+  empresa: { nombre, nit, direccion, telefono, correo }
+  cliente: { nombre, ci, correo, telefono }
+  plan: PlanCredito (con producto, cuotas, numero_factura, etc.)
+  producto_nombre   → string
+{% endcomment %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<title>Factura {{ plan.numero_factura }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+<div style="max-width:640px;margin:0 auto;background:#ffffff;">
+
+  <!-- Banda superior con logo + título -->
+  <div style="background:#1e40af;padding:20px 24px;color:#ffffff;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td style="vertical-align:middle;">
+        {% if logo_url %}<img src="{{ logo_url }}" alt="{{ empresa.nombre }}" height="44" style="display:block;"/>{% endif %}
+      </td>
+      <td style="text-align:right;vertical-align:middle;color:#dbeafe;font-size:12px;letter-spacing:2px;">
+        FACTURA DE CRÉDITO<br/>
+        <span style="font-size:18px;color:#ffffff;font-weight:bold;letter-spacing:0;">{{ plan.numero_factura }}</span>
+      </td>
+    </tr></table>
+  </div>
+
+  <!-- Datos empresa / cliente -->
+  <div style="padding:20px 24px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#374151;">
+      <tr>
+        <td style="width:50%;vertical-align:top;padding-right:12px;">
+          <p style="margin:0 0 4px;color:#6b7280;font-size:11px;letter-spacing:1px;">EMITE</p>
+          <p style="margin:0;font-weight:bold;color:#111827;">{{ empresa.nombre }}</p>
+          <p style="margin:2px 0 0;">NIT: {{ empresa.nit }}</p>
+          <p style="margin:2px 0 0;">{{ empresa.direccion }}</p>
+          <p style="margin:2px 0 0;">Tel: {{ empresa.telefono }}</p>
+        </td>
+        <td style="width:50%;vertical-align:top;padding-left:12px;border-left:1px solid #e5e7eb;">
+          <p style="margin:0 0 4px;color:#6b7280;font-size:11px;letter-spacing:1px;">CLIENTE</p>
+          <p style="margin:0;font-weight:bold;color:#111827;">{{ cliente.nombre }}</p>
+          {% if cliente.ci %}<p style="margin:2px 0 0;">CI: {{ cliente.ci }}</p>{% endif %}
+          {% if cliente.correo %}<p style="margin:2px 0 0;">{{ cliente.correo }}</p>{% endif %}
+          {% if cliente.telefono %}<p style="margin:2px 0 0;">Tel: {{ cliente.telefono }}</p>{% endif %}
+        </td>
+      </tr>
+    </table>
+    <p style="margin:16px 0 0;font-size:12px;color:#6b7280;">
+      Fecha de emisión: <strong style="color:#111827;">{{ fecha_emision|date:"d/m/Y H:i" }}</strong>
+    </p>
+  </div>
+
+  <!-- Detalle del crédito -->
+  <div style="padding:16px 24px;">
+    <p style="margin:0 0 8px;font-size:12px;color:#6b7280;letter-spacing:1px;">DETALLE DEL CRÉDITO</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;font-size:13px;">
+      <tr style="background:#f9fafb;">
+        <th align="left" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">Producto</th>
+        <th align="right" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">Cant.</th>
+        <th align="right" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">Precio unit.</th>
+        <th align="right" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">Subtotal</th>
+      </tr>
+      <tr>
+        <td style="padding:10px 12px;">{{ producto_nombre }}</td>
+        <td align="right" style="padding:10px 12px;">{{ plan.cantidad }}</td>
+        <td align="right" style="padding:10px 12px;">Bs {{ plan.precio_unitario|floatformat:2 }}</td>
+        <td align="right" style="padding:10px 12px;">Bs {{ plan.precio_base|floatformat:2 }}</td>
+      </tr>
+      <tr>
+        <td colspan="3" align="right" style="padding:8px 12px;color:#6b7280;">Recargo ({{ plan.recargo_pct|floatformat:0 }}%)</td>
+        <td align="right" style="padding:8px 12px;">Bs {{ recargo_monto|floatformat:2 }}</td>
+      </tr>
+      <tr style="background:#f9fafb;font-weight:bold;">
+        <td colspan="3" align="right" style="padding:10px 12px;border-top:1px solid #e5e7eb;">Total financiado</td>
+        <td align="right" style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#1e40af;">Bs {{ plan.precio_financiado|floatformat:2 }}</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- Pago inicial -->
+  <div style="padding:0 24px 8px;">
+    <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:14px 16px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td>
+          <p style="margin:0;font-size:11px;letter-spacing:1px;color:#065f46;">💵 INICIAL COBRADA</p>
+          <p style="margin:4px 0 0;font-size:22px;font-weight:bold;color:#065f46;">Bs {{ plan.inicial|floatformat:2 }}</p>
+          <p style="margin:2px 0 0;font-size:12px;color:#065f46;">Método: efectivo · {{ fecha_emision|date:"d/m/Y" }}</p>
+        </td>
+        <td align="right" style="vertical-align:middle;">
+          <p style="margin:0;font-size:11px;letter-spacing:1px;color:#065f46;">SALDO EN CUOTAS</p>
+          <p style="margin:4px 0 0;font-size:16px;font-weight:bold;color:#065f46;">Bs {{ plan.saldo|floatformat:2 }}</p>
+          <p style="margin:2px 0 0;font-size:12px;color:#065f46;">{{ plan.n_cuotas }} cuotas × Bs {{ plan.monto_cuota|floatformat:2 }}</p>
+        </td>
+      </tr></table>
+    </div>
+  </div>
+
+  <!-- Cronograma de cuotas -->
+  <div style="padding:16px 24px;">
+    <p style="margin:0 0 8px;font-size:12px;color:#6b7280;letter-spacing:1px;">CRONOGRAMA DE CUOTAS</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;font-size:13px;">
+      <tr style="background:#f9fafb;">
+        <th align="left" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">#</th>
+        <th align="left" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">Vencimiento</th>
+        <th align="right" style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">Monto</th>
+      </tr>
+      {% for c in plan.cuotas.all %}
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;">{{ c.numero }}/{{ plan.n_cuotas }}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;">{{ c.fecha_vencimiento|date:"d/m/Y" }}</td>
+        <td align="right" style="padding:8px 12px;border-bottom:1px solid #f3f4f6;">Bs {{ c.monto|floatformat:2 }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p style="margin:8px 0 0;font-size:11px;color:#9ca3af;">
+      Si una cuota vence sin pago se aplica un recargo del 10% (mora). Con 1 cuota vencida el cliente queda bloqueado para nuevos créditos.
+    </p>
+  </div>
+
+  <!-- Botón CTA -->
+  <div style="padding:8px 24px 24px;text-align:center;">
+    <a href="{{ frontend_url }}/mis-creditos" style="background:#1e40af;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;font-size:14px;display:inline-block;">
+      Ver mis créditos
+    </a>
+  </div>
+
+  <!-- Footer -->
+  <div style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:14px 24px;font-size:11px;color:#6b7280;text-align:center;">
+    {{ empresa.nombre }} · NIT {{ empresa.nit }} · {{ empresa.direccion }}<br/>
+    Esta factura es un comprobante interno. La factura electrónica SIAT se emite por separado.
+  </div>
+
+</div>
+</body>
+</html>

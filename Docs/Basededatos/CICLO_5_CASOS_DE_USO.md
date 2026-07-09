@@ -158,7 +158,7 @@ Nuevo **rol Técnico** (4º actor). El técnico **registra Y ejecuta** todas las
 
 **CU26 — Correctivo:** catálogo fijo (virus 100, formateo 150, recuperación 300/450/1000), cualquier equipo, se pueden sumar varios.
 
-**Órdenes:** estados solicitado→agendado→en_proceso→finalizado→entregado (o cancelado en cualquier momento). Página **Mis Trabajos** del técnico: registrar + lista + detalle + checklist. Todo en bitácora (módulo "Servicio Técnico").
+**Órdenes:** estados agendado→en_proceso→finalizado→entregado (o cancelado en cualquier momento). El estado `solicitado` sigue existiendo por backward-compat con órdenes viejas pero ninguna orden nueva pasa por ahí — la fecha de retiro se pide al momento de registrar. Página **Mis Trabajos** del técnico: registrar + lista + detalle + checklist. Todo en bitácora (módulo "Servicio Técnico").
 
 **CU27 — Ficha/historial:** el cliente ve su historial de servicios en **Mis Pedidos** (sección "Servicio técnico de mis equipos"); el técnico ve las órdenes por cliente en Mis Trabajos.
 
@@ -208,7 +208,44 @@ Se rediseñó el flujo para que el cliente supiera cuándo puede venir a retirar
 - Todas las acciones (agendar, iniciar, finalizar, entregar, cancelar) ahora **cierran el modal detalle** y muestran un **toast** de confirmación (verde) o error (rojo).
 - Antes el modal quedaba abierto y no daba feedback claro, era confuso.
 
-Commits: 57912f2c (rol Técnico), 927495c9 (backend), 2e4ee5f5 (frontend técnico), c3f67ab1 (CU27 vista cliente base), b42b7659 (fechas de retiro + estado entregado + agenda real + vista cliente reagrupada + correo adaptativo).
+## Refinamiento del flujo (2026-07-09, mismo día por la tarde)
+
+Tras probar la vista del técnico se detectó que el paso "Registrar → Agendar" era engorroso (2 modales, 2 clicks para llegar al mismo resultado) y que la página `/agenda` duplicaba lo que ya mostraba MisTrabajos. Se simplifica.
+
+**1. Fecha obligatoria al registrar** (`views.py::create`, `MisTrabajos.tsx`):
+- El modal "Registrar servicio" ahora exige `fecha_entrega_prevista` desde el primer paso (input date, default hoy+3 días, `min=hoy`).
+- La orden **nace directamente en estado `agendado`** (no pasa por `solicitado`).
+- El backend valida fecha ≥ hoy y dispara `_notificar_agendada` al cliente (correo + campana) al momento del create, no en un paso posterior.
+- El botón "Agendar" del modal detalle desaparece; sólo queda **"Reagendar"** para cambiar la fecha de una orden ya agendada.
+- Flujo real ahora: **agendado (con fecha desde el inicio) → en_proceso → finalizado → entregado**.
+
+**2. Filtros con contador** (`MisTrabajos.tsx`):
+- Reemplazo de los filtros planos (`Todas`, `Agendado`, etc.) por **tabs con badge de contador** al estilo de la página Users.
+- Cada tab muestra la cantidad: `Todas 12`, `Agendado 3`, `En proceso 2`, `Finalizado 5`, `Entregado 2`.
+- Tab default: **Agendado** (lo más útil para el técnico al abrir la vista).
+- Se quita el filtro `Solicitado` de los tabs (las viejas siguen apareciendo bajo "Todas").
+
+**3. Cards agrupadas por urgencia** (`MisTrabajos.tsx`):
+- Cuando el filtro es **Agendado** o **En proceso**, las cards se ordenan por `fecha_entrega_prevista` ascendente y se agrupan en secciones visuales:
+  - **⚠️ Atrasadas** (rojo): fecha < hoy
+  - **📌 HOY** (azul destacado): fecha = hoy
+  - **Mañana** (amarillo): fecha = mañana
+  - **Esta semana** (gris): dentro de los próximos 7 días
+  - **Más adelante** (gris claro): fuera del rango semanal
+  - **Sin fecha** (gris claro): sólo para órdenes viejas sin fecha
+- Los demás filtros (Finalizado, Entregado, Todas) siguen mostrando una lista plana sin agrupación.
+
+**4. Botones inline en las cards** (`MisTrabajos.tsx`):
+- Cada card muestra el botón de la próxima acción (Iniciar / Finalizar / Marcar entregado) directamente, sin abrir el modal detalle.
+- **Excepción:** en órdenes **agendadas**, el botón "Iniciar" **abre el modal detalle** para que el técnico pueda revisar y tickear el checklist (tareas del preventivo) antes de arrancar el trabajo, no arranca directamente.
+- Feedback siempre por toast (verde/rojo).
+
+**5. Eliminación de la página `/agenda`**:
+- La nueva vista de MisTrabajos (tabs con contador + agrupación por urgencia) cubre exactamente lo que hacía `/agenda`.
+- Se borra `Frontend/src/app/pages/Agenda.tsx`, se quita la ruta `/agenda` de `routes.tsx` y el ítem "Agenda" del menú del técnico en `Layout.tsx`.
+- Ahora el técnico tiene **un solo lugar** (Mis Trabajos) para ver, filtrar y accionar sus órdenes.
+
+Commits: 57912f2c (rol Técnico), 927495c9 (backend), 2e4ee5f5 (frontend técnico), c3f67ab1 (CU27 vista cliente base), b42b7659 (fechas de retiro + estado entregado + agenda real + vista cliente reagrupada + correo adaptativo), e5c62b16 (refinamiento: fecha obligatoria al registrar + tabs con contador + agrupación por urgencia + eliminación de /agenda), 383ff4e7 (Iniciar desde card agendada abre el detalle para revisar checklist).
 
 # Venta a crédito / Cartera (CU28 · CU29) ✅ COMPLETADO
 Financiamiento **POR PRODUCTO** según su precio unitario. SQL `009_credito.sql`
