@@ -15,7 +15,10 @@ ENDPOINTS DISPONIBLES (bajo /api/v1/orders/):
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import VentaViewSet, PagoVentaViewSet, DetalleVentaViewSet, FacturaPDFView, GarantiaViewSet, ResenaViewSet, DevolucionViewSet, ServicioCatalogoViewSet, OrdenServicioViewSet, PlanCreditoViewSet
-from .stripe_views import CreateCheckoutSessionView, ConfirmCheckoutView
+from .stripe_views import (
+    CreateCheckoutSessionView, ConfirmCheckoutView,
+    CheckoutCuotaView, ConfirmarCuotaView, VerificarCuotaPendienteView,
+)
 from .voz_views import VozIntencionView
 
 router = DefaultRouter()
@@ -33,6 +36,10 @@ urlpatterns = [
     path('', include(router.urls)),
     path('ventas/<int:venta_id>/pdf/', FacturaPDFView.as_view(), name='factura-pdf'),
     path('stripe/create-checkout-session/', CreateCheckoutSessionView.as_view(), name='stripe-create-session'),
-    path('stripe/confirm/', ConfirmCheckoutView.as_view(), name='stripe-confirm'),
+    path('stripe/confirm/',                 ConfirmCheckoutView.as_view(),         name='stripe-confirm'),
+    # CU28/CU29 — pago online de una cuota de crédito
+    path('stripe/checkout-cuota/',          CheckoutCuotaView.as_view(),           name='stripe-checkout-cuota'),
+    path('stripe/confirmar-cuota/',         ConfirmarCuotaView.as_view(),          name='stripe-confirmar-cuota'),
+    path('stripe/verificar-cuota-pendiente/', VerificarCuotaPendienteView.as_view(), name='stripe-verificar-cuota-pendiente'),
     path('voz-intencion/', VozIntencionView.as_view(), name='voz-intencion'),
 ]
