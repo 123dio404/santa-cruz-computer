@@ -42,11 +42,22 @@ const rutaPanel = (role?: string) => (
 
 const bs = (x: number | string) => `Bs ${Number(x).toFixed(2)}`;
 
+// Shuffle Fisher–Yates para elegir 6 destacados al azar. Se ejecuta una sola vez
+// por carga de página, así cada visitante ve un catálogo distinto.
+const shuffle = <T,>(arr: T[]): T[] => {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+};
+
 export function Landing() {
   const { user } = useAuth();
   const [productos, setProductos] = useState<ApiProduct[]>([]);
   const [categorias, setCategorias] = useState<ApiCategoria[]>([]);
-  const [categoriaSel, setCategoriaSel] = useState<number | null>(null);
+  const [categoriaSel, setCategoriaSel] = useState<number | ''>('');
 
   useEffect(() => {
     Promise.all([productosAPI.getAll(), categoriasAPI.getAll()])
@@ -54,13 +65,12 @@ export function Landing() {
       .catch(() => {});
   }, []);
 
-  // 6 destacados con stock disponible (filtrable por categoría con los chips)
+  // Cuando no hay categoría → 6 aleatorios de todo el stock.
+  // Cuando hay categoría → 6 aleatorios dentro de esa categoría.
   const destacados = useMemo(() => {
     const conStock = productos.filter(p => (p.stock ?? 0) > 0);
-    const filtrados = categoriaSel === null
-      ? conStock
-      : conStock.filter(p => p.categoria === categoriaSel);
-    return filtrados.slice(0, 6);
+    const pool = categoriaSel === '' ? conStock : conStock.filter(p => p.categoria === categoriaSel);
+    return shuffle(pool).slice(0, 6);
   }, [productos, categoriaSel]);
 
   return (
@@ -93,61 +103,63 @@ export function Landing() {
               Ir a mi panel <ChevronRight className="w-4 h-4" />
             </Link>
           ) : (
-            <Link to="/login"
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
-              Iniciar sesión
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link to="/login" state={{ initialView: 'register' }}
+                className="hidden sm:inline-flex items-center px-3 py-2 text-sm text-blue-700 hover:underline font-medium">
+                Crear cuenta
+              </Link>
+              <Link to="/login"
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+                Iniciar sesión
+              </Link>
+            </div>
           )}
         </div>
       </nav>
 
-      {/* ── Hero ───────────────────────────────────────────────────────────── */}
+      {/* ── Hero (compacto) ────────────────────────────────────────────────── */}
       <section id="top" className="bg-gradient-to-br from-blue-800 via-blue-700 to-blue-500 text-white">
-        <div className="max-w-6xl mx-auto px-4 py-16 md:py-24 text-center">
-          <img src="/logo.png" alt="" className="h-20 md:h-28 w-auto object-contain mx-auto mb-4 opacity-95" />
-          <h1 className="text-4xl md:text-5xl font-bold mb-3">Santa Cruz Computer</h1>
-          <p className="text-lg md:text-xl text-blue-100 mb-2">
-            Tu tienda de tecnología en Santa Cruz de la Sierra
-          </p>
-          <p className="text-sm md:text-base text-blue-200 max-w-2xl mx-auto mb-8">
-            Computadoras, laptops y accesorios. Servicio técnico con garantía y
-            compras al crédito en hasta 12 cuotas — sin bancos, aprobación en la tienda.
+        <div className="max-w-6xl mx-auto px-4 py-10 md:py-14 text-center">
+          <img src="/logo.png" alt="" className="h-16 md:h-20 w-auto object-contain mx-auto mb-3 opacity-95" />
+          <h1 className="text-3xl md:text-4xl font-bold mb-2">Santa Cruz Computer</h1>
+          <p className="text-base md:text-lg text-blue-100 mb-6">
+            Tecnología, servicio técnico y crédito propio en Santa Cruz de la Sierra.
           </p>
           <div className="flex flex-wrap gap-3 justify-center">
             <a href="#catalogo"
-              className="inline-flex items-center gap-2 px-6 py-3 bg-white text-blue-700 rounded-lg hover:bg-blue-50 font-semibold">
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-blue-700 rounded-lg hover:bg-blue-50 font-semibold">
               <Package className="w-5 h-5" /> Ver catálogo
             </a>
             {user ? (
               <Link to={rutaPanel(user.role)}
-                className="inline-flex items-center gap-2 px-6 py-3 bg-blue-900 text-white rounded-lg hover:bg-blue-950 font-semibold border border-blue-400">
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-900 text-white rounded-lg hover:bg-blue-950 font-semibold border border-blue-400">
                 Ir a mi panel <ChevronRight className="w-4 h-4" />
               </Link>
             ) : (
               <>
                 <Link to="/login"
-                  className="inline-flex items-center gap-2 px-6 py-3 bg-blue-900 text-white rounded-lg hover:bg-blue-950 font-semibold border border-blue-400">
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-900 text-white rounded-lg hover:bg-blue-950 font-semibold border border-blue-400">
                   Iniciar sesión
                 </Link>
                 <Link to="/login" state={{ initialView: 'register' }}
-                  className="inline-flex items-center gap-2 px-6 py-3 text-blue-100 hover:text-white font-medium underline underline-offset-4">
+                  className="inline-flex items-center gap-2 px-5 py-2.5 text-blue-100 hover:text-white font-medium underline underline-offset-4">
                   Crear cuenta
                 </Link>
               </>
             )}
           </div>
-          {/* Trust badges */}
-          <div className="mt-10 grid grid-cols-2 md:grid-cols-4 gap-3 max-w-3xl mx-auto text-sm">
+          {/* Trust badges — 1 sola línea con separadores */}
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs md:text-sm text-blue-100">
             {[
               'Crédito propio (sin banco)',
               'Retiro en tienda',
               'Garantía en todo el catálogo',
               'Servicio técnico integrado',
-            ].map(txt => (
-              <div key={txt} className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 flex items-center gap-2 justify-center">
-                <ShieldCheck className="w-4 h-4 text-blue-200 shrink-0" />
-                <span>{txt}</span>
-              </div>
+            ].map((txt, i) => (
+              <span key={txt} className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5 text-blue-300" /> {txt}</span>
+                {i < 3 && <span className="text-blue-400/70">•</span>}
+              </span>
             ))}
           </div>
         </div>
@@ -199,19 +211,18 @@ export function Landing() {
             </Link>
           </div>
 
-          {/* Chips de categorías */}
+          {/* Filtro por categoría — mismo patrón que /sales, mucho más limpio que los chips */}
           {categorias.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-6">
-              <button onClick={() => setCategoriaSel(null)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium border ${categoriaSel === null ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'}`}>
-                Todas
-              </button>
-              {categorias.map(c => (
-                <button key={c.id} onClick={() => setCategoriaSel(c.id)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium border ${categoriaSel === c.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'}`}>
-                  {c.nombre}
-                </button>
-              ))}
+            <div className="flex items-center gap-2 mb-6 max-w-sm">
+              <label className="text-sm text-gray-600 shrink-0">Categoría:</label>
+              <select value={categoriaSel}
+                onChange={e => setCategoriaSel(e.target.value ? parseInt(e.target.value) : '')}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+                <option value="">Todas las categorías</option>
+                {categorias.map(c => (
+                  <option key={c.id} value={c.id}>{c.nombre}</option>
+                ))}
+              </select>
             </div>
           )}
 
