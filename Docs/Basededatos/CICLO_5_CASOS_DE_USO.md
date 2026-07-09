@@ -10,7 +10,7 @@
 | CU20 | Chatbot de atención (IA) | Cliente | ⬜ Pendiente (va al final) |
 | CU21 | Notificaciones (sistema + correo) | Todos | ✅ Completado |
 | CU22 | Recibo de pago + Factura por correo | Cliente | ✅ Completado |
-| CU23 | Devoluciones (RMA) | Vendedor/Admin | ✅ Completado |
+| CU23 | Devoluciones (RMA) | Vendedor/Admin/Cliente | ✅ Completado |
 | CU24 | Promociones programadas | Admin | ✅ Completado |
 | CU25 | Servicio preventivo | Cliente/Técnico | ✅ Completado |
 | CU26 | Servicio correctivo | Cliente/Técnico | ✅ Completado |
@@ -92,12 +92,55 @@ Commits: `d8a2f755` (factura), + recibo de pago (stripe + PaymentSuccess).
 # CU23 — Devoluciones (RMA) ✅ COMPLETADO
 El vendedor/admin registra una devolución desde **Historial de Ventas** (pestaña Clientes → botón "Registrar devolución"). Nace `aprobada` o `rechazada`.
 - **Parámetros:** ≤ 7 días desde la venta, la venta existe, no devuelto antes (cantidad disponible), inspección física OK. `DIAS_DEVOLUCION = 7`.
-- **Trigger `AFTER INSERT`** reingresa stock SOLO si `aprobada` (una vez). Al aprobar, **anula la garantía** del ítem. NUNCA toca `detalleventa`/`factura`/`pagoventa`.
+- **Trigger `AFTER INSERT`** reingresa stock SOLO si `aprobada` (una vez). NUNCA toca `detalleventa`/`factura`/`pagoventa`.
 - **Reporte de ventas** (Excel/PDF): las líneas devueltas salen como **"Devuelta"** + resumen bruto − devoluciones = **ventas netas**.
 - **Dashboard:** tarjeta **"Ingresos Netos"** = ingresos − devoluciones aprobadas.
 - **Reporte de devoluciones** propio (Excel/PDF, color ámbar) con total reembolsado.
-- Tabla `devolucion` (SQL 005). Modelo/endpoints en `orders`. NO se notifica al cliente (está en el mostrador).
-Commits: 2bc875b1 (backend), d0fb2735 (UI), 79212ba8 (reportes/dashboard), + reporte de devoluciones.
+- Tabla `devolucion` (SQL 005). Modelo/endpoints en `orders`.
+
+## Mejoras del ciclo 5 (2026-07-08)
+
+**1. Bloqueo de doble devolución** (frontend + backend):
+- El botón "Registrar devolución" se **deshabilita** si todos los ítems de la venta ya fueron procesados (aprobados o rechazados), con tooltip explicativo.
+- El dropdown del modal filtra los ítems ya procesados. Los parciales se etiquetan "X de Y disponibles".
+- Backend valida `estado__in=['aprobada','rechazada']`: una rechazada cierra la decisión sobre esas unidades (no se puede reintentar), no solo las aprobadas.
+
+**2. Inspección física granular** (checklist de 4 puntos):
+- Se dividió "Sin daño ni manipulación" en 2 puntos independientes: **Sin daño** y **Sin manipulación**.
+- Ahora son 4: Sin daño / Sin manipulación / Es el mismo producto vendido / Completo (accesorios/empaque).
+- El resultado se guarda en `devolucion.insp_sin_dano`, `insp_sin_manipulacion`, `insp_mismo_producto`, `insp_completo` (SQL 011).
+
+**3. Anulación de garantía coherente con la inspección:**
+- **Aprobada** → anula la garantía + guarda resolución *"por devolución aprobada (RMA-YYYY-000042)"*.
+- **Rechazada por daño** (no marcado "Sin daño") → anula la garantía + guarda resolución *"por daño detectado en la inspección física"*.
+- **Rechazada por manipulación** (no marcado "Sin manipulación") → anula la garantía + guarda resolución *"por manipulación detectada"*.
+- **Rechazada por otros motivos** (no es el mismo producto, incompleto, fuera de plazo, etc.) → garantía SIGUE VIGENTE.
+- Aviso visual en el modal para el vendedor: *"⚠️ Si rechazas con daño o manipulación sin marcar, la garantía se anulará automáticamente"*.
+
+**4. Notificación al cliente + comprobante RMA:**
+- Al aprobar o rechazar se envía **correo Brevo** + **campana en la app** con el resultado.
+- Número de **comprobante correlativo** `RMA-YYYY-000042` derivado del `id` de la devolución + año actual.
+- Correo aprobada (verde): comprobante, cantidad, monto de reembolso, método (efectivo en tienda), instrucciones para retirar.
+- Correo rechazada (rojo): comprobante, motivo del rechazo escrito por el vendedor, invitación a acercarse a la tienda si hay dudas.
+- Reutiliza el patrón de CU21: `_email_html` + `crear_notificacion(canal='ambos')`.
+- Si el cliente no tiene correo cargado, la devolución se registra igual (bloque `try/except` silencioso).
+- Diseño preparado para agregar `cliente.cuenta_bancaria` a futuro (transferencia bancaria) sin rediseñar el correo.
+
+**5. Vista del cliente en "Mis Pedidos"** (`Orders.tsx`):
+- **Card principal:** pill de resumen *"🔄 1 devolución aprobada · 1 rechazada"* al pie de la card cuando el pedido tiene devoluciones.
+- **Modal "Ver Detalles":** por producto, bloque verde (aprobada + comprobante + monto + instrucciones) o rojo (rechazada + comprobante + motivo).
+- Badge `🚫 Garantía anulada` con leyenda explicativa cuando corresponde (por devolución aprobada / por daño detectado / por manipulación detectada).
+- El botón **"Reclamar garantía" queda oculto** si la garantía está anulada.
+- **Defensa en 2 capas** contra reclamos de garantía sobre productos ya devueltos:
+  - Frontend: `g.vigente = false` cuando `estado='anulada'` → botón no aparece.
+  - Backend: endpoint `PATCH /garantias/{id}/reclamar/` rebota 400 si `estado != 'activa'`.
+- Endpoint nuevo: `GET /devoluciones/?cliente=<id>` para que el cliente cargue solo las suyas.
+
+## Actores CU23 (actualizado)
+- **Vendedor/Admin:** registra la devolución, aplica la inspección física de 4 puntos, aprueba o rechaza.
+- **Cliente:** ve el resultado en su bandeja de notificaciones (campana + correo con comprobante RMA), consulta el estado y motivo en "Mis Pedidos".
+
+Commits: 2bc875b1 (backend base), d0fb2735 (UI), 79212ba8 (reportes/dashboard), 20f4096e (bloqueo doble devolución), aad2c757 (notificación cliente + comprobante RMA), 6a5c29f9 (inspección granular 4 puntos + anulación de garantía + vista del cliente en Mis Pedidos).
 
 # CU24 — Promociones programadas ✅ COMPLETADO
 El admin define un descuento **% por producto** (no por categoría) con `fecha_inicio`/`fecha_fin`. Mientras esté vigente, la tienda **muestra y cobra** el precio rebajado.
@@ -156,7 +199,7 @@ Menú **Créditos** (admin + vendedor). Frontend: `Creditos.tsx` + `creditoAPI`.
 
 | | CU20 | CU21 | CU22 | CU23 | CU24 | CU25 | CU26 | CU27 | CU28 | CU29 |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| Cliente | ✅ | ✅ | ✅ | | | ✅ | ✅ | ✅ | ✅ | |
+| Cliente | ✅ | ✅ | ✅ | ✅ | | ✅ | ✅ | ✅ | ✅ | |
 | Vendedor | | ✅ | | ✅ | | ✅ | ✅ | | ✅ | |
 | Admin | | ✅ | | ✅ | ✅ | ✅ | ✅ | | ✅ | ✅ |
 | Técnico | | ✅ | | | | ✅ | ✅ | ✅ | | |
