@@ -247,6 +247,98 @@ Tras probar la vista del técnico se detectó que el paso "Registrar → Agendar
 
 Commits: 57912f2c (rol Técnico), 927495c9 (backend), 2e4ee5f5 (frontend técnico), c3f67ab1 (CU27 vista cliente base), b42b7659 (fechas de retiro + estado entregado + agenda real + vista cliente reagrupada + correo adaptativo), e5c62b16 (refinamiento: fecha obligatoria al registrar + tabs con contador + agrupación por urgencia + eliminación de /agenda), 383ff4e7 (Iniciar desde card agendada abre el detalle para revisar checklist).
 
+## Wizard progresivo + FK producto_referencia + página Mis Servicios (2026-07-10)
+
+Tras probar el flujo en producción, el usuario detectó que el modal de
+"Registrar servicio" apilaba todo en una sola pantalla y no guiaba al técnico,
+que el equipo se identificaba con texto libre (perdía historial por modelo) y
+que los servicios técnicos vivían mezclados con las compras en Mis Pedidos.
+Se refactoriza aplicando **divulgación progresiva vertical** y separando la
+vista del cliente.
+
+**1. SQL nuevo `013_orden_producto_referencia.sql`:**
+- `ALTER TABLE orden_servicio ADD COLUMN IF NOT EXISTS idproducto_referencia INTEGER REFERENCES producto(idproducto) ON DELETE SET NULL;`
+- Índice `idx_orden_producto_ref` para acelerar queries de historial por modelo.
+- Nullable + ON DELETE SET NULL: órdenes viejas no rompen, y si el producto se
+  borra la orden queda huérfana pero sigue funcionando.
+- Idempotente con `IF NOT EXISTS`.
+
+**2. Backend — modelo, serializer y endpoint:**
+- `OrdenServicio.producto_referencia` (FK a `Producto`, nullable) — vincula la
+  orden con un modelo del catálogo, sirve tanto para equipos propios (comprados
+  en la tienda) como para externos (referencia de modelo cuando otras tiendas
+  venden el mismo producto, ej. MSI Bravo 15).
+- `OrdenServicioSerializer` expone `producto_referencia`, `producto_referencia_nombre`
+  y `producto_referencia_marca` para que el frontend muestre "MSI Bravo 15" en
+  la card sin re-consultar `productosAPI`.
+- `OrdenServicioViewSet.create()` acepta `producto_referencia` opcional en el
+  payload; valida que el producto exista antes de guardar.
+- **Endpoint nuevo** `GET /ordenes-servicio/productos-cliente/?cliente=X&equipo=Y`:
+  devuelve los equipos que el cliente compró en la tienda filtrados por tipo
+  (`laptop` | `escritorio`). Para cada uno incluye `garantia_id`, si está
+  vigente y cuántos usos GRATIS le quedan (solo laptop + preventivo).
+
+**3. Wizard progresivo vertical en `MisTrabajos.tsx`:**
+- Se reescribe el modal Registrar. Cada paso aparece cuando el anterior está
+  resuelto — **no todo apilado como antes**. Componente `WizardStep` con número
+  circular (verde al completar) + título + contenido.
+- **Camino Preventivo (6 pasos):**
+  `① Tipo → ② Cliente → ③ Equipo → ④ ¿Es de tienda? → ⑤ Elegir modelo → ⑥ Fecha`
+- **Camino Correctivo (5 pasos):**
+  `① Tipo → ② Cliente → ③ Equipo → ④ Servicios (multi con precio acumulable) → ⑤ Fecha`
+- Todos los servicios ahora exigen cliente registrado (ya no hay "externo sin
+  cuenta"). Si el cliente no existe, se lo dirige a `/login → Crear cuenta`
+  antes de continuar.
+- Paso 5 en Preventivo:
+  - **"Sí de tienda"** → llama `/productos-cliente?equipo=X` y muestra los
+    equipos comprados. Si `laptop` + garantía vigente + usos > 0 se muestra
+    badge verde **GRATIS**; sino "Garantía vigente" o "Garantía vencida".
+  - **"No de tienda"** → muestra el catálogo entero filtrado por tipo con
+    buscador. Chip "Descontinuado" si `stock = 0`.
+- `equipo_descripcion` pasa a ser opcional ("Notas del equipo") — sólo aparece
+  cuando ya se eligió modelo, para no forzar texto libre desde el arranque.
+- La card del listado muestra `producto_referencia_nombre` (ej. "MSI Bravo 15")
+  en vez del genérico "laptop" cuando existe.
+
+**4. Página nueva `MisServicios.tsx` (rol cliente, ruta `/mis-servicios`):**
+- Vista dedicada al historial de mantenimientos, separada de Mis Pedidos para
+  darle formalidad al recorrido.
+- 3 subsecciones: **Listo para retirar** (verde destacado) · **En proceso**
+  (blanco) · **Historial** (colapsable).
+- Resumen chico arriba con contadores.
+- Cards con el nombre del producto vinculado en el título (`MSI Bravo 15`) +
+  marca debajo. Costo en el lado derecho: **GRATIS en verde esmeralda** si
+  fue beneficio, `Bs XXX.XX` si fue pagado.
+- Detalle expandible (trabajos realizados + notas del técnico) disponible
+  tanto en `finalizado` como en `entregado` — el cliente puede consultar el
+  historial después de retirar, no sólo antes.
+- Si el cliente sólo tiene historial, se abre automáticamente para ahorrarle
+  un click.
+
+**5. Limpieza de `Orders.tsx`:**
+- Se remueve todo el bloque de servicios técnicos (state, useEffect y JSX).
+- Se limpian imports huérfanos (`Wrench`, `servicioTecnicoAPI`, `ApiOrdenServicio`,
+  `SERV_ESTADO`, `formatFechaServ`, `servHistorialAbierto`, `servDetalle`).
+- Ahora "Mis Pedidos" es exclusivo de compras de productos → foco más claro.
+
+**6. Ruta + menú lateral del cliente:**
+- Nueva ruta `/mis-servicios` protegida con `allowedRoles=['client']`.
+- Ítem "Mis Servicios" (ícono `Wrench`) en el menú del cliente en `Layout.tsx`,
+  entre "Mis Pedidos" y "Mis Créditos".
+
+**Historial por modelo — habilitado:**
+Con el FK `producto_referencia` se puede sacar reportería del tipo *"al MSI
+Bravo 15 le hicimos 8 servicios en total — 5 propios, 3 externos"*. Antes eso
+era imposible por el texto libre. Base para futuros reportes de mantenimiento
+por modelo o para detectar qué productos son más problemáticos.
+
+Commits: df38763e (SQL 013 + modelo + serializer + create() + endpoint
+productos-cliente), 074bafac (wizard progresivo vertical en MisTrabajos +
+modelo en card + api.ts), 81156399 (MisServicios.tsx + limpieza Orders + ruta
++ menú).
+
+---
+
 # Venta a crédito / Cartera (CU28 · CU29) ✅ COMPLETADO
 Financiamiento **POR PRODUCTO** según su precio unitario. SQL `009_credito.sql`
 (`plan_credito` + `cuota`). Modelos/endpoints en `orders`. El cálculo (recargo,
