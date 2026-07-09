@@ -358,10 +358,13 @@ class OrdenServicio(models.Model):
     diagnostico        = models.TextField(null=True, blank=True)
     observaciones      = models.TextField(null=True, blank=True)
     costo_total        = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    estado             = models.CharField(max_length=20, default='solicitado')
+    estado             = models.CharField(max_length=20, default='solicitado')  # solicitado|agendado|en_proceso|finalizado|entregado|cancelado
     fecha_solicitud    = models.DateTimeField(auto_now_add=True)
     fecha_agendada     = models.DateTimeField(null=True, blank=True)
     fecha_finalizacion = models.DateTimeField(null=True, blank=True)
+    # Nuevas para el flujo de retiro (SQL 012_orden_fechas_entrega)
+    fecha_entrega_prevista = models.DateField(null=True, blank=True)
+    fecha_entrega_real     = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         managed  = False

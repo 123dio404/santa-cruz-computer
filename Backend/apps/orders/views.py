@@ -1084,13 +1084,16 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
         from django.utils import timezone
         orden = self.get_object()
         nuevo = request.data.get('estado')
-        if nuevo not in ('solicitado', 'agendado', 'en_proceso', 'finalizado', 'cancelado'):
+        if nuevo not in ('solicitado', 'agendado', 'en_proceso', 'finalizado', 'entregado', 'cancelado'):
             return Response({'error': 'Estado inválido.'}, status=status.HTTP_400_BAD_REQUEST)
         orden.estado = nuevo
         fields = ['estado']
         if nuevo == 'finalizado':
             orden.fecha_finalizacion = timezone.now()
             fields.append('fecha_finalizacion')
+        if nuevo == 'entregado':
+            orden.fecha_entrega_real = timezone.now()
+            fields.append('fecha_entrega_real')
         if request.data.get('fecha_agendada'):
             orden.fecha_agendada = request.data.get('fecha_agendada')
             fields.append('fecha_agendada')
@@ -1107,28 +1110,195 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
                        descripcion=f'Orden de servicio #{orden.id} → {nuevo}', **actor)
         except Exception:
             pass
-        # CU21: al finalizar, avisar al cliente que su equipo está listo
+        # CU21: al finalizar, avisar al cliente con texto adaptativo según la
+        # fecha real vs la fecha_entrega_prevista (adelantado, en fecha, retrasado).
         if nuevo == 'finalizado' and orden.cliente_id:
-            cli = orden.cliente
-            if cli and getattr(cli, 'correo', ''):
-                from django.conf import settings as _s
-                from apps.users.views import crear_notificacion, _email_html
-                nombre = f'{cli.nombre} {cli.apellido}'.strip()
-                _html = _email_html(
-                    nombre,
-                    '<p>¡Tu equipo ya está listo! 🔧</p>'
-                    f'<p>El servicio <strong>{orden.tipo}</strong> de tu {orden.equipo} fue finalizado. '
-                    'Puedes pasar a recogerlo.</p>',
-                    'Ver mis pedidos', f'{_s.FRONTEND_URL}/orders',
-                )
-                crear_notificacion(
-                    tipo='servicio', titulo='Tu equipo está listo 🔧',
-                    mensaje=f'El servicio {orden.tipo} de tu {orden.equipo} fue finalizado.',
-                    cliente_id=orden.cliente_id, enlace='/orders',
-                    canal='ambos', email=cli.correo, html=_html,
-                )
+            self._notificar_finalizacion(orden)
         orden.refresh_from_db()
         return Response(OrdenServicioSerializer(orden).data)
+
+    @action(detail=True, methods=['patch'])
+    def agendar(self, request, pk=None):
+        """
+        Agenda una orden fijando la fecha de retiro prevista. Envía correo +
+        campana al cliente con la fecha comprometida. Puede reagendar (pasar
+        de agendado a agendado con otra fecha).
+        """
+        from django.utils import timezone
+        from datetime import date as _date, datetime as _dt
+        orden = self.get_object()
+        fecha_raw = request.data.get('fecha_entrega_prevista')
+        if not fecha_raw:
+            return Response({'error': 'Debes indicar la fecha de retiro.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            fecha = _date.fromisoformat(str(fecha_raw)[:10])
+        except ValueError:
+            return Response({'error': 'Formato de fecha inválido (usar YYYY-MM-DD).'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if fecha < timezone.localdate():
+            return Response({'error': 'La fecha de retiro no puede ser en el pasado.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if orden.estado in ('finalizado', 'entregado', 'cancelado'):
+            return Response({'error': f'No se puede agendar una orden en estado "{orden.estado}".'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        es_reagenda = orden.estado == 'agendado' and orden.fecha_entrega_prevista != fecha
+        orden.fecha_entrega_prevista = fecha
+        orden.fecha_agendada = timezone.now()
+        orden.estado = 'agendado'
+        orden.save(update_fields=['fecha_entrega_prevista', 'fecha_agendada', 'estado'])
+        actor = actor_from_request(request)
+        try:
+            log_action(
+                accion='UPDATE', modulo='Servicio Técnico',
+                descripcion=(f'Orden #{orden.id} '
+                             + ('reagendada' if es_reagenda else 'agendada')
+                             + f' — retiro previsto {fecha.isoformat()}'),
+                **actor,
+            )
+        except Exception:
+            pass
+        # Correo + campana al cliente con la fecha
+        if orden.cliente_id:
+            self._notificar_agendada(orden, es_reagenda=es_reagenda)
+        orden.refresh_from_db()
+        return Response(OrdenServicioSerializer(orden).data)
+
+    @action(detail=True, methods=['patch'])
+    def entregar(self, request, pk=None):
+        """
+        Marca la orden como entregada al cliente. Solo se puede desde 'finalizado'.
+        NO envía correo (el cliente está en la tienda al retirar).
+        """
+        from django.utils import timezone
+        orden = self.get_object()
+        if orden.estado != 'finalizado':
+            return Response({'error': 'Solo se puede entregar una orden finalizada.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        orden.estado = 'entregado'
+        orden.fecha_entrega_real = timezone.now()
+        orden.save(update_fields=['estado', 'fecha_entrega_real'])
+        actor = actor_from_request(request)
+        try:
+            log_action(
+                accion='UPDATE', modulo='Servicio Técnico',
+                descripcion=f'Orden #{orden.id} entregada al cliente',
+                **actor,
+            )
+        except Exception:
+            pass
+        orden.refresh_from_db()
+        return Response(OrdenServicioSerializer(orden).data)
+
+    def _notificar_agendada(self, orden, es_reagenda=False):
+        """Correo + campana al cliente con la fecha de retiro programada."""
+        cli = orden.cliente
+        if not (cli and getattr(cli, 'correo', '')):
+            return
+        try:
+            from django.conf import settings as _s
+            from apps.users.views import crear_notificacion, _email_html
+            nombre = f'{cli.nombre or ""} {cli.apellido or ""}'.strip() or 'cliente'
+            fecha_str = orden.fecha_entrega_prevista.strftime('%d/%m/%Y') if orden.fecha_entrega_prevista else '—'
+            tipo_str = 'MANTENIMIENTO PREVENTIVO' if orden.tipo == 'preventivo' else 'SERVICIO CORRECTIVO'
+            costo_txt = 'GRATIS (beneficio de garantía)' if orden.es_beneficio else f'Bs {float(orden.costo_total):.2f}'
+            intro = ('Actualizamos la fecha de retiro de tu equipo:'
+                     if es_reagenda else
+                     f'Recibimos tu equipo y programamos el servicio de <strong>{tipo_str}</strong> ({orden.equipo}).')
+            cuerpo = (
+                f'<p>{intro}</p>'
+                f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;'
+                f'padding:14px;margin:16px 0;text-align:center;">'
+                f'<p style="margin:0;font-size:12px;color:#3730a3;font-weight:bold;letter-spacing:1px;">📅 FECHA DE RETIRO</p>'
+                f'<p style="margin:6px 0 0;font-size:20px;font-weight:bold;color:#1e40af;">{fecha_str}</p>'
+                f'<p style="margin:4px 0 0;font-size:12px;color:#4b5563;">Horario: 09:00 – 18:00</p>'
+                f'</div>'
+                f'<p>📍 <strong>Ubicación:</strong> Av. Cristo Redentor #123, Santa Cruz de la Sierra</p>'
+                f'<p>📄 <strong>Orden:</strong> #{orden.id}<br/>'
+                f'💵 <strong>Costo:</strong> {costo_txt}</p>'
+                f'<p>Vamos a dejar tu equipo impecable. Cuando esté listo antes de esa fecha te avisamos por este mismo medio.</p>'
+            )
+            _html = _email_html(nombre, cuerpo, 'Ver mi orden', f'{_s.FRONTEND_URL}/orders')
+            asunto_prefix = 'Actualizamos' if es_reagenda else 'Tu equipo tiene'
+            crear_notificacion(
+                tipo='servicio',
+                titulo=f'{asunto_prefix} fecha de retiro programada',
+                mensaje=f'Orden #{orden.id} ({orden.tipo}, {orden.equipo}): retiro programado para el {fecha_str}.',
+                cliente_id=orden.cliente_id, enlace='/orders',
+                canal='ambos', email=cli.correo, html=_html,
+            )
+        except Exception:
+            pass  # no rompe el request si el correo falla
+
+    def _notificar_finalizacion(self, orden):
+        """Correo + campana al cliente cuando el equipo queda listo (texto adaptativo)."""
+        cli = orden.cliente
+        if not (cli and getattr(cli, 'correo', '')):
+            return
+        try:
+            from django.conf import settings as _s
+            from django.utils import timezone as _tz
+            from apps.users.views import crear_notificacion, _email_html
+            nombre = f'{cli.nombre or ""} {cli.apellido or ""}'.strip() or 'cliente'
+            costo_txt = 'GRATIS' if orden.es_beneficio else f'Bs {float(orden.costo_total):.2f}'
+            hoy = _tz.localdate()
+            prevista = orden.fecha_entrega_prevista
+            # 3 escenarios según cuando se finalizó vs la fecha prevista
+            if prevista and hoy < prevista:
+                # Adelantado
+                asunto  = '¡Buenas noticias! Tu equipo está listo antes de lo previsto'
+                titular = 'Tu equipo está ✅ LISTO <strong>antes de lo previsto</strong>.'
+                caja = (f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px;margin:16px 0;">'
+                        f'<p style="margin:0 0 6px;">📅 Fecha original de retiro: <strong>{prevista.strftime("%d/%m/%Y")}</strong></p>'
+                        f'<p style="margin:0;color:#166534;font-weight:bold;">🎉 Podés retirarlo DESDE HOY (Horario: 09:00 – 18:00)</p>'
+                        f'</div>')
+                mensaje_camp = f'Orden #{orden.id} lista antes de lo previsto. Retirar desde hoy.'
+            elif prevista and hoy > prevista:
+                # Retrasado
+                asunto  = 'Tu equipo ya está listo. Disculpá el retraso'
+                titular = 'Tu equipo ya está ✅ LISTO. Disculpá el retraso respecto a la fecha original.'
+                caja = (f'<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px;margin:16px 0;">'
+                        f'<p style="margin:0 0 6px;">📅 Fecha original de retiro: {prevista.strftime("%d/%m/%Y")}</p>'
+                        f'<p style="margin:0;font-weight:bold;">🎯 Podés retirarlo DESDE HOY (Horario: 09:00 – 18:00)</p>'
+                        f'</div>')
+                mensaje_camp = f'Orden #{orden.id} lista (con retraso). Retirar desde hoy.'
+            else:
+                # En fecha (o sin fecha prevista)
+                asunto  = 'Tu equipo está listo para retirar'
+                titular = 'Como te habíamos dicho, tu equipo está ✅ LISTO para retirar HOY.'
+                fecha_txt = f'📅 Fecha de retiro: {prevista.strftime("%d/%m/%Y")}<br/>' if prevista else ''
+                caja = (f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px;margin:16px 0;">'
+                        f'<p style="margin:0;">{fecha_txt}Horario: 09:00 – 18:00</p>'
+                        f'</div>')
+                mensaje_camp = f'Orden #{orden.id} lista para retirar.'
+
+            # Trabajos realizados (checklist marcado + servicios)
+            tareas_ok = list(orden.tareas.filter(realizado=True).values_list('tarea', flat=True))
+            servicios = list(orden.detalles.select_related('servicio').all())
+            trabajos_html = ''
+            if tareas_ok or servicios:
+                items = ''.join(f'<li>{s.servicio.nombre if s.servicio else "servicio"}</li>' for s in servicios)
+                items += ''.join(f'<li>{t}</li>' for t in tareas_ok)
+                trabajos_html = (f'<p><strong>Trabajos realizados:</strong></p>'
+                                 f'<ul style="margin:6px 0 14px 20px;padding:0;">{items}</ul>')
+
+            cuerpo = (
+                f'<p>{titular}</p>'
+                f'{caja}'
+                f'<p>📄 <strong>Orden:</strong> #{orden.id} · {orden.tipo.capitalize()} · {orden.equipo.capitalize()}<br/>'
+                f'💵 <strong>Costo:</strong> {costo_txt}</p>'
+                f'{trabajos_html}'
+                f'<p>Cuando lo retires te vamos a pedir tu firma para cerrar la orden.</p>'
+            )
+            _html = _email_html(nombre, cuerpo, 'Ver mi orden', f'{_s.FRONTEND_URL}/orders')
+            crear_notificacion(
+                tipo='servicio', titulo=asunto,
+                mensaje=mensaje_camp,
+                cliente_id=orden.cliente_id, enlace='/orders',
+                canal='ambos', email=cli.correo, html=_html,
+            )
+        except Exception:
+            pass
 
     @action(detail=True, methods=['patch'])
     def checklist(self, request, pk=None):

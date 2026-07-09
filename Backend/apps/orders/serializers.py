@@ -209,6 +209,7 @@ class OrdenServicioSerializer(serializers.ModelSerializer):
                   'garantia', 'tipo', 'origen', 'equipo', 'equipo_descripcion',
                   'es_beneficio', 'diagnostico', 'observaciones', 'costo_total',
                   'estado', 'fecha_solicitud', 'fecha_agendada', 'fecha_finalizacion',
+                  'fecha_entrega_prevista', 'fecha_entrega_real',
                   'detalles', 'tareas']
 
     def get_cliente_nombre(self, obj):
