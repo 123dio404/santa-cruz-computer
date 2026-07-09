@@ -354,6 +354,13 @@ class OrdenServicio(models.Model):
     origen             = models.CharField(max_length=20, default='externo')  # tienda | externo
     equipo             = models.CharField(max_length=20, default='laptop')   # laptop | escritorio
     equipo_descripcion = models.CharField(max_length=200, null=True, blank=True)
+    # Refinamiento CU25/CU26 (SQL 013) — modelo del catálogo vinculado.
+    # Se usa tanto para equipos propios (compró la laptop acá) como para equipos
+    # externos (el vendedor selecciona el modelo del catálogo para no re-escribir).
+    # Con este FK se puede sacar historial por modelo (cuántos servicios tuvo).
+    producto_referencia = models.ForeignKey(
+        'products.Producto', on_delete=models.SET_NULL, null=True, blank=True,
+        db_column='idproducto_referencia', related_name='ordenes_referencia')
     es_beneficio       = models.BooleanField(default=False)
     diagnostico        = models.TextField(null=True, blank=True)
     observaciones      = models.TextField(null=True, blank=True)
