@@ -17,7 +17,7 @@
  * - Al ir a Cart.tsx el cliente finaliza la compra
  * - El carrito persiste entre sesiones del navegador
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ShoppingCart, Search, Filter, X, Plus, Minus, Package, Eye, Star, MessageSquare } from 'lucide-react';
 import { productosAPI, resenasAPI, BACKEND_ROOT_URL, ApiProduct, ResenasPublicas } from '../services/api';
 import { StarRating } from '../components/StarRating';
@@ -112,6 +112,21 @@ export function Store() {
 
   // Cerrar el modal de detalle con Esc
   useEscapeKey(!!detailProduct, () => setDetailProduct(null));
+  // Cerrar el dropdown del carrito con Esc
+  useEscapeKey(showCart, () => setShowCart(false));
+
+  // Cerrar el dropdown del carrito al hacer click fuera
+  const cartWrapperRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showCart) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (cartWrapperRef.current && !cartWrapperRef.current.contains(e.target as Node)) {
+        setShowCart(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showCart]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -137,61 +152,64 @@ export function Store() {
             </div>
           )}
         </div>
-        <button onClick={() => setShowCart(!showCart)}
-          className="relative flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-          <ShoppingCart className="w-5 h-5" />
-          <span className="font-medium">{totalItems}</span>
-          {totalItems > 0 && (
-            <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
-              {totalItems}
-            </span>
-          )}
-        </button>
-      </div>
+        {/* Botón carrito + dropdown flotante */}
+        <div className="relative" ref={cartWrapperRef}>
+          <button onClick={() => setShowCart(!showCart)}
+            className="relative flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+            <ShoppingCart className="w-5 h-5" />
+            <span className="font-medium">{totalItems}</span>
+            {totalItems > 0 && (
+              <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
+                {totalItems}
+              </span>
+            )}
+          </button>
 
-      {showCart && (
-        <div className="bg-white rounded-xl p-4 sm:p-6 border-2 border-blue-500 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-gray-900">Carrito</h2>
-            <button onClick={() => setShowCart(false)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          {cartItems.length === 0 ? (
-            <p className="text-center py-4 text-gray-500">Tu carrito está vacío</p>
-          ) : (
-            <>
-              <div className="space-y-3 max-h-80 overflow-y-auto">
-                {cartItems.map(item => (
-                  <div key={item.productId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-                    <div className="flex-1">
-                      <p className="font-semibold text-gray-900 text-sm">{item.productName}</p>
-                      <p className="text-xs text-gray-600">{item.price.toFixed(2)} Bs × {item.quantity}</p>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => updateQty(item.productId, item.quantity - 1)} className="p-1 hover:bg-gray-200 rounded"><Minus className="w-3 h-3" /></button>
-                      <span className="w-6 text-center text-sm font-semibold">{item.quantity}</span>
-                      <button onClick={() => updateQty(item.productId, item.quantity + 1)} className="p-1 hover:bg-gray-200 rounded"><Plus className="w-3 h-3" /></button>
-                      <button onClick={() => removeFromCart(item.productId)} className="p-1 text-red-500 hover:bg-red-50 rounded"><X className="w-3 h-3" /></button>
-                    </div>
-                    <span className="text-sm font-bold text-blue-600 min-w-[60px] text-right">
-                      {(item.price * item.quantity).toFixed(2)} Bs
-                    </span>
+          {showCart && (
+            <div className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-96 bg-white rounded-xl p-4 sm:p-5 border-2 border-blue-500 space-y-4 shadow-xl z-30">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-900">Carrito</h2>
+                <button onClick={() => setShowCart(false)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              {cartItems.length === 0 ? (
+                <p className="text-center py-4 text-gray-500">Tu carrito está vacío</p>
+              ) : (
+                <>
+                  <div className="space-y-3 max-h-80 overflow-y-auto">
+                    {cartItems.map(item => (
+                      <div key={item.productId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-gray-900 text-sm truncate">{item.productName}</p>
+                          <p className="text-xs text-gray-600">{item.price.toFixed(2)} Bs × {item.quantity}</p>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button onClick={() => updateQty(item.productId, item.quantity - 1)} className="p-1 hover:bg-gray-200 rounded"><Minus className="w-3 h-3" /></button>
+                          <span className="w-6 text-center text-sm font-semibold">{item.quantity}</span>
+                          <button onClick={() => updateQty(item.productId, item.quantity + 1)} className="p-1 hover:bg-gray-200 rounded"><Plus className="w-3 h-3" /></button>
+                          <button onClick={() => removeFromCart(item.productId)} className="p-1 text-red-500 hover:bg-red-50 rounded"><X className="w-3 h-3" /></button>
+                        </div>
+                        <span className="text-sm font-bold text-blue-600 min-w-[60px] text-right flex-shrink-0">
+                          {(item.price * item.quantity).toFixed(2)} Bs
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <div className="border-t pt-3 flex items-center justify-between">
-                <span className="font-semibold text-gray-700">Total:</span>
-                <span className="text-xl font-bold text-blue-600">{cartTotal.toFixed(2)} Bs</span>
-              </div>
-              <a href="/cart"
-                className="block w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 text-center font-semibold">
-                Ir al Carrito
-              </a>
-            </>
+                  <div className="border-t pt-3 flex items-center justify-between">
+                    <span className="font-semibold text-gray-700">Total:</span>
+                    <span className="text-xl font-bold text-blue-600">{cartTotal.toFixed(2)} Bs</span>
+                  </div>
+                  <a href="/cart"
+                    className="block w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 text-center font-semibold">
+                    Ir al Carrito
+                  </a>
+                </>
+              )}
+            </div>
           )}
         </div>
-      )}
+      </div>
 
       <div className="bg-white rounded-xl p-6 border border-gray-200">
         <div className="flex flex-col md:flex-row gap-4">
