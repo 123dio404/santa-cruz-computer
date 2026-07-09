@@ -406,6 +406,66 @@ factura HTML), ef4bfc8b (desde-venta), a84d5959 (mis-creditos), d6f195f4
 efectivo helper compartido), 1bd4bfef (Creditos.tsx walk-in + toast), 31f4797d
 (MisCreditos.tsx + rutas + menú), aca20537 (QA + es_credito en Mis Pedidos).
 
+## Mejoras UX post-lanzamiento (2026-07-09, tarde)
+
+Tras deployar y hacer pruebas reales en producción el usuario detectó ajustes
+de UX y ética que no habían salido durante el diseño. Se aplican con foco en
+que el sistema **no sugiera prisa** y respete el reglamento del negocio.
+
+**1. Fix del HTTP 500 del walk-in** (`ff64347b`):
+- El código usaba `producto.precio` pero el campo real del modelo Producto es
+  **`precio_actual`** (así lo usan las otras vistas de venta). Al llamar el
+  endpoint disparaba `AttributeError` y devolvía 500.
+- Bonus del mismo commit: se cambia `getattr(cliente, 'ci', ...)` por
+  `getattr(cliente, 'nit_ci', None)` en `_notificar_credito_creado` y
+  `_notificar_cuota_pagada` — así el CI del cliente aparece bien en la factura
+  HTML en vez de venir vacío.
+
+**2. Rename del tab** — `+ Nuevo crédito presencial` pasa a `+ Nuevo crédito`.
+El contexto ya lo da la sección Créditos, no hace falta decir "presencial".
+
+**3. Se elimina el banner "Crédito walk-in: el cliente vino a la tienda…"**:
+- El texto sugería que se hace *"todo en un solo paso"*, y viniendo del
+  sistema como onboarding suena a sugerir apuro que no queda ético en un
+  producto financiero.
+- Se saca sin reemplazo. La pantalla arranca directo con los pasos 1/2/3.
+
+**4. Filtro por categoría en el bloque Producto:**
+- Antes: solo buscador libre de productos filtrados por rango Bs 1–15.000.
+- Ahora: **selector de categoría** (con "Todas las categorías" por default) +
+  buscador. Mismo patrón que `/sales`. Al cambiar categoría se limpia el
+  producto seleccionado.
+
+**5. Antigüedad laboral como CHECKBOX de reglamento** (aplica a `/creditos`
+walk-in y a `/sales` método "Al crédito"):
+- Antes: input numérico editable (`12` por default) que el vendedor podía
+  cambiar a cualquier valor sin que cambiara nada en el cálculo.
+- Ahora: **checkbox** con el texto *"Antigüedad laboral mínima (12 meses) —
+  Requisito por reglamento. El vendedor confirma que el cliente lo cumple."*
+- El botón de aprobar queda **deshabilitado** hasta que se marque el checkbox.
+- Al enviar al backend se manda `antiguedad_meses: 12` fijo (la constante
+  `ANTIGUEDAD_MINIMA_MESES` en el frontend). No se toca el schema — la tabla
+  `checklist_credito` sigue con la columna `antiguedad_meses` para no romper
+  compatibilidad.
+
+**6. Botón "Cobrar inicial y crear crédito" → "Iniciar crédito"**:
+- Texto más corto y menos declarativo. La emisión de factura y el envío al
+  correo del cliente se explican en el flujo, no en el CTA.
+- Aplica en el modal de checklist de `/creditos` y en el de `/sales`.
+- La inicial se sigue cobrando en **efectivo** de forma automática (regla del
+  negocio: el walk-in es presencial y el cliente firma pagando en billetes).
+  La factura HTML con la inicial cobrada le llega al correo igual.
+
+**7. Proyección de cobros de la cartera — expandible:**
+- Antes: se listaban TODOS los meses con cuotas pendientes uno al lado del
+  otro. Con muchos créditos activos se llenaba la vista.
+- Ahora: **por default se muestran los próximos 6 meses**. Cuando hay más
+  aparece el link *"▼ Ver todos (N meses)"* para expandir y
+  *"▲ Mostrar solo próximos 6"* para volver a contraer.
+
+Commits: ff64347b (fix 500 del walk-in), 9b76e2e7 (mejoras UX walk-in y
+cartera). Rama `rama_de_jose_carlos` en `equipo/…`.
+
 ---
 
 ## Actor × Caso de Uso
