@@ -313,20 +313,18 @@ class ConfirmCheckoutView(APIView):
 def _marcar_cuota_pagada_desde_stripe(cuota, session):
     """
     Marca una cuota como pagada procesando una CheckoutSession de Stripe ya
-    confirmada. Actualiza saldo del plan, refresca moras, emite numero_factura,
-    manda el correo con factura_cuota.html + campana. Es IDEMPOTENTE: si la
-    cuota ya está pagada, no reprocesa nada.
+    confirmada. Actualiza saldo del plan, refresca moras, emite numero_factura
+    y delega el envío del correo/campana al helper _notificar_cuota_pagada
+    (compartido con el cobro presencial en efectivo). Es IDEMPOTENTE.
 
     Devuelve el PlanCredito refrescado (para serializar la respuesta).
     """
     from decimal import Decimal
     from django.utils import timezone
-    from .models import PlanCredito
     from .views import (
-        _2d, _siguiente_numero_factura_credito, _render_factura_credito,
-        _refrescar_moras, EMPRESA_FACTURA,
+        _2d, _siguiente_numero_factura_credito,
+        _refrescar_moras, _notificar_cuota_pagada,
     )
-    from apps.users.views import crear_notificacion
 
     plan = cuota.plan
 
@@ -357,53 +355,17 @@ def _marcar_cuota_pagada_desde_stripe(cuota, session):
     _refrescar_moras(plan)   # 'pagado' si todas cerradas, sino 'vigente'/'moroso'
     plan.refresh_from_db()
 
-    # Correo con la factura de la cuota
-    cliente = plan.cliente
-    if cliente and getattr(cliente, 'correo', ''):
-        try:
-            cuotas_ordenadas = list(plan.cuotas.order_by('numero'))
-            cuotas_pagadas = sum(1 for c in cuotas_ordenadas if c.estado == 'pagada')
-            cuotas_restantes = plan.n_cuotas - cuotas_pagadas
-            total_pagado = _2d(Decimal(str(cuota.monto)) + Decimal(str(cuota.mora)))
-            # Comprobante de Stripe si el PaymentIntent tiene charge asociado
-            stripe_receipt_url = None
-            try:
-                if payment_intent_id:
-                    pi = _stripe().PaymentIntent.retrieve(payment_intent_id, expand=['latest_charge'])
-                    charge = pi.get('latest_charge') or {}
-                    stripe_receipt_url = charge.get('receipt_url')
-            except Exception:
-                pass
+    # Recupero receipt_url de Stripe (opcional) para incluirlo en el correo
+    stripe_receipt_url = None
+    try:
+        if payment_intent_id:
+            pi = _stripe().PaymentIntent.retrieve(payment_intent_id, expand=['latest_charge'])
+            charge = pi.get('latest_charge') or {}
+            stripe_receipt_url = charge.get('receipt_url')
+    except Exception:
+        pass
 
-            producto = plan.producto
-            html = _render_factura_credito('facturas/factura_cuota.html', {
-                'cliente': {
-                    'nombre':   f'{cliente.nombre or ""} {cliente.apellido or ""}'.strip() or 'Cliente',
-                    'ci':       getattr(cliente, 'ci', None) or getattr(cliente, 'documento', None),
-                    'correo':   cliente.correo,
-                    'telefono': getattr(cliente, 'telefono', None),
-                },
-                'plan':              plan,
-                'producto_nombre':   producto.nombre if producto else '—',
-                'cuota':             cuota,
-                'cuotas':            cuotas_ordenadas,
-                'cuotas_pagadas':    cuotas_pagadas,
-                'cuotas_restantes':  cuotas_restantes,
-                'total_pagado':      total_pagado,
-                'saldo_restante':    plan.saldo,
-                'stripe_receipt_url': stripe_receipt_url,
-            })
-            crear_notificacion(
-                tipo='credito',
-                titulo=f'Pago de cuota confirmado — {cuota.numero_factura}',
-                mensaje=(f'Cobramos la cuota {cuota.numero}/{plan.n_cuotas} de tu crédito '
-                         f'({plan.numero_factura}) por Bs {float(total_pagado):.2f}.'),
-                cliente_id=cliente.id, enlace='/mis-creditos',
-                canal='ambos', email=cliente.correo, html=html,
-            )
-        except Exception:
-            pass  # el correo no debe romper el request
-
+    _notificar_cuota_pagada(cuota, stripe_receipt_url=stripe_receipt_url)
     return plan
 
 

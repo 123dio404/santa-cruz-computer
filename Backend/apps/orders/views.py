@@ -1432,6 +1432,57 @@ def _render_factura_credito(template_name, context):
     return render_to_string(template_name, ctx)
 
 
+def _notificar_cuota_pagada(cuota, stripe_receipt_url=None):
+    """
+    Envía la factura de la cuota al cliente por correo (Brevo) + campana.
+    Se usa desde el cobro presencial en efectivo (PATCH /pagar-cuota/) y también
+    desde el cobro Stripe (return-URL / verificar-pendiente). El template es
+    el mismo (facturas/factura_cuota.html); solo cambia `stripe_receipt_url`
+    cuando aplica.
+
+    Espera que la cuota YA esté cerrada (estado='pagada', numero_factura seteado,
+    saldo del plan actualizado). No modifica nada aquí.
+    """
+    plan = cuota.plan
+    cliente = plan.cliente
+    if not (cliente and getattr(cliente, 'correo', '')):
+        return
+    try:
+        from apps.users.views import crear_notificacion
+        cuotas_ordenadas = list(plan.cuotas.order_by('numero'))
+        cuotas_pagadas = sum(1 for c in cuotas_ordenadas if c.estado == 'pagada')
+        cuotas_restantes = plan.n_cuotas - cuotas_pagadas
+        total_pagado = _2d(Decimal(str(cuota.monto)) + Decimal(str(cuota.mora)))
+        producto = plan.producto
+        html = _render_factura_credito('facturas/factura_cuota.html', {
+            'cliente': {
+                'nombre':   f'{cliente.nombre or ""} {cliente.apellido or ""}'.strip() or 'Cliente',
+                'ci':       getattr(cliente, 'ci', None) or getattr(cliente, 'documento', None),
+                'correo':   cliente.correo,
+                'telefono': getattr(cliente, 'telefono', None),
+            },
+            'plan':               plan,
+            'producto_nombre':    producto.nombre if producto else '—',
+            'cuota':              cuota,
+            'cuotas':             cuotas_ordenadas,
+            'cuotas_pagadas':     cuotas_pagadas,
+            'cuotas_restantes':   cuotas_restantes,
+            'total_pagado':       total_pagado,
+            'saldo_restante':     plan.saldo,
+            'stripe_receipt_url': stripe_receipt_url,
+        })
+        crear_notificacion(
+            tipo='credito',
+            titulo=f'Pago de cuota confirmado — {cuota.numero_factura or "sin factura"}',
+            mensaje=(f'Cobramos la cuota {cuota.numero}/{plan.n_cuotas} de tu crédito '
+                     f'({plan.numero_factura}) por Bs {float(total_pagado):.2f}.'),
+            cliente_id=cliente.id, enlace='/mis-creditos',
+            canal='ambos', email=cliente.correo, html=html,
+        )
+    except Exception:
+        pass  # el fallo del correo no debe romper el request
+
+
 def _refrescar_moras(plan):
     """
     Marca como 'vencida' las cuotas pendientes cuyo vencimiento ya pasó y les
@@ -1881,11 +1932,16 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['patch'], url_path='pagar-cuota')
     def pagar_cuota(self, request):
-        """Registrar el pago de una cuota (marca pagada, baja el saldo del plan)."""
+        """
+        Registrar el cobro PRESENCIAL en EFECTIVO de una cuota. Marca la cuota
+        pagada, actualiza el saldo del plan, emite `numero_factura` desde la
+        SEQUENCE, guarda `metodo_pago='efectivo'` y envía la factura al cliente
+        (correo Brevo + campana) con el template `facturas/factura_cuota.html`.
+        """
         from django.utils import timezone
         cuota_id = request.data.get('cuota')
         try:
-            cuota = Cuota.objects.select_related('plan').get(pk=cuota_id)
+            cuota = Cuota.objects.select_related('plan', 'plan__cliente', 'plan__producto').get(pk=cuota_id)
         except Cuota.DoesNotExist:
             return Response({'error': 'La cuota no existe.'}, status=status.HTTP_404_NOT_FOUND)
         if cuota.estado == 'pagada':
@@ -1896,10 +1952,15 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
         usuario_id = actor.get('usuario_id') if actor.get('usuario_rol') in ('admin', 'vendedor') else None
 
         pagado_total = _2d(Decimal(str(cuota.monto)) + Decimal(str(cuota.mora)))
-        cuota.estado = 'pagada'
-        cuota.fecha_pago = timezone.now()
+        cuota.estado           = 'pagada'
+        cuota.fecha_pago       = timezone.now()
         cuota.usuario_cobro_id = usuario_id
-        cuota.save(update_fields=['estado', 'fecha_pago', 'usuario_cobro'])
+        cuota.metodo_pago      = 'efectivo'
+        if not cuota.numero_factura:
+            cuota.numero_factura = _siguiente_numero_factura_credito()
+        cuota.save(update_fields=[
+            'estado', 'fecha_pago', 'usuario_cobro', 'metodo_pago', 'numero_factura',
+        ])
 
         # Bajar el saldo del plan (solo el capital de la cuota, la mora es recargo aparte)
         nuevo_saldo = _2d(Decimal(str(plan.saldo)) - Decimal(str(cuota.monto)))
@@ -1910,12 +1971,17 @@ class PlanCreditoViewSet(viewsets.ModelViewSet):
         try:
             log_action(
                 accion='UPDATE', modulo='Crédito',
-                descripcion=(f'Cobro de la cuota {cuota.numero}/{plan.n_cuotas} del plan #{plan.id} — '
-                             f'Bs {pagado_total}' + (f' (incluye mora Bs {cuota.mora})' if cuota.mora else '')),
+                descripcion=(f'Cobro EFECTIVO cuota {cuota.numero}/{plan.n_cuotas} del plan #{plan.id} — '
+                             f'Bs {pagado_total}, factura {cuota.numero_factura}'
+                             + (f' (incluye mora Bs {cuota.mora})' if cuota.mora else '')),
                 **actor,
             )
         except Exception:
             pass
+
+        # Correo con factura + campana al cliente
+        _notificar_cuota_pagada(cuota)
+
         plan.refresh_from_db()
         return Response(PlanCreditoSerializer(plan).data)
 
