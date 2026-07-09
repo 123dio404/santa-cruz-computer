@@ -276,13 +276,143 @@ calcula el plan y muestra la **simulación** (financiado, recargo, inicial, cuot
 `GET/POST /planes-credito/`, `/simular/`, `/bloqueo/`, `PATCH /pagar-cuota/`, `/cartera/`.
 Menú **Créditos** (admin + vendedor). Frontend: `Creditos.tsx` + `creditoAPI`.
 
+## Refactor CU28/CU29 (2026-07-09)
+
+El flujo original tenía un problema: la venta se cobraba al contado en `/sales`
+y después había que ir a `/creditos` a "crear un plan" sobre esa venta ya
+cobrada. Al hacer QA se detectó incoherencia. El refactor **elimina el paso
+intermedio**: la venta nace al crédito, atómicamente, con checklist embebido
+y factura HTML por correo.
+
+**1. SQL nuevo `010_checklist_credito.sql`:**
+- Tabla nueva `checklist_credito` (1:1 con `plan_credito`, `ON DELETE CASCADE`).
+  Guarda `tipo_empleo` (dependiente/independiente), `antiguedad_meses`, 3 booleans
+  comunes (`ci_solicitante`, `ci_conyuge`, `factura_servicios`), 2 booleans del
+  dependiente (`boletas_pago`, `extracto_gestora`) y 6 del independiente
+  (`facturas_ultimo_ano`, `estados_financieros`, `nit`, `croquis_domicilio`,
+  `croquis_negocio`, `respaldos_patrimoniales`), `observaciones` y `fecha_verificacion`.
+- ALTER `plan_credito`: `origen VARCHAR(20)` (walk_in | al_credito_sales) y
+  `numero_factura VARCHAR(20)`.
+- ALTER `cuota`: `stripe_payment_intent_id`, `stripe_session_pending`,
+  `metodo_pago` (efectivo | stripe), `numero_factura`.
+- SEQUENCE `factura_credito_seq` — correlativo único global para las facturas
+  del módulo, formateadas como `FCR-2026-000042`.
+- Todo idempotente con `IF NOT EXISTS`.
+
+**2. Endpoints nuevos (backend):**
+- `POST /planes-credito/walk-in/` — flujo presencial en `/creditos`. Crea de
+  forma atómica: venta + detalle + PagoVenta con la inicial en efectivo + plan
+  con `origen='walk_in'` + checklist + N cuotas + `numero_factura`. Fuerza la
+  venta a `completed`/`entregado` porque el producto sale al firmar el crédito.
+- `POST /planes-credito/desde-venta/` — flujo desde `/sales` cuando el vendedor
+  elige el método de pago "Al crédito". Idéntico al walk-in salvo por `origen='al_credito_sales'`.
+- `GET  /planes-credito/mis-creditos/` — vista del CLIENTE logueado (filtra por
+  el `user_id` del JWT). Devuelve todos sus créditos + resumen (activos, saldo,
+  próxima cuota, cuotas vencidas). 401 si no hay token, 403 si el rol no es cliente.
+- `POST /stripe/checkout-cuota/` — el cliente inicia el pago online de una
+  cuota. Crea Checkout Session por `monto + mora` y guarda `session.id` en
+  `cuota.stripe_session_pending` para el fallback.
+- `POST /stripe/confirmar-cuota/` — return-URL tras pagar. Verifica en Stripe,
+  cierra la cuota (idempotente), emite `numero_factura`, envía factura al cliente.
+- `POST /stripe/verificar-cuota-pendiente/` — botón "¿Ya pagaste?" para
+  recuperar sesiones cuando el cliente cerró la pestaña. Reusa el mismo helper.
+
+**3. Refactor de `PATCH /planes-credito/pagar-cuota/`** (cobro presencial):
+- Guarda `metodo_pago='efectivo'` y emite `numero_factura` desde la SEQUENCE.
+- Delega el envío de correo/campana al helper compartido con el pago Stripe.
+
+**4. Templates HTML de factura** (`Backend/templates/facturas/`):
+- `factura_inicial.html`: banda azul, logo, datos empresa (NIT), datos cliente,
+  tabla precio base + recargo + financiado, caja verde con la inicial cobrada,
+  cronograma completo de las N cuotas con fechas.
+- `factura_cuota.html`: banda verde, monto pagado destacado, mora si aplica,
+  método (Efectivo/Stripe con link al recibo si hay), progreso visual (✓/!/·),
+  saldo restante del crédito.
+- Ambos renderizados con `Backend/apps/orders/views.py::_render_factura_credito`
+  (helper que inyecta logo_url, frontend_url, empresa por default).
+
+**5. Frontend — 4to método de pago "Al crédito" en `Sales.tsx`:**
+- Ícono `Wallet`, color morado.
+- Restricciones visibles: 1 solo producto por venta, cliente registrado
+  obligatorio, precio unitario Bs 1–15.000.
+- Al elegir cliente + método crédito → chequeo automático de bloqueo
+  (mora → rojo, tope de 3 activos → rojo, 2 activos → advertencia naranja).
+- Simulación en vivo del plan (precio base, recargo, financiado, inicial, cuotas).
+- Botón "Aprobar crédito" reemplaza "Ver Factura" cuando el método es crédito.
+- Modal de checklist embebido con tipo empleo + docs correspondientes + obs.
+- Al éxito muestra el `numero_factura` FCR y limpia el carrito.
+
+**6. Frontend — pestaña "+ Nuevo crédito presencial" en `Creditos.tsx`:**
+- Reemplaza a la vieja "Registrar" (que dependía de una venta al contado previa).
+- Búsqueda de cliente por nombre/CI/correo con vista previa del bloqueo.
+- Búsqueda de producto auto-filtrada por rango Bs 1–15.000 y stock disponible.
+- Simulación en vivo + modal de checklist embebido idéntico al de `/sales`.
+- **Pestaña Cartera** mejorada: el `confirm()` nativo del cobro se reemplaza
+  por un modal con desglose (monto + mora + total) y aviso de que se enviará
+  factura. Toast al cobrar con el `numero_factura` FCR.
+
+**7. Frontend — nueva página `/mis-creditos` (rol cliente):**
+- Header con 4 cards (planes activos, saldo pendiente, cuotas pendientes/vencidas).
+- Banner destacado con la próxima cuota (rojo si vencida).
+- Lista de créditos colapsables con cronograma completo de cuotas.
+- Botón "Pagar" en cuotas pendientes/vencidas → Stripe Checkout hospedado.
+- Botón "¿Ya pagaste?" cuando la cuota tiene `stripe_session_pending`.
+- Al volver del return-URL de Stripe (`?cuota_confirm=cs_xxx`) se llama automático
+  a `confirmar-cuota`, se muestra toast del resultado y se limpia el query param
+  con `setParams(replace)` para que un F5 no reintente.
+- Modales de comprobante imprimible para la inicial y para cada cuota pagada.
+- Aviso rojo en créditos morosos recordando que no puede tomar nuevos créditos.
+- Ruta protegida con `allowedRoles=['client']`, ítem "Mis Créditos" en el menú
+  del cliente.
+
+**8. QA — casos borde verificados:**
+- **Mora**: `_crear_credito_atomico` bloquea si `venc > 0`; frontend muestra
+  banner rojo en `/sales`, `/creditos` walk-in y `/mis-creditos`.
+- **Tope de 3 activos**: bloqueo al 3ro futuro; advertencia naranja al llegar
+  a 2 (`bloqueo.motivo` retorna `mora` | `limite` | `advertencia` | null).
+- **Cliente sin cuenta**: deshabilita el CTA en `/sales` y en `/creditos` walk-in.
+- **Precio fuera de rango**: `calcular_credito` retorna None → 400 en backend
+  y motivo visible en frontend.
+- **Stripe cerrar pestaña**: `cuota.stripe_session_pending` persiste la sesión;
+  el botón "¿Ya pagaste?" la recupera vía `/stripe/verificar-cuota-pendiente/`.
+- **Reload de la página de confirmación**: `setParams(next, {replace:true})`
+  limpia el `?cuota_confirm=` y el backend responde `estado_pago='ya_pagada'`
+  sin reprocesar.
+
+**9. Fix de UX en `Orders.tsx`** (Mis Pedidos del cliente):
+- `VentaSerializer` expone `es_credito` y `credito_plan_id` (con prefetch para
+  evitar N+1). El frontend muestra un badge indigo **"💳 Al crédito · Ver en
+  Mis Créditos"** con link cuando la venta tiene un plan asociado, para que el
+  cliente no confunda el total base con el total pagado hoy.
+
+**Flujo final del cliente:**
+1. Vendedor arma el crédito desde `/sales` (metodo "Al crédito") o desde
+   `/creditos` (walk-in), cobra la inicial en efectivo y firma el checklist.
+2. Sistema crea todo atómico + emite `FCR-2026-000042` + envía factura HTML
+   con el cronograma completo al correo del cliente + notificación campana.
+3. Cliente entra a `/mis-creditos`, ve sus créditos con la próxima cuota
+   destacada.
+4. Cliente paga cuotas online con tarjeta (Stripe Checkout) o presencialmente
+   en efectivo con el vendedor.
+5. Cada cobro emite otra factura FCR-… y le llega por correo con el progreso
+   visual y saldo restante.
+
+**Estado:** 12 pasos completos, ~15 commits (`97389591` → `aca20537`) en la
+rama `rama_de_jose_carlos`. Todo pusheado a `equipo/rama_de_jose_carlos`.
+
+Commits: 97389591 (SQL 010 + modelo checklist + walk-in), 6d97c577 (templates
+factura HTML), ef4bfc8b (desde-venta), a84d5959 (mis-creditos), d6f195f4
+(Stripe 3 endpoints), 94a1f879 (Sales.tsx método Al crédito), a38370b9 (cobro
+efectivo helper compartido), 1bd4bfef (Creditos.tsx walk-in + toast), 31f4797d
+(MisCreditos.tsx + rutas + menú), aca20537 (QA + es_credito en Mis Pedidos).
+
 ---
 
 ## Actor × Caso de Uso
 
 | | CU20 | CU21 | CU22 | CU23 | CU24 | CU25 | CU26 | CU27 | CU28 | CU29 |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| Cliente | ✅ | ✅ | ✅ | ✅ | | ✅ | ✅ | ✅ | ✅ | |
-| Vendedor | | ✅ | | ✅ | | ✅ | ✅ | | ✅ | |
+| Cliente | ✅ | ✅ | ✅ | ✅ | | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Vendedor | | ✅ | | ✅ | | ✅ | ✅ | | ✅ | ✅ |
 | Admin | | ✅ | | ✅ | ✅ | ✅ | ✅ | | ✅ | ✅ |
 | Técnico | | ✅ | | | | ✅ | ✅ | ✅ | | |
