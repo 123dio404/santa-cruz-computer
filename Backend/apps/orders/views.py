@@ -962,6 +962,12 @@ class OrdenServicioViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         p = self.request.query_params
+        # Un cliente logueado SOLO puede ver sus propias órdenes.
+        # Sin esto, /ordenes-servicio/ devuelve todo el sistema y en la
+        # pantalla "Mis Servicios" el cliente ve órdenes de otros clientes.
+        auth = getattr(self.request, 'auth', None) or {}
+        if auth.get('role') == 'cliente':
+            qs = qs.filter(cliente_id=auth.get('user_id'))
         if p.get('tecnico'):
             qs = qs.filter(tecnico_id=p['tecnico'])
         if p.get('cliente'):

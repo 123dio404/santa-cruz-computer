@@ -24,6 +24,13 @@ import { authAPI, clearAuthToken, clientesAPI } from '../services/api';
 // Clave usada para guardar el usuario en localStorage
 const STORAGE_KEY = 'user';
 
+// El carrito vive en localStorage sin dueño. Al cambiar de sesión (login,
+// register, logout, expiración) se limpia para que los productos del usuario
+// anterior no aparezcan como "seleccionados" al siguiente que use el navegador.
+const clearGuestCart = () => {
+  try { localStorage.removeItem('storeCart'); } catch { /* ignore */ }
+};
+
 // Corte de sesión por inactividad: 30 minutos sin interacción → logout automático.
 const IDLE_LIMIT_MS = 30 * 60 * 1000;
 
@@ -200,6 +207,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const endSession = (reason: 'expired' | 'idle') => {
     clearAuthToken();
     localStorage.removeItem(STORAGE_KEY);
+    clearGuestCart();
     setUser(null);
     if (!window.location.pathname.startsWith('/login')) {
       window.location.href = `/login?${reason}=1`;
@@ -296,6 +304,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRegisteredUsers(prev =>
         prev.find(u => u.email === frontendUser.email) ? prev : [...prev, frontendUser]
       );
+      clearGuestCart();
       setUser(frontendUser);
       return { success: true, message: '✅ Sesión iniciada correctamente', loggedInUser: frontendUser };
 
@@ -327,6 +336,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const userData = user
       ? { usuario_id: Number(user.id), usuario_nombre: user.username, usuario_rol: user.role }
       : undefined;
+    clearGuestCart();
     authAPI.logout(userData).finally(() => setUser(null));
   };
 
@@ -392,6 +402,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ...userData,
     };
     setRegisteredUsers([...registeredUsers, newUser]);
+    clearGuestCart();
     setUser(newUser);
     return { success: true, message: 'Cuenta creada exitosamente' };
   };
