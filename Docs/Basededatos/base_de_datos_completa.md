@@ -1,22 +1,37 @@
 # Base de datos completa — Santa Cruz Computer
 
-> Sistema de ventas e inventario. Motor: **PostgreSQL 17**. Esquema: `public`.
-> Este documento reúne **todo el SQL de la base de datos** en un solo lugar.
+> Sistema de ventas, inventario y servicio técnico. Motor: **PostgreSQL 17**. Esquema: `public`.
+> Este documento reúne **todo el SQL de la base de datos**, ya consolidado y ordenado.
 
-## Contenido
+## Estado actual
 
-1. **Esquema + datos base** — exportación completa con `pg_dump` (estructura de las 22 tablas, tipos `ENUM`, secuencias, llaves foráneas, índices y datos). Corresponde al dump `Santacruzcomputerfinal.sql`.
-2. **Scripts incrementales** — cambios aplicados después del dump (en local y en Railway) que dejan la BD al día:
-   - `001_descuento_vip.sql` — columnas de descuento VIP.
-   - `002_garantia.sql` — garantías por producto (columna `meses_garantia` + tabla `garantia`).
-   - `003_resena.sql` — reseñas/opiniones de la tienda (tabla `resena`).
+**34 tablas** = las 22 del dump original de Railway + 12 que agregaron los scripts incrementales.
+Los 13 scripts (`001`–`013`) ya están **fusionados** en el esquema de la Parte 1: cada tabla se
+muestra con **todas** sus columnas finales. Los scripts quedan al final (Parte 4) solo como historial.
 
-> ⚠️ Para recrear la base de datos **actual** ejecuta primero el bloque 1 (esquema + datos) y luego, en orden, los 3 scripts incrementales del bloque 2.
+## Orden del documento
+
+| Parte | Contenido | Para qué sirve |
+|---|---|---|
+| **1. Esquema** | Tipos `ENUM`, secuencias, las 34 tablas y sus claves primarias | La **estructura** de la BD |
+| **2. Datos registrados** | Los `COPY` de las 22 tablas + el catálogo de servicios + los `setval` | Los **datos** |
+| **3. Lógica, integridad y rendimiento** | Funciones, triggers, llaves foráneas, índices y permisos | Lo que hace que la BD **se comporte** |
+| **4. Anexo** | Los 13 scripts incrementales tal como se corrieron | **Historial** (ya no hace falta ejecutarlos) |
+
+> ### ▶️ Cómo recrear la base desde cero
+> Ejecuta la **Parte 1 → Parte 2 → Parte 3**, en ese orden. Nada más.
+> La Parte 4 es solo referencia: sus cambios ya están dentro de las partes 1–3.
+>
+> **Por qué este orden:** las llaves foráneas y los índices van *después* de cargar los datos
+> (Parte 3) porque así Postgres no valida ni reindexa fila por fila — la carga es mucho más rápida.
+> Las claves primarias sí van en la Parte 1, porque las tablas nuevas las necesitan para
+> poder apuntar hacia ellas.
 
 ---
 
-## 1. Esquema + datos base (dump completo)
+# PARTE 1 — ESQUEMA
 
+## 1.1 Configuración de la sesión
 ```sql
 --
 -- PostgreSQL database dump
@@ -38,23 +53,12 @@ SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
+```
 
---
--- Name: public; Type: SCHEMA; Schema: -; Owner: postgres
---
+## 1.2 Tipos `ENUM`
 
--- *not* creating schema, since initdb creates it
-
-
-ALTER SCHEMA public OWNER TO postgres;
-
---
--- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: postgres
---
-
-COMMENT ON SCHEMA public IS '';
-
-
+Cuatro tipos propios que usan `venta`, `pagoventa` y `factura`.
+```sql
 --
 -- Name: estado_entrega; Type: TYPE; Schema: public; Owner: postgres
 --
@@ -106,206 +110,43 @@ CREATE TYPE public.metodo_pago_enum AS ENUM (
 
 
 ALTER TYPE public.metodo_pago_enum OWNER TO postgres;
+```
 
+## 1.3 Secuencias (autonuméricos)
+
+Una por cada tabla base con id autoincremental, más el correlativo de facturas de crédito.
+```sql
 --
--- Name: trg_actualizar_estado_venta(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.trg_actualizar_estado_venta() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    v_total DECIMAL(10,2);
-    v_pagado DECIMAL(10,2);
-    v_idventa INT;
-    v_pedido_online BOOLEAN;
-BEGIN
-    -- Obtenemos el ID de la venta afectada
-    v_idventa := COALESCE(NEW.IdVenta, OLD.IdVenta);
-
-    -- Obtenemos datos actuales de la venta
-    SELECT monto_total, pedido_online
-    INTO v_total, v_pedido_online
-    FROM Venta
-    WHERE IdVenta = v_idventa;
-
-    -- LÓGICA DE NEGOCIO:
-    -- Si es pedido online, NO actualizamos el estado automáticamente.
-    -- Esto obliga a que el vendedor valide el pago y el stock antes de pasar a 'completed'.
-    IF v_pedido_online THEN
-        RETURN NULL; 
-    END IF;
-
-    -- Si es venta física (tienda), procedemos con la automatización normal
-    SELECT COALESCE(SUM(monto), 0)
-    INTO v_pagado
-    FROM PagoVenta
-    WHERE IdVenta = v_idventa;
-
-    IF v_pagado >= v_total AND v_total > 0 THEN
-        UPDATE Venta SET estado = 'completed' WHERE IdVenta = v_idventa;
-    ELSE
-        UPDATE Venta SET estado = 'pending' WHERE IdVenta = v_idventa;
-    END IF;
-
-    RETURN NULL;
-END;
-$$;
-
-
-ALTER FUNCTION public.trg_actualizar_estado_venta() OWNER TO postgres;
-
---
--- Name: trg_actualizar_total_compra(); Type: FUNCTION; Schema: public; Owner: postgres
+-- Name: factura_credito_seq; Type: SEQUENCE; Schema: public
+-- Origen: 010_checklist_credito.sql
+-- Correlativo de las facturas del modulo de credito. El backend lo formatea
+-- como 'FCR-{año}-{correlativo:06d}'  ->  FCR-2026-000142
 --
 
-CREATE FUNCTION public.trg_actualizar_total_compra() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
+CREATE SEQUENCE public.factura_credito_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+```
 
-UPDATE Compra
-SET monto_total = (
-    SELECT COALESCE(
-        SUM(cantidad * costo_unitario),
-        0
-    )
-    FROM DetalleCompra
-    WHERE IdCompra = COALESCE(NEW.IdCompra, OLD.IdCompra)
-)
-WHERE IdCompra = COALESCE(NEW.IdCompra, OLD.IdCompra);
+> Las secuencias de las 22 tablas base (`cliente_idcliente_seq`, `venta_idventa_seq`, …) se
+> declaran junto a su tabla en §1.4, tal como las emite `pg_dump`. Las 12 tablas nuevas usan
+> `SERIAL`, que crea su secuencia automáticamente.
 
-RETURN NULL;
+## 1.4 Tablas base (22)
 
-END;
-$$;
+Las que venían en el dump original de Railway. **Ya incluyen las columnas que agregaron los
+scripts incrementales**, marcadas abajo:
 
-
-ALTER FUNCTION public.trg_actualizar_total_compra() OWNER TO postgres;
-
---
--- Name: trg_actualizar_total_venta(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.trg_actualizar_total_venta() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-
-UPDATE Venta
-SET monto_total = (
-    SELECT COALESCE(
-        SUM(subtotal),
-        0
-    )
-    FROM DetalleVenta
-    WHERE IdVenta = COALESCE(NEW.IdVenta, OLD.IdVenta)
-)
-WHERE IdVenta = COALESCE(NEW.IdVenta, OLD.IdVenta);
-
-RETURN NULL;
-
-END;
-$$;
-
-
-ALTER FUNCTION public.trg_actualizar_total_venta() OWNER TO postgres;
-
---
--- Name: trg_gestionar_stock_venta(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.trg_gestionar_stock_venta() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-
-IF TG_OP = 'INSERT' THEN
-
-    UPDATE Producto
-    SET stock_fisico = stock_fisico - NEW.cantidad
-    WHERE IdProducto = NEW.IdProducto;
-
-END IF;
-
-IF TG_OP = 'UPDATE' THEN
-
-    UPDATE Producto
-    SET stock_fisico =
-        stock_fisico + OLD.cantidad - NEW.cantidad
-    WHERE IdProducto = NEW.IdProducto;
-
-END IF;
-
-IF TG_OP = 'DELETE' THEN
-
-    UPDATE Producto
-    SET stock_fisico = stock_fisico + OLD.cantidad
-    WHERE IdProducto = OLD.IdProducto;
-
-END IF;
-
-RETURN NULL;
-
-END;
-$$;
-
-
-ALTER FUNCTION public.trg_gestionar_stock_venta() OWNER TO postgres;
-
---
--- Name: trg_sumar_stock_compra(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.trg_sumar_stock_compra() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-
-UPDATE Producto
-SET stock_fisico = stock_fisico + NEW.cantidad
-WHERE IdProducto = NEW.IdProducto;
-
-RETURN NEW;
-
-END;
-$$;
-
-
-ALTER FUNCTION public.trg_sumar_stock_compra() OWNER TO postgres;
-
---
--- Name: trg_validar_stock(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.trg_validar_stock() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-v_stock INT;
-BEGIN
-
-SELECT stock_fisico
-INTO v_stock
-FROM Producto
-WHERE IdProducto = NEW.IdProducto;
-
-IF v_stock < NEW.cantidad THEN
-    RAISE EXCEPTION
-    'Stock insuficiente. Disponible: %',
-    v_stock;
-END IF;
-
-RETURN NEW;
-
-END;
-$$;
-
-
-ALTER FUNCTION public.trg_validar_stock() OWNER TO postgres;
-
-SET default_tablespace = '';
-
+| Tabla | Columnas añadidas | Script |
+|---|---|---|
+| `cliente` | `total_acumulado`, `descuento_disponible` | `001` |
+| `venta` | `descuento_aplicado` | `001` |
+| `producto` | `meses_garantia` | `002` |
+| `usuario` | el `CHECK` de `rol` ahora admite `'tecnico'` | `008` |
+```sql
 SET default_table_access_method = heap;
 
 --
@@ -569,7 +410,9 @@ CREATE TABLE public.cliente (
     fecha_nacimiento date,
     nit_ci character varying(20),
     razon_social character varying(150),
-    password character varying(255)
+    password character varying(255),
+    total_acumulado numeric(12,2) DEFAULT 0 NOT NULL,
+    descuento_disponible numeric(10,2) DEFAULT 0 NOT NULL
 );
 
 
@@ -906,6 +749,7 @@ CREATE TABLE public.producto (
     stock_fisico integer DEFAULT 0,
     stock_minimo integer DEFAULT 0,
     descripcion text,
+    meses_garantia integer DEFAULT 0 NOT NULL,
     CONSTRAINT producto_precio_actual_check CHECK ((precio_actual > (0)::numeric)),
     CONSTRAINT producto_precio_compra_check CHECK ((precio_compra >= (0)::numeric)),
     CONSTRAINT producto_stock_fisico_check CHECK ((stock_fisico >= 0)),
@@ -995,7 +839,7 @@ CREATE TABLE public.usuario (
     telefono character varying(20),
     ciudad character varying(100),
     fecha_nacimiento date,
-    CONSTRAINT usuario_rol_check CHECK (((rol)::text = ANY ((ARRAY['admin'::character varying, 'vendedor'::character varying])::text[])))
+    CONSTRAINT usuario_rol_check CHECK (((rol)::text = ANY ((ARRAY['admin'::character varying, 'vendedor'::character varying, 'tecnico'::character varying])::text[])))
 );
 
 
@@ -1036,6 +880,7 @@ CREATE TABLE public.venta (
     estado public.estado_venta DEFAULT 'pending'::public.estado_venta NOT NULL,
     estado_entrega public.estado_entrega DEFAULT 'pendiente'::public.estado_entrega NOT NULL,
     pedido_online boolean DEFAULT false NOT NULL,
+    descuento_aplicado numeric(10,2) DEFAULT 0 NOT NULL,
     CONSTRAINT chk_entrega_pago CHECK ((NOT ((estado = 'pending'::public.estado_venta) AND (estado_entrega = 'entregado'::public.estado_entrega))))
 );
 
@@ -1062,8 +907,10 @@ ALTER SEQUENCE public.venta_idventa_seq OWNER TO postgres;
 --
 
 ALTER SEQUENCE public.venta_idventa_seq OWNED BY public.venta.idventa;
+```
 
-
+### Valores por defecto (`nextval`) de las tablas base
+```sql
 --
 -- Name: bitacora idbitacora; Type: DEFAULT; Schema: public; Owner: postgres
 --
@@ -1146,8 +993,553 @@ ALTER TABLE ONLY public.usuario ALTER COLUMN idusuario SET DEFAULT nextval('publ
 --
 
 ALTER TABLE ONLY public.venta ALTER COLUMN idventa SET DEFAULT nextval('public.venta_idventa_seq'::regclass);
+```
+
+## 1.5 Claves primarias y únicas (tablas base)
+```sql
+--
+-- Name: auth_group auth_group_name_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group
+    ADD CONSTRAINT auth_group_name_key UNIQUE (name);
 
 
+--
+-- Name: auth_group_permissions auth_group_permissions_group_id_permission_id_0cd325b0_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group_permissions
+    ADD CONSTRAINT auth_group_permissions_group_id_permission_id_0cd325b0_uniq UNIQUE (group_id, permission_id);
+
+
+--
+-- Name: auth_group_permissions auth_group_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group_permissions
+    ADD CONSTRAINT auth_group_permissions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_group auth_group_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_group
+    ADD CONSTRAINT auth_group_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_permission auth_permission_content_type_id_codename_01ab375a_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_permission
+    ADD CONSTRAINT auth_permission_content_type_id_codename_01ab375a_uniq UNIQUE (content_type_id, codename);
+
+
+--
+-- Name: auth_permission auth_permission_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_permission
+    ADD CONSTRAINT auth_permission_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_user_groups auth_user_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_groups
+    ADD CONSTRAINT auth_user_groups_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_user_groups auth_user_groups_user_id_group_id_94350c0c_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_groups
+    ADD CONSTRAINT auth_user_groups_user_id_group_id_94350c0c_uniq UNIQUE (user_id, group_id);
+
+
+--
+-- Name: auth_user auth_user_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user
+    ADD CONSTRAINT auth_user_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_user_user_permissions auth_user_user_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_user_permissions
+    ADD CONSTRAINT auth_user_user_permissions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_user_user_permissions auth_user_user_permissions_user_id_permission_id_14a6b632_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user_user_permissions
+    ADD CONSTRAINT auth_user_user_permissions_user_id_permission_id_14a6b632_uniq UNIQUE (user_id, permission_id);
+
+
+--
+-- Name: auth_user auth_user_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.auth_user
+    ADD CONSTRAINT auth_user_username_key UNIQUE (username);
+
+
+--
+-- Name: bitacora bitacora_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.bitacora
+    ADD CONSTRAINT bitacora_pkey PRIMARY KEY (idbitacora);
+
+
+--
+-- Name: categoria categoria_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.categoria
+    ADD CONSTRAINT categoria_pkey PRIMARY KEY (idcategoria);
+
+
+--
+-- Name: cliente cliente_correo_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cliente
+    ADD CONSTRAINT cliente_correo_key UNIQUE (correo);
+
+
+--
+-- Name: cliente cliente_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cliente
+    ADD CONSTRAINT cliente_pkey PRIMARY KEY (idcliente);
+
+
+--
+-- Name: cliente cliente_usuario_login_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.cliente
+    ADD CONSTRAINT cliente_usuario_login_key UNIQUE (usuario_login);
+
+
+--
+-- Name: compra compra_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.compra
+    ADD CONSTRAINT compra_pkey PRIMARY KEY (idcompra);
+
+
+--
+-- Name: detallecompra detallecompra_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detallecompra
+    ADD CONSTRAINT detallecompra_pkey PRIMARY KEY (iddetallecompra);
+
+
+--
+-- Name: detalleventa detalleventa_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.detalleventa
+    ADD CONSTRAINT detalleventa_pkey PRIMARY KEY (iddetalle);
+
+
+--
+-- Name: django_admin_log django_admin_log_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_admin_log
+    ADD CONSTRAINT django_admin_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: django_content_type django_content_type_app_label_model_76bd3d3b_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_content_type
+    ADD CONSTRAINT django_content_type_app_label_model_76bd3d3b_uniq UNIQUE (app_label, model);
+
+
+--
+-- Name: django_content_type django_content_type_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_content_type
+    ADD CONSTRAINT django_content_type_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: django_migrations django_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_migrations
+    ADD CONSTRAINT django_migrations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: django_session django_session_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.django_session
+    ADD CONSTRAINT django_session_pkey PRIMARY KEY (session_key);
+
+
+--
+-- Name: factura factura_idventa_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.factura
+    ADD CONSTRAINT factura_idventa_key UNIQUE (idventa);
+
+
+--
+-- Name: factura factura_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.factura
+    ADD CONSTRAINT factura_pkey PRIMARY KEY (idfactura);
+
+
+--
+-- Name: pagoventa pagoventa_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.pagoventa
+    ADD CONSTRAINT pagoventa_pkey PRIMARY KEY (idpagoventa);
+
+
+--
+-- Name: producto producto_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.producto
+    ADD CONSTRAINT producto_pkey PRIMARY KEY (idproducto);
+
+
+--
+-- Name: proveedor proveedor_nit_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.proveedor
+    ADD CONSTRAINT proveedor_nit_key UNIQUE (nit);
+
+
+--
+-- Name: proveedor proveedor_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.proveedor
+    ADD CONSTRAINT proveedor_pkey PRIMARY KEY (idproveedor);
+
+
+--
+-- Name: usuario usuario_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.usuario
+    ADD CONSTRAINT usuario_pkey PRIMARY KEY (idusuario);
+
+
+--
+-- Name: usuario usuario_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.usuario
+    ADD CONSTRAINT usuario_username_key UNIQUE (username);
+
+
+--
+-- Name: venta venta_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.venta
+    ADD CONSTRAINT venta_pkey PRIMARY KEY (idventa);
+```
+
+## 1.6 Tablas de los módulos nuevos (12)
+
+Creadas por los scripts incrementales. Se listan **en orden de dependencia** (cada una solo
+apunta a tablas ya creadas). Sus llaves foráneas se declaran aparte, en §3.3.
+
+| Tabla | Módulo | Script |
+|---|---|---|
+| `garantia` | Garantías | `002` |
+| `resena` | Reseñas de la tienda | `003` |
+| `notificacion` | Centro de notificaciones (CU21) | `004` |
+| `devolucion` | Devoluciones / RMA (CU23) | `005` + `011` |
+| `promocion` | Promociones programadas (CU24) | `006` |
+| `servicio_catalogo`, `orden_servicio`, `orden_detalle`, `tarea_servicio` | Servicio técnico (CU25/26/27) | `007` + `012` + `013` |
+| `plan_credito`, `cuota`, `checklist_credito` | Venta a crédito (CU28/29) | `009` + `010` |
+```sql
+--
+-- Name: garantia; Type: TABLE; Schema: public
+-- Origen: 002_garantia.sql
+--
+
+CREATE TABLE public.garantia (
+    idgarantia       SERIAL PRIMARY KEY,
+    idventa          integer NOT NULL,
+    iddetalle        integer NOT NULL UNIQUE,
+    idproducto       integer NOT NULL,
+    idcliente        integer,
+    cantidad         integer NOT NULL DEFAULT 1,
+    meses            integer NOT NULL DEFAULT 0,
+    fecha_inicio     date NOT NULL,
+    fecha_fin        date NOT NULL,
+    estado           character varying(20) NOT NULL DEFAULT 'activa',   -- activa | reclamada | aprobada | rechazada
+    motivo_reclamo   text,
+    fecha_reclamo    timestamp without time zone,
+    resolucion       text,
+    fecha_resolucion timestamp without time zone
+);
+
+--
+-- Name: resena; Type: TABLE; Schema: public
+-- Origen: 003_resena.sql
+--
+
+CREATE TABLE public.resena (
+    idresena   SERIAL PRIMARY KEY,
+    idventa    integer NOT NULL UNIQUE,
+    idcliente  integer NOT NULL,
+    puntuacion smallint NOT NULL CHECK (puntuacion BETWEEN 1 AND 5),
+    comentario text,
+    estado     character varying(20) NOT NULL DEFAULT 'visible',  -- visible | oculto
+    fecha      timestamp without time zone NOT NULL DEFAULT NOW()
+);
+
+--
+-- Name: notificacion; Type: TABLE; Schema: public
+-- Origen: 004_notificaciones.sql  (CU21)
+--
+
+CREATE TABLE public.notificacion (
+    idnotificacion SERIAL PRIMARY KEY,
+    idusuario      integer,
+    idcliente      integer,
+    tipo           character varying(30)  NOT NULL,   -- venta | reclamo | bienvenida | resena ...
+    titulo         character varying(150) NOT NULL,
+    mensaje        text NOT NULL,
+    enlace         character varying(200),
+    canal          character varying(20) NOT NULL DEFAULT 'sistema',  -- sistema | ambos (app + correo)
+    leido          boolean   NOT NULL DEFAULT false,
+    fecha          timestamp without time zone NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_notif_destinatario CHECK (idusuario IS NOT NULL OR idcliente IS NOT NULL)
+);
+
+--
+-- Name: devolucion; Type: TABLE; Schema: public
+-- Origen: 005_devoluciones.sql + 011_devolucion_inspeccion.sql  (CU23)
+--
+
+CREATE TABLE public.devolucion (
+    iddevolucion    SERIAL PRIMARY KEY,
+    idventa         integer NOT NULL,
+    iddetalle       integer NOT NULL,
+    idproducto      integer NOT NULL,
+    idcliente       integer,
+    idusuario       integer,                                        -- quien la registro
+    cantidad        integer NOT NULL DEFAULT 1,
+    motivo          text NOT NULL,
+    estado          character varying(20) NOT NULL DEFAULT 'aprobada',  -- aprobada | rechazada
+    motivo_rechazo  text,
+    monto_reembolso numeric(10,2) NOT NULL DEFAULT 0,
+    -- Checklist de inspeccion fisica (011). Daño o manipulacion anulan la garantia.
+    insp_sin_dano         boolean NOT NULL DEFAULT false,
+    insp_sin_manipulacion boolean NOT NULL DEFAULT false,
+    insp_mismo_producto   boolean NOT NULL DEFAULT false,
+    insp_completo         boolean NOT NULL DEFAULT false,
+    fecha           timestamp without time zone NOT NULL DEFAULT NOW()
+);
+
+--
+-- Name: promocion; Type: TABLE; Schema: public
+-- Origen: 006_promociones.sql  (CU24)
+--
+
+CREATE TABLE public.promocion (
+    idpromocion  SERIAL PRIMARY KEY,
+    idproducto   integer NOT NULL,
+    porcentaje   numeric(5,2) NOT NULL CHECK (porcentaje > 0 AND porcentaje <= 100),
+    fecha_inicio date NOT NULL,
+    fecha_fin    date NOT NULL,
+    activo       boolean NOT NULL DEFAULT true,
+    CONSTRAINT chk_promo_fechas CHECK (fecha_fin >= fecha_inicio)
+);
+
+--
+-- Name: servicio_catalogo; Type: TABLE; Schema: public
+-- Origen: 007_servicios_tecnicos.sql  (CU25/26/27)
+--
+
+CREATE TABLE public.servicio_catalogo (
+    idservicio SERIAL PRIMARY KEY,
+    nombre     character varying(150) NOT NULL,
+    tipo       character varying(20)  NOT NULL,   -- preventivo | correctivo
+    equipo     character varying(20),             -- laptop | escritorio (solo preventivo)
+    precio     numeric(10,2) NOT NULL DEFAULT 0,
+    activo     boolean NOT NULL DEFAULT true
+);
+
+--
+-- Name: orden_servicio; Type: TABLE; Schema: public
+-- Origen: 007_servicios_tecnicos.sql + 012_orden_fechas_entrega.sql + 013_orden_producto_referencia.sql
+--
+
+CREATE TABLE public.orden_servicio (
+    idorden               SERIAL PRIMARY KEY,
+    idcliente             integer,               -- NULL si es un cliente externo
+    idtecnico             integer,               -- quien registra / atiende
+    idgarantia            integer,               -- si es preventivo gratis por garantia
+    idproducto_referencia integer,               -- modelo del equipo (013)
+    tipo                  character varying(20) NOT NULL,                       -- preventivo | correctivo
+    origen                character varying(20) NOT NULL DEFAULT 'externo',     -- tienda | externo
+    equipo                character varying(20) NOT NULL DEFAULT 'laptop',      -- laptop | escritorio
+    equipo_descripcion    character varying(200),
+    es_beneficio          boolean NOT NULL DEFAULT false,                       -- consumio un uso gratis
+    diagnostico           text,
+    observaciones         text,
+    costo_total           numeric(10,2) NOT NULL DEFAULT 0,
+    estado                character varying(20) NOT NULL DEFAULT 'solicitado',  -- solicitado | agendado | en_proceso | finalizado | entregado | cancelado
+    fecha_solicitud        timestamp without time zone NOT NULL DEFAULT NOW(),
+    fecha_agendada         timestamp without time zone,
+    fecha_finalizacion     timestamp without time zone,
+    fecha_entrega_prevista date,                                                -- dia de retiro (012)
+    fecha_entrega_real     timestamp without time zone                          -- retiro efectivo (012)
+);
+
+--
+-- Name: orden_detalle; Type: TABLE; Schema: public
+-- Origen: 007_servicios_tecnicos.sql
+--
+
+CREATE TABLE public.orden_detalle (
+    iddetorden SERIAL PRIMARY KEY,
+    idorden    integer NOT NULL,
+    idservicio integer NOT NULL,
+    precio     numeric(10,2) NOT NULL DEFAULT 0
+);
+
+--
+-- Name: tarea_servicio; Type: TABLE; Schema: public
+-- Origen: 007_servicios_tecnicos.sql  (checklist del preventivo)
+--
+
+CREATE TABLE public.tarea_servicio (
+    idtarea   SERIAL PRIMARY KEY,
+    idorden   integer NOT NULL,
+    tarea     character varying(150) NOT NULL,
+    realizado boolean NOT NULL DEFAULT false
+);
+
+--
+-- Name: plan_credito; Type: TABLE; Schema: public
+-- Origen: 009_credito.sql + 010_checklist_credito.sql  (CU28/29)
+--
+-- Un plan de financiamiento POR PRODUCTO (cuelga del detalle de la venta).
+--   Bs      1 -  5.000 -> 6  cuotas, recargo +20%
+--   Bs  5.001 - 10.000 -> 9  cuotas, recargo +25%
+--   Bs 10.001 - 15.000 -> 12 cuotas, recargo +30%
+--
+
+CREATE TABLE public.plan_credito (
+    idplan            SERIAL PRIMARY KEY,
+    idventa           integer NOT NULL,
+    iddetalle         integer NOT NULL,
+    idproducto        integer NOT NULL,
+    idcliente         integer,
+    idusuario         integer,                                    -- vendedor que lo registro
+    precio_unitario   numeric(12,2) NOT NULL DEFAULT 0,
+    cantidad          integer NOT NULL DEFAULT 1,
+    precio_base       numeric(12,2) NOT NULL DEFAULT 0,           -- precio_unitario * cantidad
+    recargo_pct       numeric(5,2)  NOT NULL DEFAULT 0,           -- 20 | 25 | 30
+    precio_financiado numeric(12,2) NOT NULL DEFAULT 0,           -- precio_base * (1 + recargo_pct/100)
+    inicial           numeric(12,2) NOT NULL DEFAULT 0,           -- 20% del financiado
+    n_cuotas          integer NOT NULL DEFAULT 6,                 -- 6 | 9 | 12
+    monto_cuota       numeric(12,2) NOT NULL DEFAULT 0,           -- (financiado - inicial) / n_cuotas
+    saldo             numeric(12,2) NOT NULL DEFAULT 0,
+    estado            character varying(20) NOT NULL DEFAULT 'vigente',  -- vigente | pagado | moroso
+    origen            character varying(20),                      -- walk_in | al_credito_sales  (010)
+    numero_factura    character varying(20),                      -- ej. FCR-2026-000142         (010)
+    fecha             timestamp without time zone NOT NULL DEFAULT NOW()
+);
+
+--
+-- Name: cuota; Type: TABLE; Schema: public
+-- Origen: 009_credito.sql + 010_checklist_credito.sql  (calendario de pagos)
+--
+
+CREATE TABLE public.cuota (
+    idcuota           SERIAL PRIMARY KEY,
+    idplan            integer NOT NULL,
+    numero            integer NOT NULL,                           -- 1..n_cuotas
+    monto             numeric(12,2) NOT NULL DEFAULT 0,
+    mora              numeric(12,2) NOT NULL DEFAULT 0,           -- recargo 10% si vencio
+    fecha_vencimiento date NOT NULL,
+    fecha_pago        timestamp without time zone,                -- NULL mientras este pendiente
+    estado            character varying(20) NOT NULL DEFAULT 'pendiente',  -- pendiente | pagada | vencida
+    idusuario_cobro   integer,                                    -- quien registro el pago
+    -- Pago online (010)
+    stripe_payment_intent_id character varying(120),              -- PaymentIntent de la cuota pagada
+    stripe_session_pending   character varying(120),              -- CheckoutSession sin confirmar
+    metodo_pago              character varying(20),               -- efectivo | stripe
+    numero_factura           character varying(20)
+);
+
+--
+-- Name: checklist_credito; Type: TABLE; Schema: public
+-- Origen: 010_checklist_credito.sql  (1:1 con plan_credito)
+--
+
+CREATE TABLE public.checklist_credito (
+    idchecklist      SERIAL PRIMARY KEY,
+    idplan           integer NOT NULL UNIQUE,
+    tipo_empleo      character varying(20) NOT NULL,   -- dependiente | independiente
+    antiguedad_meses integer NOT NULL DEFAULT 0,
+
+    -- Documentos comunes a ambos tipos de empleo
+    ci_solicitante    boolean NOT NULL DEFAULT false,
+    ci_conyuge        boolean NOT NULL DEFAULT false,
+    factura_servicios boolean NOT NULL DEFAULT false,   -- luz/agua (domicilio)
+
+    -- Solo DEPENDIENTE
+    boletas_pago     boolean NOT NULL DEFAULT false,    -- 3 ultimas boletas
+    extracto_gestora boolean NOT NULL DEFAULT false,    -- AFP / Gestora Publica
+
+    -- Solo INDEPENDIENTE
+    facturas_ultimo_ano     boolean NOT NULL DEFAULT false,
+    estados_financieros     boolean NOT NULL DEFAULT false,
+    nit                     boolean NOT NULL DEFAULT false,
+    croquis_domicilio       boolean NOT NULL DEFAULT false,
+    croquis_negocio         boolean NOT NULL DEFAULT false,
+    respaldos_patrimoniales boolean NOT NULL DEFAULT false,   -- vehiculos, inmuebles
+
+    observaciones      text,
+    fecha_verificacion timestamp without time zone NOT NULL DEFAULT NOW()
+);
+```
+
+---
+
+# PARTE 2 — DATOS REGISTRADOS
+
+## 2.1 Datos de las tablas base
+
+Formato `COPY … FROM stdin` (el que produce `pg_dump`). Cada bloque termina con `\.`
+```sql
 --
 -- Data for Name: auth_group; Type: TABLE DATA; Schema: public; Owner: postgres
 --
@@ -1765,8 +2157,31 @@ COPY public.usuario (idusuario, nombre_completo, username, password_hash, rol, a
 
 COPY public.venta (idventa, idcliente, idusuario, fecha_venta, monto_total, estado, estado_entrega, pedido_online) FROM stdin;
 \.
+```
 
+## 2.2 Catálogo de servicios técnicos (precios oficiales)
 
+Semilla del módulo de servicio técnico: sin estas 7 filas, el técnico no puede registrar una orden.
+```sql
+--
+-- Data for Name: servicio_catalogo; Type: TABLE DATA; Schema: public
+-- Origen: 007_servicios_tecnicos.sql — precios oficiales del negocio
+--
+
+INSERT INTO public.servicio_catalogo (nombre, tipo, equipo, precio) VALUES
+  ('Mantenimiento preventivo (Laptop)',                        'preventivo', 'laptop',     200),
+  ('Mantenimiento preventivo (Escritorio)',                    'preventivo', 'escritorio', 250),
+  ('Eliminación de virus informáticos graves',                 'correctivo', NULL,         100),
+  ('Formateo del SO + instalación de programas con licencia',  'correctivo', NULL,         150),
+  ('Recuperación de datos (0 a 99 GB)',                        'correctivo', NULL,         300),
+  ('Recuperación de datos (100 a 500 GB)',                      'correctivo', NULL,         450),
+  ('Recuperación de datos (500 GB a 1 TB)',                     'correctivo', NULL,        1000);
+```
+
+## 2.3 Posición de las secuencias
+
+Deja cada autonumérico apuntando al último id usado, para que el próximo `INSERT` no choque.
+```sql
 --
 -- Name: auth_group_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
@@ -1912,420 +2327,241 @@ SELECT pg_catalog.setval('public.usuario_idusuario_seq', 5, true);
 --
 
 SELECT pg_catalog.setval('public.venta_idventa_seq', 1, false);
+```
 
+---
 
---
--- Name: auth_group auth_group_name_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_group
-    ADD CONSTRAINT auth_group_name_key UNIQUE (name);
-
-
---
--- Name: auth_group_permissions auth_group_permissions_group_id_permission_id_0cd325b0_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_group_permissions
-    ADD CONSTRAINT auth_group_permissions_group_id_permission_id_0cd325b0_uniq UNIQUE (group_id, permission_id);
-
-
---
--- Name: auth_group_permissions auth_group_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_group_permissions
-    ADD CONSTRAINT auth_group_permissions_pkey PRIMARY KEY (id);
-
-
---
--- Name: auth_group auth_group_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_group
-    ADD CONSTRAINT auth_group_pkey PRIMARY KEY (id);
-
-
---
--- Name: auth_permission auth_permission_content_type_id_codename_01ab375a_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_permission
-    ADD CONSTRAINT auth_permission_content_type_id_codename_01ab375a_uniq UNIQUE (content_type_id, codename);
-
-
---
--- Name: auth_permission auth_permission_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_permission
-    ADD CONSTRAINT auth_permission_pkey PRIMARY KEY (id);
-
-
---
--- Name: auth_user_groups auth_user_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_user_groups
-    ADD CONSTRAINT auth_user_groups_pkey PRIMARY KEY (id);
-
-
---
--- Name: auth_user_groups auth_user_groups_user_id_group_id_94350c0c_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_user_groups
-    ADD CONSTRAINT auth_user_groups_user_id_group_id_94350c0c_uniq UNIQUE (user_id, group_id);
-
-
---
--- Name: auth_user auth_user_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_user
-    ADD CONSTRAINT auth_user_pkey PRIMARY KEY (id);
-
-
---
--- Name: auth_user_user_permissions auth_user_user_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_user_user_permissions
-    ADD CONSTRAINT auth_user_user_permissions_pkey PRIMARY KEY (id);
-
-
---
--- Name: auth_user_user_permissions auth_user_user_permissions_user_id_permission_id_14a6b632_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_user_user_permissions
-    ADD CONSTRAINT auth_user_user_permissions_user_id_permission_id_14a6b632_uniq UNIQUE (user_id, permission_id);
-
-
---
--- Name: auth_user auth_user_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.auth_user
-    ADD CONSTRAINT auth_user_username_key UNIQUE (username);
-
-
---
--- Name: bitacora bitacora_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.bitacora
-    ADD CONSTRAINT bitacora_pkey PRIMARY KEY (idbitacora);
-
-
---
--- Name: categoria categoria_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.categoria
-    ADD CONSTRAINT categoria_pkey PRIMARY KEY (idcategoria);
-
-
---
--- Name: cliente cliente_correo_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.cliente
-    ADD CONSTRAINT cliente_correo_key UNIQUE (correo);
-
-
---
--- Name: cliente cliente_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.cliente
-    ADD CONSTRAINT cliente_pkey PRIMARY KEY (idcliente);
-
-
---
--- Name: cliente cliente_usuario_login_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.cliente
-    ADD CONSTRAINT cliente_usuario_login_key UNIQUE (usuario_login);
-
-
---
--- Name: compra compra_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.compra
-    ADD CONSTRAINT compra_pkey PRIMARY KEY (idcompra);
-
-
---
--- Name: detallecompra detallecompra_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.detallecompra
-    ADD CONSTRAINT detallecompra_pkey PRIMARY KEY (iddetallecompra);
-
-
---
--- Name: detalleventa detalleventa_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.detalleventa
-    ADD CONSTRAINT detalleventa_pkey PRIMARY KEY (iddetalle);
+# PARTE 3 — LÓGICA, INTEGRIDAD Y RENDIMIENTO
 
+## 3.1 Funciones
 
+Siete funciones `plpgsql`. Las seis primeras mantienen el stock y los totales al día;
+la última reingresa stock cuando se aprueba una devolución.
+```sql
 --
--- Name: django_admin_log django_admin_log_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: trg_actualizar_estado_venta(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
-ALTER TABLE ONLY public.django_admin_log
-    ADD CONSTRAINT django_admin_log_pkey PRIMARY KEY (id);
+CREATE FUNCTION public.trg_actualizar_estado_venta() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_total DECIMAL(10,2);
+    v_pagado DECIMAL(10,2);
+    v_idventa INT;
+    v_pedido_online BOOLEAN;
+BEGIN
+    -- Obtenemos el ID de la venta afectada
+    v_idventa := COALESCE(NEW.IdVenta, OLD.IdVenta);
 
+    -- Obtenemos datos actuales de la venta
+    SELECT monto_total, pedido_online
+    INTO v_total, v_pedido_online
+    FROM Venta
+    WHERE IdVenta = v_idventa;
 
---
--- Name: django_content_type django_content_type_app_label_model_76bd3d3b_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.django_content_type
-    ADD CONSTRAINT django_content_type_app_label_model_76bd3d3b_uniq UNIQUE (app_label, model);
-
-
---
--- Name: django_content_type django_content_type_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.django_content_type
-    ADD CONSTRAINT django_content_type_pkey PRIMARY KEY (id);
-
-
---
--- Name: django_migrations django_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.django_migrations
-    ADD CONSTRAINT django_migrations_pkey PRIMARY KEY (id);
-
-
---
--- Name: django_session django_session_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.django_session
-    ADD CONSTRAINT django_session_pkey PRIMARY KEY (session_key);
-
-
---
--- Name: factura factura_idventa_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.factura
-    ADD CONSTRAINT factura_idventa_key UNIQUE (idventa);
-
-
---
--- Name: factura factura_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.factura
-    ADD CONSTRAINT factura_pkey PRIMARY KEY (idfactura);
-
-
---
--- Name: pagoventa pagoventa_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.pagoventa
-    ADD CONSTRAINT pagoventa_pkey PRIMARY KEY (idpagoventa);
-
-
---
--- Name: producto producto_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.producto
-    ADD CONSTRAINT producto_pkey PRIMARY KEY (idproducto);
-
-
---
--- Name: proveedor proveedor_nit_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.proveedor
-    ADD CONSTRAINT proveedor_nit_key UNIQUE (nit);
-
-
---
--- Name: proveedor proveedor_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.proveedor
-    ADD CONSTRAINT proveedor_pkey PRIMARY KEY (idproveedor);
-
+    -- LÓGICA DE NEGOCIO:
+    -- Si es pedido online, NO actualizamos el estado automáticamente.
+    -- Esto obliga a que el vendedor valide el pago y el stock antes de pasar a 'completed'.
+    IF v_pedido_online THEN
+        RETURN NULL; 
+    END IF;
 
---
--- Name: usuario usuario_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.usuario
-    ADD CONSTRAINT usuario_pkey PRIMARY KEY (idusuario);
-
-
---
--- Name: usuario usuario_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.usuario
-    ADD CONSTRAINT usuario_username_key UNIQUE (username);
-
-
---
--- Name: venta venta_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
+    -- Si es venta física (tienda), procedemos con la automatización normal
+    SELECT COALESCE(SUM(monto), 0)
+    INTO v_pagado
+    FROM PagoVenta
+    WHERE IdVenta = v_idventa;
 
-ALTER TABLE ONLY public.venta
-    ADD CONSTRAINT venta_pkey PRIMARY KEY (idventa);
+    IF v_pagado >= v_total AND v_total > 0 THEN
+        UPDATE Venta SET estado = 'completed' WHERE IdVenta = v_idventa;
+    ELSE
+        UPDATE Venta SET estado = 'pending' WHERE IdVenta = v_idventa;
+    END IF;
 
+    RETURN NULL;
+END;
+$$;
 
---
--- Name: auth_group_name_a6ea08ec_like; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX auth_group_name_a6ea08ec_like ON public.auth_group USING btree (name varchar_pattern_ops);
 
+ALTER FUNCTION public.trg_actualizar_estado_venta() OWNER TO postgres;
 
 --
--- Name: auth_group_permissions_group_id_b120cbf9; Type: INDEX; Schema: public; Owner: postgres
+-- Name: trg_actualizar_total_compra(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
-CREATE INDEX auth_group_permissions_group_id_b120cbf9 ON public.auth_group_permissions USING btree (group_id);
-
-
---
--- Name: auth_group_permissions_permission_id_84c5c92e; Type: INDEX; Schema: public; Owner: postgres
---
+CREATE FUNCTION public.trg_actualizar_total_compra() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
 
-CREATE INDEX auth_group_permissions_permission_id_84c5c92e ON public.auth_group_permissions USING btree (permission_id);
+UPDATE Compra
+SET monto_total = (
+    SELECT COALESCE(
+        SUM(cantidad * costo_unitario),
+        0
+    )
+    FROM DetalleCompra
+    WHERE IdCompra = COALESCE(NEW.IdCompra, OLD.IdCompra)
+)
+WHERE IdCompra = COALESCE(NEW.IdCompra, OLD.IdCompra);
 
+RETURN NULL;
 
---
--- Name: auth_permission_content_type_id_2f476e4b; Type: INDEX; Schema: public; Owner: postgres
---
+END;
+$$;
 
-CREATE INDEX auth_permission_content_type_id_2f476e4b ON public.auth_permission USING btree (content_type_id);
 
+ALTER FUNCTION public.trg_actualizar_total_compra() OWNER TO postgres;
 
 --
--- Name: auth_user_groups_group_id_97559544; Type: INDEX; Schema: public; Owner: postgres
+-- Name: trg_actualizar_total_venta(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
-CREATE INDEX auth_user_groups_group_id_97559544 ON public.auth_user_groups USING btree (group_id);
-
-
---
--- Name: auth_user_groups_user_id_6a12ed8b; Type: INDEX; Schema: public; Owner: postgres
---
+CREATE FUNCTION public.trg_actualizar_total_venta() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
 
-CREATE INDEX auth_user_groups_user_id_6a12ed8b ON public.auth_user_groups USING btree (user_id);
+UPDATE Venta
+SET monto_total = (
+    SELECT COALESCE(
+        SUM(subtotal),
+        0
+    )
+    FROM DetalleVenta
+    WHERE IdVenta = COALESCE(NEW.IdVenta, OLD.IdVenta)
+)
+WHERE IdVenta = COALESCE(NEW.IdVenta, OLD.IdVenta);
 
+RETURN NULL;
 
---
--- Name: auth_user_user_permissions_permission_id_1fbb5f2c; Type: INDEX; Schema: public; Owner: postgres
---
+END;
+$$;
 
-CREATE INDEX auth_user_user_permissions_permission_id_1fbb5f2c ON public.auth_user_user_permissions USING btree (permission_id);
 
+ALTER FUNCTION public.trg_actualizar_total_venta() OWNER TO postgres;
 
 --
--- Name: auth_user_user_permissions_user_id_a95ead1b; Type: INDEX; Schema: public; Owner: postgres
+-- Name: trg_gestionar_stock_venta(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
-CREATE INDEX auth_user_user_permissions_user_id_a95ead1b ON public.auth_user_user_permissions USING btree (user_id);
+CREATE FUNCTION public.trg_gestionar_stock_venta() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
 
+IF TG_OP = 'INSERT' THEN
 
---
--- Name: auth_user_username_6821ab7c_like; Type: INDEX; Schema: public; Owner: postgres
---
+    UPDATE Producto
+    SET stock_fisico = stock_fisico - NEW.cantidad
+    WHERE IdProducto = NEW.IdProducto;
 
-CREATE INDEX auth_user_username_6821ab7c_like ON public.auth_user USING btree (username varchar_pattern_ops);
+END IF;
 
+IF TG_OP = 'UPDATE' THEN
 
---
--- Name: django_admin_log_content_type_id_c4bce8eb; Type: INDEX; Schema: public; Owner: postgres
---
+    UPDATE Producto
+    SET stock_fisico =
+        stock_fisico + OLD.cantidad - NEW.cantidad
+    WHERE IdProducto = NEW.IdProducto;
 
-CREATE INDEX django_admin_log_content_type_id_c4bce8eb ON public.django_admin_log USING btree (content_type_id);
+END IF;
 
+IF TG_OP = 'DELETE' THEN
 
---
--- Name: django_admin_log_user_id_c564eba6; Type: INDEX; Schema: public; Owner: postgres
---
+    UPDATE Producto
+    SET stock_fisico = stock_fisico + OLD.cantidad
+    WHERE IdProducto = OLD.IdProducto;
 
-CREATE INDEX django_admin_log_user_id_c564eba6 ON public.django_admin_log USING btree (user_id);
+END IF;
 
+RETURN NULL;
 
---
--- Name: django_session_expire_date_a5c62663; Type: INDEX; Schema: public; Owner: postgres
---
+END;
+$$;
 
-CREATE INDEX django_session_expire_date_a5c62663 ON public.django_session USING btree (expire_date);
 
+ALTER FUNCTION public.trg_gestionar_stock_venta() OWNER TO postgres;
 
 --
--- Name: django_session_session_key_c0390e0f_like; Type: INDEX; Schema: public; Owner: postgres
+-- Name: trg_sumar_stock_compra(); Type: FUNCTION; Schema: public; Owner: postgres
 --
-
-CREATE INDEX django_session_session_key_c0390e0f_like ON public.django_session USING btree (session_key varchar_pattern_ops);
 
+CREATE FUNCTION public.trg_sumar_stock_compra() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
 
---
--- Name: idx_bitacora_fecha; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_bitacora_fecha ON public.bitacora USING btree (fecha DESC);
+UPDATE Producto
+SET stock_fisico = stock_fisico + NEW.cantidad
+WHERE IdProducto = NEW.IdProducto;
 
+RETURN NEW;
 
---
--- Name: idx_detallecompra_compra; Type: INDEX; Schema: public; Owner: postgres
---
+END;
+$$;
 
-CREATE INDEX idx_detallecompra_compra ON public.detallecompra USING btree (idcompra);
 
+ALTER FUNCTION public.trg_sumar_stock_compra() OWNER TO postgres;
 
 --
--- Name: idx_detallecompra_producto; Type: INDEX; Schema: public; Owner: postgres
+-- Name: trg_validar_stock(); Type: FUNCTION; Schema: public; Owner: postgres
 --
-
-CREATE INDEX idx_detallecompra_producto ON public.detallecompra USING btree (idproducto);
 
+CREATE FUNCTION public.trg_validar_stock() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+v_stock INT;
+BEGIN
 
---
--- Name: idx_detalleventa_producto; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_detalleventa_producto ON public.detalleventa USING btree (idproducto);
+SELECT stock_fisico
+INTO v_stock
+FROM Producto
+WHERE IdProducto = NEW.IdProducto;
 
+IF v_stock < NEW.cantidad THEN
+    RAISE EXCEPTION
+    'Stock insuficiente. Disponible: %',
+    v_stock;
+END IF;
 
---
--- Name: idx_detalleventa_venta; Type: INDEX; Schema: public; Owner: postgres
---
+RETURN NEW;
 
-CREATE INDEX idx_detalleventa_venta ON public.detalleventa USING btree (idventa);
+END;
+$$;
 
 
---
--- Name: idx_pagoventa_venta; Type: INDEX; Schema: public; Owner: postgres
---
+ALTER FUNCTION public.trg_validar_stock() OWNER TO postgres;
 
-CREATE INDEX idx_pagoventa_venta ON public.pagoventa USING btree (idventa);
+SET default_tablespace = '';
 
 
 --
--- Name: idx_producto_categoria; Type: INDEX; Schema: public; Owner: postgres
+-- Name: trg_devolucion_stock(); Type: FUNCTION; Schema: public
+-- Origen: 005_devoluciones.sql
+-- Reingresa el stock SOLO si la devolucion nace 'aprobada'.
 --
 
-CREATE INDEX idx_producto_categoria ON public.producto USING btree (idcategoria);
+CREATE OR REPLACE FUNCTION public.trg_devolucion_stock() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.estado = 'aprobada' THEN
+        UPDATE producto
+           SET stock_fisico = stock_fisico + NEW.cantidad
+         WHERE idproducto = NEW.idproducto;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+```
 
+## 3.2 Triggers
 
+Enganchan las funciones de arriba a las tablas.
+```sql
 --
 -- Name: detallecompra trigger_compra_stock; Type: TRIGGER; Schema: public; Owner: postgres
 --
@@ -2368,6 +2604,20 @@ CREATE TRIGGER trigger_total_venta AFTER INSERT OR DELETE OR UPDATE ON public.de
 CREATE TRIGGER trigger_validar_stock BEFORE INSERT OR UPDATE ON public.detalleventa FOR EACH ROW EXECUTE FUNCTION public.trg_validar_stock();
 
 
+--
+-- Name: devolucion trigger_devolucion_stock; Type: TRIGGER; Schema: public
+-- Origen: 005_devoluciones.sql
+--
+
+CREATE TRIGGER trigger_devolucion_stock
+    AFTER INSERT ON public.devolucion
+    FOR EACH ROW EXECUTE FUNCTION public.trg_devolucion_stock();
+```
+
+## 3.3 Llaves foráneas
+
+Van **después** de cargar los datos: así Postgres valida todo de una sola pasada.
+```sql
 --
 -- Name: auth_group_permissions auth_group_permissio_permission_id_84c5c92e_fk_auth_perm; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
@@ -2513,6 +2763,276 @@ ALTER TABLE ONLY public.venta
 
 
 --
+-- Llaves foraneas de los modulos nuevos (garantia, resena, notificacion,
+-- devolucion, promocion, servicio tecnico y credito)
+--
+
+-- garantia (002)
+ALTER TABLE ONLY public.garantia
+    ADD CONSTRAINT garantia_idventa_fkey    FOREIGN KEY (idventa)    REFERENCES public.venta(idventa) ON DELETE CASCADE;
+ALTER TABLE ONLY public.garantia
+    ADD CONSTRAINT garantia_iddetalle_fkey  FOREIGN KEY (iddetalle)  REFERENCES public.detalleventa(iddetalle) ON DELETE CASCADE;
+ALTER TABLE ONLY public.garantia
+    ADD CONSTRAINT garantia_idproducto_fkey FOREIGN KEY (idproducto) REFERENCES public.producto(idproducto);
+ALTER TABLE ONLY public.garantia
+    ADD CONSTRAINT garantia_idcliente_fkey  FOREIGN KEY (idcliente)  REFERENCES public.cliente(idcliente);
+
+-- resena (003)
+ALTER TABLE ONLY public.resena
+    ADD CONSTRAINT resena_idventa_fkey   FOREIGN KEY (idventa)   REFERENCES public.venta(idventa) ON DELETE CASCADE;
+ALTER TABLE ONLY public.resena
+    ADD CONSTRAINT resena_idcliente_fkey FOREIGN KEY (idcliente) REFERENCES public.cliente(idcliente) ON DELETE CASCADE;
+
+-- notificacion (004)
+ALTER TABLE ONLY public.notificacion
+    ADD CONSTRAINT notificacion_idusuario_fkey FOREIGN KEY (idusuario) REFERENCES public.usuario(idusuario) ON DELETE CASCADE;
+ALTER TABLE ONLY public.notificacion
+    ADD CONSTRAINT notificacion_idcliente_fkey FOREIGN KEY (idcliente) REFERENCES public.cliente(idcliente) ON DELETE CASCADE;
+
+-- devolucion (005)
+ALTER TABLE ONLY public.devolucion
+    ADD CONSTRAINT devolucion_idventa_fkey    FOREIGN KEY (idventa)    REFERENCES public.venta(idventa);
+ALTER TABLE ONLY public.devolucion
+    ADD CONSTRAINT devolucion_iddetalle_fkey  FOREIGN KEY (iddetalle)  REFERENCES public.detalleventa(iddetalle);
+ALTER TABLE ONLY public.devolucion
+    ADD CONSTRAINT devolucion_idproducto_fkey FOREIGN KEY (idproducto) REFERENCES public.producto(idproducto);
+ALTER TABLE ONLY public.devolucion
+    ADD CONSTRAINT devolucion_idcliente_fkey  FOREIGN KEY (idcliente)  REFERENCES public.cliente(idcliente);
+ALTER TABLE ONLY public.devolucion
+    ADD CONSTRAINT devolucion_idusuario_fkey  FOREIGN KEY (idusuario)  REFERENCES public.usuario(idusuario);
+
+-- promocion (006)
+ALTER TABLE ONLY public.promocion
+    ADD CONSTRAINT promocion_idproducto_fkey FOREIGN KEY (idproducto) REFERENCES public.producto(idproducto) ON DELETE CASCADE;
+
+-- servicio tecnico (007 / 013)
+ALTER TABLE ONLY public.orden_servicio
+    ADD CONSTRAINT orden_servicio_idcliente_fkey  FOREIGN KEY (idcliente)  REFERENCES public.cliente(idcliente);
+ALTER TABLE ONLY public.orden_servicio
+    ADD CONSTRAINT orden_servicio_idtecnico_fkey  FOREIGN KEY (idtecnico)  REFERENCES public.usuario(idusuario);
+ALTER TABLE ONLY public.orden_servicio
+    ADD CONSTRAINT orden_servicio_idgarantia_fkey FOREIGN KEY (idgarantia) REFERENCES public.garantia(idgarantia);
+ALTER TABLE ONLY public.orden_servicio
+    ADD CONSTRAINT orden_servicio_idproducto_referencia_fkey FOREIGN KEY (idproducto_referencia) REFERENCES public.producto(idproducto) ON DELETE SET NULL;
+ALTER TABLE ONLY public.orden_detalle
+    ADD CONSTRAINT orden_detalle_idorden_fkey    FOREIGN KEY (idorden)    REFERENCES public.orden_servicio(idorden) ON DELETE CASCADE;
+ALTER TABLE ONLY public.orden_detalle
+    ADD CONSTRAINT orden_detalle_idservicio_fkey FOREIGN KEY (idservicio) REFERENCES public.servicio_catalogo(idservicio);
+ALTER TABLE ONLY public.tarea_servicio
+    ADD CONSTRAINT tarea_servicio_idorden_fkey   FOREIGN KEY (idorden)    REFERENCES public.orden_servicio(idorden) ON DELETE CASCADE;
+
+-- credito (009 / 010)
+ALTER TABLE ONLY public.plan_credito
+    ADD CONSTRAINT plan_credito_idventa_fkey    FOREIGN KEY (idventa)    REFERENCES public.venta(idventa);
+ALTER TABLE ONLY public.plan_credito
+    ADD CONSTRAINT plan_credito_iddetalle_fkey  FOREIGN KEY (iddetalle)  REFERENCES public.detalleventa(iddetalle);
+ALTER TABLE ONLY public.plan_credito
+    ADD CONSTRAINT plan_credito_idproducto_fkey FOREIGN KEY (idproducto) REFERENCES public.producto(idproducto);
+ALTER TABLE ONLY public.plan_credito
+    ADD CONSTRAINT plan_credito_idcliente_fkey  FOREIGN KEY (idcliente)  REFERENCES public.cliente(idcliente);
+ALTER TABLE ONLY public.plan_credito
+    ADD CONSTRAINT plan_credito_idusuario_fkey  FOREIGN KEY (idusuario)  REFERENCES public.usuario(idusuario);
+ALTER TABLE ONLY public.cuota
+    ADD CONSTRAINT cuota_idplan_fkey          FOREIGN KEY (idplan)          REFERENCES public.plan_credito(idplan) ON DELETE CASCADE;
+ALTER TABLE ONLY public.cuota
+    ADD CONSTRAINT cuota_idusuario_cobro_fkey FOREIGN KEY (idusuario_cobro) REFERENCES public.usuario(idusuario);
+ALTER TABLE ONLY public.checklist_credito
+    ADD CONSTRAINT checklist_credito_idplan_fkey FOREIGN KEY (idplan) REFERENCES public.plan_credito(idplan) ON DELETE CASCADE;
+```
+
+## 3.4 Índices
+
+También van al final: construir un índice sobre la tabla ya llena es mucho más rápido que mantenerlo fila por fila durante la carga.
+```sql
+--
+-- Name: auth_group_name_a6ea08ec_like; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_group_name_a6ea08ec_like ON public.auth_group USING btree (name varchar_pattern_ops);
+
+
+--
+-- Name: auth_group_permissions_group_id_b120cbf9; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_group_permissions_group_id_b120cbf9 ON public.auth_group_permissions USING btree (group_id);
+
+
+--
+-- Name: auth_group_permissions_permission_id_84c5c92e; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_group_permissions_permission_id_84c5c92e ON public.auth_group_permissions USING btree (permission_id);
+
+
+--
+-- Name: auth_permission_content_type_id_2f476e4b; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_permission_content_type_id_2f476e4b ON public.auth_permission USING btree (content_type_id);
+
+
+--
+-- Name: auth_user_groups_group_id_97559544; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_groups_group_id_97559544 ON public.auth_user_groups USING btree (group_id);
+
+
+--
+-- Name: auth_user_groups_user_id_6a12ed8b; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_groups_user_id_6a12ed8b ON public.auth_user_groups USING btree (user_id);
+
+
+--
+-- Name: auth_user_user_permissions_permission_id_1fbb5f2c; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_user_permissions_permission_id_1fbb5f2c ON public.auth_user_user_permissions USING btree (permission_id);
+
+
+--
+-- Name: auth_user_user_permissions_user_id_a95ead1b; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_user_permissions_user_id_a95ead1b ON public.auth_user_user_permissions USING btree (user_id);
+
+
+--
+-- Name: auth_user_username_6821ab7c_like; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX auth_user_username_6821ab7c_like ON public.auth_user USING btree (username varchar_pattern_ops);
+
+
+--
+-- Name: django_admin_log_content_type_id_c4bce8eb; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX django_admin_log_content_type_id_c4bce8eb ON public.django_admin_log USING btree (content_type_id);
+
+
+--
+-- Name: django_admin_log_user_id_c564eba6; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX django_admin_log_user_id_c564eba6 ON public.django_admin_log USING btree (user_id);
+
+
+--
+-- Name: django_session_expire_date_a5c62663; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX django_session_expire_date_a5c62663 ON public.django_session USING btree (expire_date);
+
+
+--
+-- Name: django_session_session_key_c0390e0f_like; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX django_session_session_key_c0390e0f_like ON public.django_session USING btree (session_key varchar_pattern_ops);
+
+
+--
+-- Name: idx_bitacora_fecha; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_bitacora_fecha ON public.bitacora USING btree (fecha DESC);
+
+
+--
+-- Name: idx_detallecompra_compra; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_detallecompra_compra ON public.detallecompra USING btree (idcompra);
+
+
+--
+-- Name: idx_detallecompra_producto; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_detallecompra_producto ON public.detallecompra USING btree (idproducto);
+
+
+--
+-- Name: idx_detalleventa_producto; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_detalleventa_producto ON public.detalleventa USING btree (idproducto);
+
+
+--
+-- Name: idx_detalleventa_venta; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_detalleventa_venta ON public.detalleventa USING btree (idventa);
+
+
+--
+-- Name: idx_pagoventa_venta; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_pagoventa_venta ON public.pagoventa USING btree (idventa);
+
+
+--
+-- Name: idx_producto_categoria; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_producto_categoria ON public.producto USING btree (idcategoria);
+
+
+--
+-- Indices de los modulos nuevos
+--
+
+-- garantia (002)
+CREATE INDEX idx_garantia_cliente ON public.garantia(idcliente);
+CREATE INDEX idx_garantia_estado  ON public.garantia(estado);
+CREATE INDEX idx_garantia_venta   ON public.garantia(idventa);
+
+-- resena (003)
+CREATE INDEX idx_resena_estado  ON public.resena(estado);
+CREATE INDEX idx_resena_cliente ON public.resena(idcliente);
+
+-- notificacion (004)
+CREATE INDEX idx_notif_usuario ON public.notificacion(idusuario);
+CREATE INDEX idx_notif_cliente ON public.notificacion(idcliente);
+CREATE INDEX idx_notif_leido   ON public.notificacion(leido);
+
+-- devolucion (005)
+CREATE INDEX idx_devolucion_venta   ON public.devolucion(idventa);
+CREATE INDEX idx_devolucion_detalle ON public.devolucion(iddetalle);
+CREATE INDEX idx_devolucion_estado  ON public.devolucion(estado);
+
+-- promocion (006)
+CREATE INDEX idx_promo_producto ON public.promocion(idproducto);
+CREATE INDEX idx_promo_activo   ON public.promocion(activo);
+
+-- servicio tecnico (007 / 013)
+CREATE INDEX idx_orden_cliente      ON public.orden_servicio(idcliente);
+CREATE INDEX idx_orden_tecnico      ON public.orden_servicio(idtecnico);
+CREATE INDEX idx_orden_estado       ON public.orden_servicio(estado);
+CREATE INDEX idx_orden_garantia     ON public.orden_servicio(idgarantia);
+CREATE INDEX idx_orden_producto_ref ON public.orden_servicio(idproducto_referencia);
+CREATE INDEX idx_detorden_orden     ON public.orden_detalle(idorden);
+CREATE INDEX idx_tarea_orden        ON public.tarea_servicio(idorden);
+
+-- credito (009 / 010)
+CREATE INDEX idx_plan_venta     ON public.plan_credito(idventa);
+CREATE INDEX idx_plan_cliente   ON public.plan_credito(idcliente);
+CREATE INDEX idx_plan_estado    ON public.plan_credito(estado);
+CREATE INDEX idx_cuota_plan     ON public.cuota(idplan);
+CREATE INDEX idx_cuota_estado   ON public.cuota(estado);
+CREATE INDEX idx_cuota_venc     ON public.cuota(fecha_vencimiento);
+CREATE INDEX idx_checklist_plan ON public.checklist_credito(idplan);
+```
+
+## 3.5 Permisos del esquema
+```sql
+--
 -- Name: SCHEMA public; Type: ACL; Schema: -; Owner: postgres
 --
 
@@ -2520,18 +3040,33 @@ REVOKE USAGE ON SCHEMA public FROM PUBLIC;
 
 
 --
--- PostgreSQL database dump complete
---
-
-\unrestrict 0DDvqQUsgGRHTlgJgAfOvVaplRLwrQMrnhXsndgEiUbIbc9h5bh0MtGh4Qbm8Iy
-
 ```
 
 ---
 
-## 2. Scripts incrementales (aplicados después del dump)
+# PARTE 4 — ANEXO: historial de los scripts incrementales
 
-### 2.1 — `001_descuento_vip.sql`
+> ⚠️ **No hace falta ejecutar nada de esta parte.** Todo lo que hacen estos 13 scripts ya está
+> incorporado en las partes 1–3. Se conservan como registro de cómo evolucionó la base, y por si
+> hay que aplicar alguno suelto sobre una BD vieja (todos son idempotentes).
+
+| # | Script | Qué introdujo |
+|---|---|---|
+| 001 | `001_descuento_vip.sql` | Descuento VIP por fidelidad |
+| 002 | `002_garantia.sql` | Garantías por producto |
+| 003 | `003_resena.sql` | Reseñas de la tienda |
+| 004 | `004_notificaciones.sql` | Centro de notificaciones (CU21) |
+| 005 | `005_devoluciones.sql` | Devoluciones / RMA (CU23) |
+| 006 | `006_promociones.sql` | Promociones programadas (CU24) |
+| 007 | `007_servicios_tecnicos.sql` | Módulo de servicio técnico (CU25/26/27) |
+| 008 | `008_rol_tecnico.sql` | Rol `tecnico` en `usuario` |
+| 009 | `009_credito.sql` | Venta a crédito y cartera (CU28/29) |
+| 010 | `010_checklist_credito.sql` | Checklist de crédito + pago de cuotas por Stripe |
+| 011 | `011_devolucion_inspeccion.sql` | Checklist de inspección física (CU23) |
+| 012 | `012_orden_fechas_entrega.sql` | Fechas de retiro del servicio técnico |
+| 013 | `013_orden_producto_referencia.sql` | Modelo del equipo en la orden de servicio |
+
+## 4.1 — `001_descuento_vip.sql`
 
 ```sql
 -- ============================================================================
@@ -2576,7 +3111,7 @@ SET descuento_disponible = FLOOR(total_acumulado / 10000) * 200;
 -- ORDER BY total_acumulado DESC;
 ```
 
-### 2.2 — `002_garantia.sql`
+## 4.2 — `002_garantia.sql`
 
 ```sql
 -- ============================================================================
@@ -2653,7 +3188,7 @@ CREATE INDEX IF NOT EXISTS idx_garantia_venta    ON garantia(idventa);
 -- ORDER BY g.idgarantia DESC;
 ```
 
-### 2.3 — `003_resena.sql`
+## 4.3 — `003_resena.sql`
 
 ```sql
 -- ============================================================================
@@ -2691,4 +3226,503 @@ CREATE INDEX IF NOT EXISTS idx_resena_cliente ON resena(idcliente);
 -- SELECT r.idresena, r.idventa, c.nombre, r.puntuacion, r.estado, r.fecha
 -- FROM resena r JOIN cliente c ON c.idcliente = r.idcliente
 -- ORDER BY r.idresena DESC;
+```
+
+## 4.4 — `004_notificaciones.sql`
+
+```sql
+-- ============================================================================
+-- 004_notificaciones.sql — Centro de notificaciones (CU21)
+--
+-- Reglas del negocio:
+--   1. Cada notificación va dirigida a UN usuario interno (idusuario) O a UN
+--      cliente (idcliente). Solo uno de los dos se llena; el otro queda NULL.
+--   2. Toda notificación aparece en la campana de la app. Si canal = 'ambos',
+--      además se envía por correo (Brevo) al crearla.
+--   3. 'leido' arranca en FALSE; se marca TRUE cuando el usuario la abre.
+--   4. tipo = etiqueta del evento (venta | reclamo | reclamo_resuelto |
+--      bienvenida | resena | ...). Sirve para el ícono/orden en el frontend.
+--
+-- Aplicar este script UNA SOLA VEZ en local (pgAdmin4) y en Railway:
+--   Railway Dashboard -> Postgres -> Query -> pegar y ejecutar.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS notificacion (
+    idnotificacion  SERIAL PRIMARY KEY,
+    idusuario       INTEGER REFERENCES usuario(idusuario) ON DELETE CASCADE,
+    idcliente       INTEGER REFERENCES cliente(idcliente) ON DELETE CASCADE,
+    tipo            VARCHAR(30)  NOT NULL,                     -- venta | reclamo | reclamo_resuelto | bienvenida | resena ...
+    titulo          VARCHAR(150) NOT NULL,
+    mensaje         TEXT         NOT NULL,
+    enlace          VARCHAR(200),                             -- ruta interna a la que lleva (ej. /warranties)
+    canal           VARCHAR(20)  NOT NULL DEFAULT 'sistema',  -- sistema | ambos (ambos = app + correo)
+    leido           BOOLEAN      NOT NULL DEFAULT FALSE,
+    fecha           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    -- Debe apuntar a un usuario O a un cliente (al menos uno)
+    CONSTRAINT chk_notif_destinatario CHECK (idusuario IS NOT NULL OR idcliente IS NOT NULL)
+);
+
+-- Índices para las consultas más frecuentes (mis notificaciones / no leídas)
+CREATE INDEX IF NOT EXISTS idx_notif_usuario ON notificacion(idusuario);
+CREATE INDEX IF NOT EXISTS idx_notif_cliente ON notificacion(idcliente);
+CREATE INDEX IF NOT EXISTS idx_notif_leido   ON notificacion(leido);
+
+-- Verificación (opcional):
+-- SELECT idnotificacion, idusuario, idcliente, tipo, titulo, leido, fecha
+-- FROM notificacion ORDER BY idnotificacion DESC;
+```
+
+## 4.5 — `005_devoluciones.sql`
+
+```sql
+-- ============================================================================
+-- 005_devoluciones.sql — Devoluciones (RMA) — CU23
+--
+-- Reglas del negocio:
+--   1. La registra el vendedor/admin en el mostrador; la fila nace ya con su
+--      decisión: 'aprobada' o 'rechazada'. NO hay flujo de estados intermedios.
+--   2. NUNCA toca detalleventa/factura/pagoventa (integridad del historial).
+--   3. El stock del producto vuelve SOLO si la devolución es 'aprobada',
+--      una sola vez (trigger AFTER INSERT → sin doble conteo).
+--   4. Las validaciones (plazo <= 7 días, no repetido, cantidad <= vendida)
+--      van en el backend, antes de insertar.
+--
+-- Aplicar UNA sola vez en pgAdmin (que apunta a la BD de Railway).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS devolucion (
+    iddevolucion    SERIAL PRIMARY KEY,
+    idventa         INTEGER NOT NULL REFERENCES venta(idventa),
+    iddetalle       INTEGER NOT NULL REFERENCES detalleventa(iddetalle),
+    idproducto      INTEGER NOT NULL REFERENCES producto(idproducto),
+    idcliente       INTEGER REFERENCES cliente(idcliente),
+    cantidad        INTEGER NOT NULL DEFAULT 1,
+    motivo          TEXT NOT NULL,
+    estado          VARCHAR(20) NOT NULL DEFAULT 'aprobada',  -- aprobada | rechazada
+    motivo_rechazo  TEXT,
+    monto_reembolso NUMERIC(10,2) NOT NULL DEFAULT 0,
+    idusuario       INTEGER REFERENCES usuario(idusuario),    -- quién la registró
+    fecha           TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_devolucion_venta   ON devolucion(idventa);
+CREATE INDEX IF NOT EXISTS idx_devolucion_detalle ON devolucion(iddetalle);
+CREATE INDEX IF NOT EXISTS idx_devolucion_estado  ON devolucion(estado);
+
+-- Trigger: reingresa stock SOLO si la devolución es 'aprobada'. Como la fila
+-- nace final (AFTER INSERT), se dispara una sola vez → sin doble conteo.
+CREATE OR REPLACE FUNCTION trg_devolucion_stock() RETURNS trigger AS $func$
+BEGIN
+    IF NEW.estado = 'aprobada' THEN
+        UPDATE producto
+           SET stock_fisico = stock_fisico + NEW.cantidad
+         WHERE idproducto = NEW.idproducto;
+    END IF;
+    RETURN NEW;
+END;
+$func$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_devolucion_stock ON devolucion;
+CREATE TRIGGER trigger_devolucion_stock
+    AFTER INSERT ON devolucion
+    FOR EACH ROW EXECUTE FUNCTION trg_devolucion_stock();
+
+-- Verificación (opcional):
+-- SELECT * FROM devolucion ORDER BY iddevolucion DESC;
+```
+
+## 4.6 — `006_promociones.sql`
+
+```sql
+-- ============================================================================
+-- 006_promociones.sql — Promociones programadas por producto (CU24)
+--
+-- Reglas del negocio:
+--   1. El admin define un descuento (%) sobre UN producto, con fecha de inicio y fin.
+--   2. La promoción está "vigente" cuando hoy está entre fecha_inicio y fecha_fin
+--      (y activo = TRUE). El precio con descuento se muestra y se cobra.
+--   3. porcentaje: 1 a 100. Distinto del descuento VIP por fidelidad (ese ya existe).
+--
+-- IMPORTANTE: correr este script en el Postgres de Railway (Query), que es la
+-- base que usa el backend desplegado.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS promocion (
+    idpromocion   SERIAL PRIMARY KEY,
+    idproducto    INTEGER NOT NULL REFERENCES producto(idproducto) ON DELETE CASCADE,
+    porcentaje    NUMERIC(5,2) NOT NULL CHECK (porcentaje > 0 AND porcentaje <= 100),
+    fecha_inicio  DATE NOT NULL,
+    fecha_fin     DATE NOT NULL,
+    activo        BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT chk_promo_fechas CHECK (fecha_fin >= fecha_inicio)
+);
+
+CREATE INDEX IF NOT EXISTS idx_promo_producto ON promocion(idproducto);
+CREATE INDEX IF NOT EXISTS idx_promo_activo   ON promocion(activo);
+
+-- Verificación (opcional):
+-- SELECT * FROM promocion ORDER BY idpromocion DESC;
+```
+
+## 4.7 — `007_servicios_tecnicos.sql`
+
+```sql
+-- ============================================================================
+-- 007_servicios_tecnicos.sql — Módulo de Servicio Técnico (CU25/26/27)
+--
+-- Tablas:
+--   servicio_catalogo → los servicios ofrecidos con su precio.
+--   orden_servicio    → una orden de servicio (la registra y ejecuta el técnico).
+--   orden_detalle     → qué servicios lleva la orden (el correctivo puede llevar varios).
+--   tarea_servicio    → checklist del preventivo (marcar lo realizado).
+--
+-- Reglas:
+--   · Preventivo: SOLO para el precio, laptop=200, escritorio=250. GRATIS solo
+--     laptops de la tienda con garantía vigente (2 usos, 6 meses de separación).
+--   · Correctivo: catálogo fijo, cualquier equipo, se pueden sumar varios.
+--   · El control de "2 usos gratis por garantía" se calcula contando las órdenes
+--     con es_beneficio de esa idgarantia (no hace falta tabla extra).
+--
+-- Correr este script en el Postgres de RAILWAY (Query), que es la base del backend.
+-- ============================================================================
+
+-- 1) Catálogo de servicios
+CREATE TABLE IF NOT EXISTS servicio_catalogo (
+    idservicio  SERIAL PRIMARY KEY,
+    nombre      VARCHAR(150) NOT NULL,
+    tipo        VARCHAR(20)  NOT NULL,               -- preventivo | correctivo
+    equipo      VARCHAR(20),                         -- laptop | escritorio (solo preventivo); NULL en correctivo
+    precio      NUMERIC(10,2) NOT NULL DEFAULT 0,
+    activo      BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- Precios oficiales del negocio (se insertan una sola vez)
+INSERT INTO servicio_catalogo (nombre, tipo, equipo, precio) VALUES
+  ('Mantenimiento preventivo (Laptop)',                        'preventivo', 'laptop',     200),
+  ('Mantenimiento preventivo (Escritorio)',                    'preventivo', 'escritorio', 250),
+  ('Eliminación de virus informáticos graves',                 'correctivo', NULL,         100),
+  ('Formateo del SO + instalación de programas con licencia',  'correctivo', NULL,         150),
+  ('Recuperación de datos (0 a 99 GB)',                        'correctivo', NULL,         300),
+  ('Recuperación de datos (100 a 500 GB)',                     'correctivo', NULL,         450),
+  ('Recuperación de datos (500 GB a 1 TB)',                    'correctivo', NULL,        1000);
+
+-- 2) Orden de servicio (cabecera). La registra el técnico (crea + ejecuta).
+CREATE TABLE IF NOT EXISTS orden_servicio (
+    idorden            SERIAL PRIMARY KEY,
+    idcliente          INTEGER REFERENCES cliente(idcliente),     -- NULL si es externo
+    idtecnico          INTEGER REFERENCES usuario(idusuario),     -- quién registró/atiende
+    idgarantia         INTEGER REFERENCES garantia(idgarantia),   -- si preventivo gratis (laptop de la tienda)
+    tipo               VARCHAR(20) NOT NULL,                      -- preventivo | correctivo
+    origen             VARCHAR(20) NOT NULL DEFAULT 'externo',    -- tienda | externo
+    equipo             VARCHAR(20) NOT NULL DEFAULT 'laptop',     -- laptop | escritorio
+    equipo_descripcion VARCHAR(200),                              -- marca/modelo/serie (externos)
+    es_beneficio       BOOLEAN NOT NULL DEFAULT FALSE,            -- consumió un uso preventivo gratis
+    diagnostico        TEXT,
+    observaciones      TEXT,
+    costo_total        NUMERIC(10,2) NOT NULL DEFAULT 0,
+    estado             VARCHAR(20) NOT NULL DEFAULT 'solicitado', -- solicitado|agendado|en_proceso|finalizado|cancelado
+    fecha_solicitud    TIMESTAMP NOT NULL DEFAULT NOW(),
+    fecha_agendada     TIMESTAMP,
+    fecha_finalizacion TIMESTAMP
+);
+
+-- 3) Servicios incluidos en la orden (para el correctivo puede haber varios)
+CREATE TABLE IF NOT EXISTS orden_detalle (
+    iddetorden  SERIAL PRIMARY KEY,
+    idorden     INTEGER NOT NULL REFERENCES orden_servicio(idorden) ON DELETE CASCADE,
+    idservicio  INTEGER NOT NULL REFERENCES servicio_catalogo(idservicio),
+    precio      NUMERIC(10,2) NOT NULL DEFAULT 0
+);
+
+-- 4) Checklist de tareas (sobre todo del preventivo)
+CREATE TABLE IF NOT EXISTS tarea_servicio (
+    idtarea     SERIAL PRIMARY KEY,
+    idorden     INTEGER NOT NULL REFERENCES orden_servicio(idorden) ON DELETE CASCADE,
+    tarea       VARCHAR(150) NOT NULL,
+    realizado   BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_orden_cliente  ON orden_servicio(idcliente);
+CREATE INDEX IF NOT EXISTS idx_orden_tecnico  ON orden_servicio(idtecnico);
+CREATE INDEX IF NOT EXISTS idx_orden_estado   ON orden_servicio(estado);
+CREATE INDEX IF NOT EXISTS idx_orden_garantia ON orden_servicio(idgarantia);
+CREATE INDEX IF NOT EXISTS idx_detorden_orden ON orden_detalle(idorden);
+CREATE INDEX IF NOT EXISTS idx_tarea_orden    ON tarea_servicio(idorden);
+
+-- Verificación (opcional):
+-- SELECT * FROM servicio_catalogo ORDER BY idservicio;
+```
+
+## 4.8 — `008_rol_tecnico.sql`
+
+```sql
+-- ============================================================================
+-- 008_rol_tecnico.sql — Permitir el rol 'tecnico' en la tabla usuario (CU25/26/27)
+--
+-- La tabla usuario tiene un CHECK que limitaba rol a ('admin','vendedor').
+-- Se amplía para incluir 'tecnico'. Correr en el Postgres de Railway (Query).
+-- ============================================================================
+
+ALTER TABLE usuario DROP CONSTRAINT IF EXISTS usuario_rol_check;
+ALTER TABLE usuario ADD CONSTRAINT usuario_rol_check
+    CHECK (rol IN ('admin', 'vendedor', 'tecnico'));
+```
+
+## 4.9 — `009_credito.sql`
+
+```sql
+-- ============================================================================
+-- 009_credito.sql — Venta a crédito + Cartera de créditos (CU28 / CU29)
+--
+-- Tablas:
+--   plan_credito → un plan de financiamiento POR PRODUCTO (cuelga del detalle
+--                  de la venta). Guarda el precio financiado, la inicial, las
+--                  cuotas y el estado del crédito.
+--   cuota        → cada cuota mensual del plan (calendario de pagos).
+--
+-- Reglas del negocio (el cálculo lo hace el BACKEND antes de insertar):
+--   · El crédito es POR PRODUCTO, según su precio unitario:
+--       Bs     1 –  5.000  → 6  cuotas, recargo +20%
+--       Bs 5.001 – 10.000  → 9  cuotas, recargo +25%
+--       Bs 10.001 – 15.000 → 12 cuotas, recargo +30%
+--     (fuera de ese rango NO califica a crédito).
+--   · precio_financiado = precio_base * (1 + recargo_pct/100)
+--   · inicial (enganche) = 20% del precio_financiado — se paga al inicio y se
+--     entrega el producto de inmediato.
+--   · saldo = precio_financiado - inicial ; monto_cuota = saldo / n_cuotas
+--   · Sin interés mensual adicional (el recargo % ya es la ganancia del crédito).
+--   · MORA: si una cuota vence sin pago → recargo 10% sobre esa cuota + el
+--     cliente queda BLOQUEADO para nuevos créditos (se calcula en el backend:
+--     está bloqueado si tiene alguna cuota 'vencida'). No se altera la tabla
+--     cliente/usuario.
+--
+-- Correr este script en el Postgres de RAILWAY (Query), que es la base del backend.
+-- ============================================================================
+
+-- 1) Plan de crédito (cuelga del detalle de venta → un plan por producto)
+CREATE TABLE IF NOT EXISTS plan_credito (
+    idplan            SERIAL PRIMARY KEY,
+    idventa           INTEGER NOT NULL REFERENCES venta(idventa),
+    iddetalle         INTEGER NOT NULL REFERENCES detalleventa(iddetalle),
+    idproducto        INTEGER NOT NULL REFERENCES producto(idproducto),
+    idcliente         INTEGER REFERENCES cliente(idcliente),
+    idusuario         INTEGER REFERENCES usuario(idusuario),      -- vendedor que lo registró
+    precio_unitario   NUMERIC(12,2) NOT NULL DEFAULT 0,           -- precio de lista del producto
+    cantidad          INTEGER NOT NULL DEFAULT 1,
+    precio_base       NUMERIC(12,2) NOT NULL DEFAULT 0,           -- precio_unitario * cantidad (sin recargo)
+    recargo_pct       NUMERIC(5,2)  NOT NULL DEFAULT 0,           -- 20 | 25 | 30
+    precio_financiado NUMERIC(12,2) NOT NULL DEFAULT 0,           -- precio_base * (1 + recargo_pct/100)
+    inicial           NUMERIC(12,2) NOT NULL DEFAULT 0,           -- 20% del financiado (pagado al inicio)
+    n_cuotas          INTEGER NOT NULL DEFAULT 6,                 -- 6 | 9 | 12
+    monto_cuota       NUMERIC(12,2) NOT NULL DEFAULT 0,           -- (financiado - inicial) / n_cuotas
+    saldo             NUMERIC(12,2) NOT NULL DEFAULT 0,           -- lo que falta cobrar (baja con cada cuota pagada)
+    estado            VARCHAR(20) NOT NULL DEFAULT 'vigente',     -- vigente | pagado | moroso
+    fecha             TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 2) Cuotas del plan (calendario de pagos mensuales)
+CREATE TABLE IF NOT EXISTS cuota (
+    idcuota           SERIAL PRIMARY KEY,
+    idplan            INTEGER NOT NULL REFERENCES plan_credito(idplan) ON DELETE CASCADE,
+    numero            INTEGER NOT NULL,                           -- 1..n_cuotas
+    monto             NUMERIC(12,2) NOT NULL DEFAULT 0,           -- monto base de la cuota
+    mora              NUMERIC(12,2) NOT NULL DEFAULT 0,           -- recargo 10% si venció
+    fecha_vencimiento DATE NOT NULL,
+    fecha_pago        TIMESTAMP,                                  -- NULL mientras esté pendiente
+    estado            VARCHAR(20) NOT NULL DEFAULT 'pendiente',   -- pendiente | pagada | vencida
+    idusuario_cobro   INTEGER REFERENCES usuario(idusuario)       -- quién registró el pago
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_venta    ON plan_credito(idventa);
+CREATE INDEX IF NOT EXISTS idx_plan_cliente  ON plan_credito(idcliente);
+CREATE INDEX IF NOT EXISTS idx_plan_estado   ON plan_credito(estado);
+CREATE INDEX IF NOT EXISTS idx_cuota_plan    ON cuota(idplan);
+CREATE INDEX IF NOT EXISTS idx_cuota_estado  ON cuota(estado);
+CREATE INDEX IF NOT EXISTS idx_cuota_venc    ON cuota(fecha_vencimiento);
+
+-- Verificación (opcional):
+-- SELECT * FROM plan_credito ORDER BY idplan DESC;
+-- SELECT * FROM cuota WHERE idplan = 1 ORDER BY numero;
+```
+
+## 4.10 — `010_checklist_credito.sql`
+
+```sql
+-- ============================================================================
+-- 010_checklist_credito.sql — CU28/CU29 refinamiento
+--
+-- Este script agrega TODO lo que faltaba para el nuevo flujo de venta a crédito:
+--   1) Tabla `checklist_credito` 1:1 con `plan_credito` (verificación de
+--      documentos según tipo de empleo).
+--   2) ALTER `plan_credito`: nuevas columnas `origen` (walk_in | al_credito_sales)
+--      y `numero_factura` (correlativo de la factura de la inicial).
+--   3) ALTER `cuota`: campos Stripe (checkout online + recuperación de sesión
+--      pendiente), método de pago y numero_factura de la cuota.
+--   4) SEQUENCE `factura_credito_seq` — correlativo único para las facturas
+--      del módulo de crédito (formato final `FCR-2026-000142`).
+--
+-- Correr este script en el Postgres de RAILWAY (Query).
+-- Es IDEMPOTENTE (usa IF NOT EXISTS / IF EXISTS) — se puede correr varias
+-- veces sin romper.
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1) Tabla checklist_credito (1:1 con plan_credito)
+-- ---------------------------------------------------------------------------
+-- El vendedor verifica documentos según el tipo de empleo del solicitante.
+-- Guardamos qué documentos entregó (boolean por cada uno) + observaciones +
+-- fecha de la verificación. Un plan tiene UN checklist (UNIQUE en idplan).
+
+CREATE TABLE IF NOT EXISTS checklist_credito (
+    idchecklist            SERIAL PRIMARY KEY,
+    idplan                 INTEGER NOT NULL UNIQUE REFERENCES plan_credito(idplan) ON DELETE CASCADE,
+    tipo_empleo            VARCHAR(20) NOT NULL,                          -- 'dependiente' | 'independiente'
+    antiguedad_meses       INTEGER NOT NULL DEFAULT 0,
+
+    -- Documentos comunes (ambos tipos de empleo)
+    ci_solicitante         BOOLEAN NOT NULL DEFAULT FALSE,
+    ci_conyuge             BOOLEAN NOT NULL DEFAULT FALSE,
+    factura_servicios      BOOLEAN NOT NULL DEFAULT FALSE,                -- luz/agua para domicilio
+
+    -- Documentos solo DEPENDIENTE
+    boletas_pago           BOOLEAN NOT NULL DEFAULT FALSE,                -- 3 últimas boletas
+    extracto_gestora       BOOLEAN NOT NULL DEFAULT FALSE,                -- AFP / Gestora Pública
+
+    -- Documentos solo INDEPENDIENTE
+    facturas_ultimo_ano    BOOLEAN NOT NULL DEFAULT FALSE,
+    estados_financieros    BOOLEAN NOT NULL DEFAULT FALSE,
+    nit                    BOOLEAN NOT NULL DEFAULT FALSE,
+    croquis_domicilio      BOOLEAN NOT NULL DEFAULT FALSE,
+    croquis_negocio        BOOLEAN NOT NULL DEFAULT FALSE,
+    respaldos_patrimoniales BOOLEAN NOT NULL DEFAULT FALSE,               -- vehículos, inmuebles
+
+    observaciones          TEXT,
+    fecha_verificacion     TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_checklist_plan ON checklist_credito(idplan);
+
+-- ---------------------------------------------------------------------------
+-- 2) ALTER plan_credito — origen del plan + número de factura de la inicial
+-- ---------------------------------------------------------------------------
+-- `origen` distingue si el plan nació desde /sales (metodo pago "Al crédito")
+-- o desde /creditos (walk-in con checklist). Sirve para reporting y para
+-- decidir si se muestra el checklist en la vista del plan.
+-- `numero_factura` es la factura que se emite al cobrar la INICIAL.
+
+ALTER TABLE plan_credito
+    ADD COLUMN IF NOT EXISTS origen         VARCHAR(20),  -- 'walk_in' | 'al_credito_sales'
+    ADD COLUMN IF NOT EXISTS numero_factura VARCHAR(20);  -- ej. 'FCR-2026-000142'
+
+-- ---------------------------------------------------------------------------
+-- 3) ALTER cuota — Stripe + método de pago + factura de la cuota
+-- ---------------------------------------------------------------------------
+-- `stripe_payment_intent_id`   → PaymentIntent de la cuota YA pagada (auditoría)
+-- `stripe_session_pending`     → CheckoutSession iniciada por el cliente pero
+--                                no confirmada (por si cerró la pestaña) — el
+--                                botón "¿Ya pagaste? Verificar" en Mis Créditos
+--                                usa este campo para consultar a Stripe y
+--                                marcar la cuota como pagada de forma idempotente.
+-- `metodo_pago`                → 'efectivo' (presencial) | 'stripe' (online)
+-- `numero_factura`             → factura emitida al pagar la cuota
+
+ALTER TABLE cuota
+    ADD COLUMN IF NOT EXISTS stripe_payment_intent_id VARCHAR(120),
+    ADD COLUMN IF NOT EXISTS stripe_session_pending   VARCHAR(120),
+    ADD COLUMN IF NOT EXISTS metodo_pago              VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS numero_factura           VARCHAR(20);
+
+-- ---------------------------------------------------------------------------
+-- 4) SEQUENCE para el correlativo de facturas del módulo crédito
+-- ---------------------------------------------------------------------------
+-- Genera un entero incremental por cada factura emitida (inicial + cuotas).
+-- El backend lo formatea como 'FCR-{año}-{correlativo:06d}'.
+
+CREATE SEQUENCE IF NOT EXISTS factura_credito_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+-- Verificación (opcional):
+-- SELECT * FROM checklist_credito LIMIT 5;
+-- SELECT column_name, data_type FROM information_schema.columns WHERE table_name='plan_credito';
+-- SELECT column_name, data_type FROM information_schema.columns WHERE table_name='cuota';
+-- SELECT nextval('factura_credito_seq'); -- devuelve 1 la primera vez
+```
+
+## 4.11 — `011_devolucion_inspeccion.sql`
+
+```sql
+-- CU23: Persistir el checklist de inspección física de cada devolución.
+-- Se separa "Sin daño ni manipulación" en 2 booleans independientes para que
+-- el sistema decida automáticamente si la garantía debe anularse al rechazar
+-- (rechazo por daño o por manipulación anula garantía; otros motivos no).
+--
+-- Devoluciones existentes: quedan con FALSE en los 4 (no se re-evalúan hacia
+-- atrás porque el negocio real no lo requiere).
+
+ALTER TABLE devolucion
+  ADD COLUMN IF NOT EXISTS insp_sin_dano         BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS insp_sin_manipulacion BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS insp_mismo_producto   BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS insp_completo         BOOLEAN NOT NULL DEFAULT FALSE;
+```
+
+## 4.12 — `012_orden_fechas_entrega.sql`
+
+```sql
+-- CU25/CU26: Fechas de retiro para servicios técnicos.
+--
+-- Agrega 2 columnas a orden_servicio para manejar el flujo de retiro:
+--   - fecha_entrega_prevista: día en que el cliente puede venir a retirar
+--     (lo define el técnico al agendar; le llega al cliente por correo)
+--   - fecha_entrega_real: momento exacto en que el cliente efectivamente retiró
+--     (se marca cuando el técnico toca "Marcar como entregado")
+--
+-- El estado "entregado" es un valor nuevo del enum estado (VARCHAR libre),
+-- no requiere cambio de esquema, solo empezar a usarlo en el código.
+
+ALTER TABLE orden_servicio
+  ADD COLUMN IF NOT EXISTS fecha_entrega_prevista DATE,
+  ADD COLUMN IF NOT EXISTS fecha_entrega_real     TIMESTAMP;
+```
+
+## 4.13 — `013_orden_producto_referencia.sql`
+
+```sql
+-- ============================================================================
+-- 013_orden_producto_referencia.sql — CU25/CU26 refinamiento
+--
+-- Agrega el vínculo opcional entre una orden de servicio y un producto del
+-- catálogo, sirviendo como REFERENCIA de modelo:
+--
+--   • Cuando el equipo lo compró el cliente en nuestra tienda, guardamos el
+--     producto exacto para poder cruzarlo con su garantía (usos GRATIS).
+--   • Cuando el cliente trae un equipo externo (no comprado acá), guardamos
+--     el mismo producto del catálogo como REFERENCIA de modelo — porque
+--     muchas tiendas venden los mismos modelos (ej: MSI Bravo 15). Así el
+--     técnico busca en el catálogo en vez de escribir el modelo a mano.
+--
+-- Con este vínculo se puede sacar historial por modelo:
+--   "al MSI Bravo 15 le hicimos 8 servicios: 5 propios, 3 externos"
+--
+-- Nullable + ON DELETE SET NULL — las órdenes viejas no rompen y si el
+-- producto se borra la orden queda huérfana pero sigue funcionando.
+--
+-- Correr este script en el Postgres de RAILWAY (Query).
+-- Idempotente: se puede correr varias veces sin romper.
+-- ============================================================================
+
+ALTER TABLE orden_servicio
+    ADD COLUMN IF NOT EXISTS idproducto_referencia INTEGER
+    REFERENCES producto(idproducto) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_orden_producto_ref ON orden_servicio(idproducto_referencia);
+
+-- Verificación (opcional):
+-- SELECT column_name, data_type
+-- FROM information_schema.columns
+-- WHERE table_name='orden_servicio' AND column_name='idproducto_referencia';
 ```
